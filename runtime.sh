@@ -16,6 +16,70 @@ log()
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE"
 }
 
+append_ignore()
+{
+    EXCLUDE_FILE="$1"
+    ENTRY="$2"
+    mkdir -p "${EXCLUDE_FILE%/*}"
+    [ -f "$EXCLUDE_FILE" ] || : >"$EXCLUDE_FILE"
+    grep -Fqx "$ENTRY" "$EXCLUDE_FILE" 2>/dev/null || echo "$ENTRY" >>"$EXCLUDE_FILE"
+}
+
+move_legacy_group()
+{
+    TARGET_DIR="$1"
+    shift
+    mkdir -p "$TARGET_DIR"
+    for FILE in "$@"; do
+        [ -e "$FILE" ] || continue
+        NAME="${FILE##*/}"
+        DEST="$TARGET_DIR/$NAME"
+        if [ -e "$DEST" ]; then
+            DEST="$TARGET_DIR/$(date '+%Y%m%d-%H%M%S')-$NAME"
+        fi
+        mv "$FILE" "$DEST"
+        log "Moved legacy repository file: $FILE -> $DEST"
+    done
+}
+
+normalize_git_hygiene()
+{
+    LEGACY_DIR="$STATE_DIR/legacy-repository-files"
+
+    # Preserve old manual backup files outside Git working trees.
+    move_legacy_group "$LEGACY_DIR/zmod-shell" \
+        /opt/config/mod/.shell/*.before-*
+    move_legacy_group "$LEGACY_DIR/zmod-start" \
+        /opt/config/mod/.shell/root/*.bak_*
+    move_legacy_group "$LEGACY_DIR/zmod-translate" \
+        /opt/config/mod/translate/ru/*.bak_*
+    move_legacy_group "$LEGACY_DIR/timelapse" \
+        /opt/config/mod_data/plugins/timelapse/*.bak_*
+
+    # Z-Mod itself creates these runtime configuration files in its repository
+    # root. Keep them in place, but hide only these exact known generated paths
+    # from Git status through the repository-local exclude file.
+    ZMOD_EXCLUDE="/opt/config/mod/.git/info/exclude"
+    append_ignore "$ZMOD_EXCLUDE" "# AD5X Custom: Z-Mod runtime generated files"
+    for ENTRY in \
+        /ad5x.cfg \
+        /ad5x_config_native.cfg \
+        /ad5x_config_off.cfg \
+        /base.cfg \
+        /base_display_off.cfg \
+        /base_klipper13.cfg \
+        /base_mod.cfg \
+        /client.cfg \
+        /display_off.cfg \
+        /klipper13.cfg \
+        /motion_sensor.cfg \
+        /switch_sensor_display_off.cfg; do
+        append_ignore "$ZMOD_EXCLUDE" "$ENTRY"
+    done
+
+    log "Repository hygiene normalized"
+}
+
 select_primary_camera()
 {
     [ -f /opt/config/mod/.shell/0.sh ] && . /opt/config/mod/.shell/0.sh
@@ -121,6 +185,8 @@ power_on()
     fi
     trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 
+    normalize_git_hygiene
+
     CHANGED=0
     refresh_overlays || RC=$?
     RC="${RC:-0}"
@@ -139,11 +205,12 @@ power_on()
 
 case "${1:-}" in
     power-on) power_on ;;
+    hygiene) normalize_git_hygiene ;;
     camera-select) select_primary_camera ;;
     cameras) start_cameras ;;
     ifs) start_ifs ;;
     *)
-        echo "Usage: $0 {power-on|camera-select|cameras|ifs}" >&2
+        echo "Usage: $0 {power-on|hygiene|camera-select|cameras|ifs}" >&2
         exit 2
         ;;
 esac
