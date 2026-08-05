@@ -36,68 +36,14 @@ repo_status(){
     [ -z "$S" ] && printf '%-14s CLEAN\n' "$NAME" || printf '%-14s DIRTY\n' "$NAME"
 }
 
-if [ "$MODE" != --apply-only ] && [ "$MODE" != --status ] && [ "$MODE" != --uninstall ] && [ ! -d "$PLUGIN_DIR/.git" ]; then
-    ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
-    mkdir -p /opt/config/mod_data/plugins
-    chroot "$ROOT" /usr/bin/git clone --branch "$REF" --single-branch "$REPO_URL" "$PLUGIN_DIR"
-    exec "$PLUGIN_DIR/install.sh" --apply-only
-fi
+generate_configs(){
+    N=/opt/config/mod_data/plugins/notify/ru/notify.cfg
+    NM=/opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg
+    T=/opt/config/mod_data/plugins/timelapse/timelapse.cfg
+    [ -f "$N" ] && [ -f "$NM" ] && [ -f "$T" ] || fail 'upstream Notify/Timelapse files not found'
+    mkdir -p "$GENERATED"
 
-[ -f "$PLUGIN_DIR/VERSION" ] || fail "неполная установка: $PLUGIN_DIR"
-mkdir -p "$GENERATED" "$STATE" "$BACKUPS" "$STATE_DIR/log"
-
-if [ "$MODE" = --status ]; then
-    ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
-    echo "=== AD5X Custom $(cat "$PLUGIN_DIR/VERSION") ==="
-    for X in "$GENERATED/notify.cfg" "$GENERATED/notify.moonraker.cfg" "$GENERATED/timelapse.cfg" "$STATE/S99zzcamera2" /etc/init.d/S98ad5x-camera-select /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S99zzad5x-camera2; do
-        [ -e "$X" ] && echo "[OK] $X" || echo "[FAIL] $X"
-    done
-    wget -qO- http://127.0.0.1:7125/server/info >/dev/null 2>&1 && echo '[OK] Moonraker' || echo '[FAIL] Moonraker'
-    wget -qO- 'http://127.0.0.1:8080/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 1' || echo '[FAIL] Camera 1'
-    wget -qO- 'http://127.0.0.1:8081/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 2' || echo '[FAIL] Camera 2'
-    wget -qO- http://127.0.0.1:7913/api/health >/dev/null 2>&1 && echo '[OK] IFS' || echo '[FAIL] IFS'
-    echo '=== Git ==='
-    repo_status "$ROOT" Z-Mod /opt/config/mod
-    repo_status "$ROOT" klippy /opt/config/base/klipper
-    repo_status "$ROOT" moon /opt/config/base/moonraker
-    repo_status "$ROOT" notify /opt/config/mod_data/plugins/notify
-    repo_status "$ROOT" timelapse /opt/config/mod_data/plugins/timelapse
-    repo_status "$ROOT" ad5x_custom /opt/config/mod_data/plugins/ad5x_custom
-    exit 0
-fi
-
-if [ "$MODE" = --uninstall ]; then
-    remove_lines "$KLIPPER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/'
-    remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/'
-    restore_lines "$KLIPPER_INCLUDES" "$STATE/original-klipper-includes.lines"
-    restore_lines "$MOONRAKER_INCLUDES" "$STATE/original-moonraker-includes.lines"
-    if [ -f "$USER_MOONRAKER" ]; then awk 'BEGIN{s=0} /^\[update_manager ad5x_custom\]/{s=1;next} /^\[/{if(s)s=0} !s{print}' "$USER_MOONRAKER" >"$USER_MOONRAKER.tmp"; mv "$USER_MOONRAKER.tmp" "$USER_MOONRAKER"; fi
-    [ -f "$VARIABLES" ] && sed -i '/^notify_on[[:space:]]*=/d' "$VARIABLES"
-    restore_lines "$VARIABLES" "$STATE/original-notify-on.line"
-    rm -f /etc/init.d/S98ad5x-camera-select /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S99zzad5x-camera2
-    echo 'Интеграция отключена. Данные IFS, backups и сохранённый скрипт камеры 2 оставлены.'
-    exit 0
-fi
-
-STAMP="$(date +%Y%m%d-%H%M%S)"; B="$BACKUPS/$STAMP"; mkdir -p "$B"
-for F in "$KLIPPER_INCLUDES" "$MOONRAKER_INCLUDES" "$USER_MOONRAKER" "$VARIABLES" /opt/config/mod_data/camera.conf; do backup "$F" "$B"; done
-
-if [ ! -f "$STATE/S99zzcamera2" ]; then
-    [ -f /opt/config/mod_data/S99zzcamera2 ] || fail 'не найден /opt/config/mod_data/S99zzcamera2'
-    cp /opt/config/mod_data/S99zzcamera2 "$STATE/S99zzcamera2"; chmod +x "$STATE/S99zzcamera2"
-fi
-[ -f "$STATE_DIR/config.sh" ] || cat >"$STATE_DIR/config.sh" <<'CFG'
-PRIMARY_CAMERA_NAME="HD Camera"
-CAMERA2_SCRIPT="/opt/config/mod_data/ad5x_custom/state/S99zzcamera2"
-CFG
-
-# Generate patched configs from the currently installed clean upstream versions.
-N=/opt/config/mod_data/plugins/notify/ru/notify.cfg
-NM=/opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg
-T=/opt/config/mod_data/plugins/timelapse/timelapse.cfg
-[ -f "$N" ] && [ -f "$NM" ] && [ -f "$T" ] || fail 'upstream Notify/Timelapse files not found'
-
-awk '
+    awk '
 BEGIN{inside=0;done=0}
 /^\[gcode_macro _NOTIFY\]/{inside=1}
 /^\[gcode_macro _NOTIFY_ON_PERCENT\]/{inside=0}
@@ -109,9 +55,11 @@ inside && !done && /message=msg\)\}/ {
  print "                                 message=msg)}"
  print "        {% endif %}"
  done=1
-}' "$N" >"$GENERATED/notify.cfg"
-cp "$NM" "$GENERATED/notify.moonraker.cfg"
-cat >>"$GENERATED/notify.moonraker.cfg" <<'CFG'
+}' "$N" >"$GENERATED/notify.cfg.tmp"
+    mv "$GENERATED/notify.cfg.tmp" "$GENERATED/notify.cfg"
+
+    cp "$NM" "$GENERATED/notify.moonraker.cfg.tmp"
+    cat >>"$GENERATED/notify.moonraker.cfg.tmp" <<'CFG'
 
 [notifier print_start_camera2]
 url: {secrets.notify.url}
@@ -155,10 +103,94 @@ events: gcode
 body: {secrets.notify.name}: {event_message} — камера 2
 attach: http://127.0.0.1:8081/?action=snapshot
 CFG
-awk 'BEGIN{inside=0;done=0} /^\[gcode_macro _TIMELAPSE_NEW_FRAME\]/{inside=1} {print} inside && !done && /^gcode:/{print " RUN_SHELL_COMMAND CMD=timelapse_camera2_capture"; done=1; inside=0}' "$T" >"$GENERATED/timelapse.cfg"
+    mv "$GENERATED/notify.moonraker.cfg.tmp" "$GENERATED/notify.moonraker.cfg"
 
-grep -q 'notifier_photo_camera2' "$GENERATED/notify.cfg" || fail 'notify patch generation failed'
-grep -q 'timelapse_camera2_capture' "$GENERATED/timelapse.cfg" || fail 'timelapse patch generation failed'
+    awk 'BEGIN{inside=0;done=0} /^\[gcode_macro _TIMELAPSE_NEW_FRAME\]/{inside=1} {print} inside && !done && /^gcode:/{print " RUN_SHELL_COMMAND CMD=timelapse_camera2_capture"; done=1; inside=0}' "$T" >"$GENERATED/timelapse.cfg.tmp"
+    mv "$GENERATED/timelapse.cfg.tmp" "$GENERATED/timelapse.cfg"
+
+    grep -q 'notifier_photo_camera2' "$GENERATED/notify.cfg" || fail 'notify patch generation failed'
+    grep -q 'timelapse_camera2_capture' "$GENERATED/timelapse.cfg" || fail 'timelapse patch generation failed'
+}
+
+if [ "$MODE" != --apply-only ] && [ "$MODE" != --refresh-only ] && [ "$MODE" != --status ] && [ "$MODE" != --uninstall ] && [ ! -d "$PLUGIN_DIR/.git" ]; then
+    ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
+    mkdir -p /opt/config/mod_data/plugins
+    chroot "$ROOT" /usr/bin/git clone --branch "$REF" --single-branch "$REPO_URL" "$PLUGIN_DIR"
+    exec "$PLUGIN_DIR/install.sh" --apply-only
+fi
+
+if [ "$MODE" = "" ] && [ -d "$PLUGIN_DIR/.git" ]; then
+    ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
+    S="$(chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" status --porcelain)"
+    [ -z "$S" ] || fail 'ad5x_custom has local changes; branch switch refused'
+    chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" fetch origin "$REF"
+    chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" checkout -B "$REF" "origin/$REF"
+    exec "$PLUGIN_DIR/install.sh" --apply-only
+fi
+
+[ -f "$PLUGIN_DIR/VERSION" ] || fail "неполная установка: $PLUGIN_DIR"
+mkdir -p "$GENERATED" "$STATE" "$BACKUPS" "$STATE_DIR/log"
+
+if [ "$MODE" = --refresh-only ]; then
+    generate_configs
+    exit 0
+fi
+
+if [ "$MODE" = --status ]; then
+    ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
+    echo "=== AD5X Custom $(cat "$PLUGIN_DIR/VERSION") ==="
+    for X in "$GENERATED/notify.cfg" "$GENERATED/notify.moonraker.cfg" "$GENERATED/timelapse.cfg" "$STATE/S99zzcamera2" /etc/init.d/S59ad5x-custom-refresh /etc/init.d/S98ad5x-camera-select /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S99zzad5x-camera2; do
+        [ -e "$X" ] && echo "[OK] $X" || echo "[FAIL] $X"
+    done
+    wget -qO- http://127.0.0.1:7125/server/info >/dev/null 2>&1 && echo '[OK] Moonraker' || echo '[FAIL] Moonraker'
+    wget -qO- 'http://127.0.0.1:8080/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 1' || echo '[FAIL] Camera 1'
+    wget -qO- 'http://127.0.0.1:8081/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 2' || echo '[FAIL] Camera 2'
+    wget -qO- http://127.0.0.1:7913/api/health >/dev/null 2>&1 && echo '[OK] IFS' || echo '[FAIL] IFS'
+    echo '=== Git ==='
+    repo_status "$ROOT" Z-Mod /opt/config/mod
+    repo_status "$ROOT" klippy /opt/config/base/klipper
+    repo_status "$ROOT" moon /opt/config/base/moonraker
+    repo_status "$ROOT" notify /opt/config/mod_data/plugins/notify
+    repo_status "$ROOT" timelapse /opt/config/mod_data/plugins/timelapse
+    repo_status "$ROOT" ad5x_custom /opt/config/mod_data/plugins/ad5x_custom
+    exit 0
+fi
+
+if [ "$MODE" = --uninstall ]; then
+    remove_lines "$KLIPPER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/'
+    remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/'
+    restore_lines "$KLIPPER_INCLUDES" "$STATE/original-klipper-includes.lines"
+    restore_lines "$MOONRAKER_INCLUDES" "$STATE/original-moonraker-includes.lines"
+    if [ -f "$USER_MOONRAKER" ]; then awk 'BEGIN{s=0} /^\[update_manager ad5x_custom\]/{s=1;next} /^\[/{if(s)s=0} !s{print}' "$USER_MOONRAKER" >"$USER_MOONRAKER.tmp"; mv "$USER_MOONRAKER.tmp" "$USER_MOONRAKER"; fi
+    [ -f "$VARIABLES" ] && sed -i '/^notify_on[[:space:]]*=/d' "$VARIABLES"
+    restore_lines "$VARIABLES" "$STATE/original-notify-on.line"
+    rm -f /etc/init.d/S59ad5x-custom-refresh /etc/init.d/S98ad5x-camera-select /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S99zzad5x-camera2
+    echo 'Интеграция отключена. Данные IFS, backups и сохранённый скрипт камеры 2 оставлены.'
+    exit 0
+fi
+
+STAMP="$(date +%Y%m%d-%H%M%S)"; B="$BACKUPS/$STAMP"; mkdir -p "$B"
+for F in "$KLIPPER_INCLUDES" "$MOONRAKER_INCLUDES" "$USER_MOONRAKER" "$VARIABLES" /opt/config/mod_data/camera.conf; do backup "$F" "$B"; done
+
+if [ ! -f "$STATE/S99zzcamera2" ]; then
+    [ -f /opt/config/mod_data/S99zzcamera2 ] || fail 'не найден /opt/config/mod_data/S99zzcamera2'
+    cp /opt/config/mod_data/S99zzcamera2 "$STATE/S99zzcamera2"; chmod +x "$STATE/S99zzcamera2"
+fi
+[ -f "$STATE_DIR/config.sh" ] || cat >"$STATE_DIR/config.sh" <<'CFG'
+PRIMARY_CAMERA_NAME="HD Camera"
+CAMERA2_SCRIPT="/opt/config/mod_data/ad5x_custom/state/S99zzcamera2"
+CFG
+
+ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
+for S in notify:/opt/config/mod_data/plugins/notify timelapse:/opt/config/mod_data/plugins/timelapse; do
+    NAME="${S%%:*}"; P="${S#*:}"
+    if chroot "$ROOT" /usr/bin/git -C "$P" rev-parse --git-dir >/dev/null 2>&1; then
+        chroot "$ROOT" /usr/bin/git -C "$P" diff >"$B/$NAME.patch" 2>/dev/null || true
+        chroot "$ROOT" /usr/bin/git -C "$P" reset --hard HEAD >/dev/null
+    fi
+done
+
+generate_configs
 
 save_lines "$KLIPPER_INCLUDES" 'plugins/notify/.*/notify\.cfg|plugins/timelapse/timelapse\.cfg' "$STATE/original-klipper-includes.lines"
 save_lines "$MOONRAKER_INCLUDES" 'plugins/notify/.*/notify\.moonraker\.cfg' "$STATE/original-moonraker-includes.lines"
@@ -188,18 +220,10 @@ if [ -f "$VARIABLES" ]; then
 fi
 
 chmod +x "$PLUGIN_DIR/install.sh" "$PLUGIN_DIR/runtime.sh" "$STATE/S99zzcamera2"
+ln -sf "$PLUGIN_DIR/runtime.sh" /etc/init.d/S59ad5x-custom-refresh
 ln -sf "$PLUGIN_DIR/runtime.sh" /etc/init.d/S98ad5x-camera-select
 ln -sf "$PLUGIN_DIR/runtime.sh" /etc/init.d/S66ad5x-ifs-spoolman
 ln -sf "$PLUGIN_DIR/runtime.sh" /etc/init.d/S99zzad5x-camera2
-
-ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
-for S in notify:/opt/config/mod_data/plugins/notify timelapse:/opt/config/mod_data/plugins/timelapse; do
-    NAME="${S%%:*}"; P="${S#*:}"
-    if chroot "$ROOT" /usr/bin/git -C "$P" rev-parse --git-dir >/dev/null 2>&1; then
-        chroot "$ROOT" /usr/bin/git -C "$P" diff >"$B/$NAME.patch" 2>/dev/null || true
-        chroot "$ROOT" /usr/bin/git -C "$P" reset --hard HEAD >/dev/null
-    fi
-done
 
 echo "AD5X Custom применён. Backup: $B"
 echo 'Требуется полное выключение и включение принтера.'
