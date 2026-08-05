@@ -1,69 +1,149 @@
 #!/bin/sh
 set -u
-STATE_DIR="/opt/config/mod_data/ad5x_custom"
-CONFIG_FILE="$STATE_DIR/config.sh"
-LOG_DIR="$STATE_DIR/log"
-mkdir -p "$LOG_DIR"
-PRIMARY_CAMERA_NAME="HD Camera"
-CAMERA2_SCRIPT="$STATE_DIR/state/S99zzcamera2"
-[ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 
-camera_select() {
-    LOG="$LOG_DIR/camera-select.log"
+PLUGIN_DIR="/opt/config/mod_data/plugins/ad5x_custom"
+STATE_DIR="/opt/config/mod_data/ad5x_custom"
+LOG_DIR="$STATE_DIR/log"
+LOG_FILE="$LOG_DIR/power-on.log"
+LOCK_DIR="/tmp/ad5x-custom-power-on.lock"
+PRIMARY_CAMERA_NAME="HD Camera"
+CAMERA2_CONTROL="$STATE_DIR/state/S99zzcamera2"
+
+mkdir -p "$LOG_DIR"
+
+log()
+{
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE"
+}
+
+select_primary_camera()
+{
     [ -f /opt/config/mod/.shell/0.sh ] && . /opt/config/mod/.shell/0.sh
     V4L2_BIN="${V4l2:-/usr/bin/v4l2-ctl}"
-    FOUND=""
+    FOUND_VIDEO=""
+
     for SYSDEV in /sys/class/video4linux/video*; do
         [ -r "$SYSDEV/name" ] || continue
-        NAME="$(cat "$SYSDEV/name" 2>/dev/null || true)"
-        case "$NAME" in
+        DEVICE_NAME="$(cat "$SYSDEV/name" 2>/dev/null || true)"
+        case "$DEVICE_NAME" in
             *"$PRIMARY_CAMERA_NAME"*)
                 CANDIDATE="${SYSDEV##*/}"
                 if "$V4L2_BIN" -d "/dev/$CANDIDATE" --list-formats-ext >/dev/null 2>&1; then
-                    FOUND="$CANDIDATE"; break
+                    FOUND_VIDEO="$CANDIDATE"
+                    break
                 fi
                 ;;
         esac
     done
-    [ -n "$FOUND" ] || { echo "$(date) primary camera not found: $PRIMARY_CAMERA_NAME" >>"$LOG"; return 0; }
-    CONF=/opt/config/mod_data/camera.conf
-    [ -f "$CONF" ] || : >"$CONF"
-    if grep -q '^VIDEO=' "$CONF"; then sed -i "s/^VIDEO=.*/VIDEO=$FOUND/" "$CONF"; else printf '\nVIDEO=%s\n' "$FOUND" >>"$CONF"; fi
-    echo "$(date) primary camera: $PRIMARY_CAMERA_NAME -> /dev/$FOUND" >>"$LOG"
+
+    if [ -z "$FOUND_VIDEO" ]; then
+        log "ERROR: primary camera not found by name: $PRIMARY_CAMERA_NAME"
+        return 1
+    fi
+
+    CAMERA_CONF="/opt/config/mod_data/camera.conf"
+    [ -f "$CAMERA_CONF" ] || : >"$CAMERA_CONF"
+    if grep -q '^VIDEO=' "$CAMERA_CONF"; then
+        sed -i "s/^VIDEO=.*/VIDEO=$FOUND_VIDEO/" "$CAMERA_CONF"
+    else
+        printf '\nVIDEO=%s\n' "$FOUND_VIDEO" >>"$CAMERA_CONF"
+    fi
+    log "Primary camera selected: $PRIMARY_CAMERA_NAME -> /dev/$FOUND_VIDEO"
+    return 0
 }
 
-camera2_start() {
-    LOG="$LOG_DIR/camera2.log"
-    if [ "${1:-start}" = stop ]; then [ -x "$CAMERA2_SCRIPT" ] && "$CAMERA2_SCRIPT" stop >>"$LOG" 2>&1 || true; return 0; fi
-    wget -qO- 'http://127.0.0.1:8081/?action=snapshot' >/dev/null 2>&1 && return 0
-    [ -x "$CAMERA2_SCRIPT" ] || { echo "$(date) missing $CAMERA2_SCRIPT" >>"$LOG"; return 0; }
+start_cameras()
+{
+    if select_primary_camera; then
+        if [ -x /opt/config/mod/.shell/root/S99camera ]; then
+            log "Restarting primary camera"
+            /opt/config/mod/.shell/root/S99camera restart >>"$LOG_FILE" 2>&1 || true
+            sleep 5
+        else
+            log "ERROR: Z-Mod camera controller not found"
+        fi
+    fi
+
+    if [ -x "$CAMERA2_CONTROL" ]; then
+        rm -f /opt/config/mod_data/camera2.pid 2>/dev/null || true
+        log "Restarting camera 2"
+        "$CAMERA2_CONTROL" restart >>"$LOG_FILE" 2>&1 || \
+            "$CAMERA2_CONTROL" start >>"$LOG_FILE" 2>&1 || true
+    else
+        log "ERROR: camera 2 controller missing: $CAMERA2_CONTROL"
+    fi
+}
+
+start_ifs()
+{
+    IFS_BOOT="/opt/config/mod_data/ifs_spoolman/start.sh"
+    if [ -x "$IFS_BOOT" ]; then
+        log "Starting IFS Spoolman Manager"
+        "$IFS_BOOT" >>"$STATE_DIR/log/ifs.log" 2>&1 &
+    else
+        log "ERROR: IFS start.sh missing"
+    fi
+}
+
+refresh_overlays()
+{
+    rm -f "$STATE_DIR/refresh.changed"
+    if "$PLUGIN_DIR/install.sh" --refresh-only >>"$LOG_FILE" 2>&1; then
+        [ -f "$STATE_DIR/refresh.changed" ] && return 10
+        return 0
+    fi
+    log "ERROR: overlay refresh failed"
+    return 1
+}
+
+request_klipper_restart()
+{
     i=0
-    while [ "$i" -lt 30 ]; do wget -qO- 'http://127.0.0.1:8080/?action=snapshot' >/dev/null 2>&1 && break; i=$((i+1)); sleep 1; done
-    "$CAMERA2_SCRIPT" start >>"$LOG" 2>&1 &
-    echo "$(date) camera 2 start requested" >>"$LOG"
+    while [ "$i" -lt 30 ]; do
+        if wget -qO- http://127.0.0.1:7125/server/info >/dev/null 2>&1; then
+            log "Generated configs changed; requesting firmware restart"
+            wget -qO- --post-data='' \
+                http://127.0.0.1:7125/printer/firmware_restart \
+                >>"$LOG_FILE" 2>&1 || true
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+    log "WARN: Moonraker unavailable; firmware restart was not requested"
 }
 
-ifs_start() {
-    LOG="$LOG_DIR/ifs.log"
-    if [ "${1:-start}" = stop ]; then [ -x /opt/config/mod_data/ifs_spoolman/stop.sh ] && /opt/config/mod_data/ifs_spoolman/stop.sh >>"$LOG" 2>&1 || true; return 0; fi
-    START=/opt/config/mod_data/ifs_spoolman/start.sh
-    [ -x "$START" ] || { echo "$(date) missing IFS start.sh" >>"$LOG"; return 0; }
-    i=0
-    while [ "$i" -lt 60 ]; do wget -qO- http://127.0.0.1:7125/server/info >/dev/null 2>&1 && break; i=$((i+1)); sleep 1; done
-    "$START" >>"$LOG" 2>&1 || true
+power_on()
+{
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        log "Power-on integration is already running"
+        return 0
+    fi
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+
+    CHANGED=0
+    refresh_overlays || RC=$?
+    RC="${RC:-0}"
+    [ "$RC" -eq 10 ] && CHANGED=1
+
+    start_cameras
+    start_ifs
+
+    if [ "$CHANGED" -eq 1 ]; then
+        sleep 3
+        request_klipper_restart
+    fi
+
+    log "Power-on integration completed"
 }
 
-case "${0##*/}" in
-    S59ad5x-custom-refresh) /opt/config/mod_data/plugins/ad5x_custom/install.sh --refresh-only ;;
-    S98ad5x-camera-select) camera_select ;;
-    S99zzad5x-camera2) camera2_start "${1:-start}" ;;
-    S66ad5x-ifs-spoolman) ifs_start "${1:-start}" ;;
+case "${1:-}" in
+    power-on) power_on ;;
+    camera-select) select_primary_camera ;;
+    cameras) start_cameras ;;
+    ifs) start_ifs ;;
     *)
-        case "${1:-}" in
-            camera-select) camera_select ;;
-            camera2) camera2_start "${2:-start}" ;;
-            ifs) ifs_start "${2:-start}" ;;
-            *) echo "Usage: $0 {camera-select|camera2|ifs}" >&2; exit 2 ;;
-        esac
+        echo "Usage: $0 {power-on|camera-select|cameras|ifs}" >&2
+        exit 2
         ;;
 esac
