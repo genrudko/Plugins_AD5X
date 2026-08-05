@@ -14,6 +14,12 @@ VARIABLES="/opt/config/mod_data/variables.cfg"
 REF="${AD5X_CUSTOM_REF:-main}"
 MODE="${1:-}"
 
+# Preserve the currently installed branch for apply/status operations unless explicitly overridden.
+if [ -z "${AD5X_CUSTOM_REF+x}" ] && [ -f "$PLUGIN_DIR/.git/HEAD" ]; then
+    HEAD_LINE="$(cat "$PLUGIN_DIR/.git/HEAD" 2>/dev/null || true)"
+    case "$HEAD_LINE" in ref:\ refs/heads/*) REF="${HEAD_LINE#ref: refs/heads/}" ;; esac
+fi
+
 fail(){ echo "ОШИБКА: $*" >&2; exit 1; }
 find_root(){
     for P in /proc/[0-9]*; do
@@ -43,7 +49,10 @@ generate_configs(){
     [ -f "$N" ] && [ -f "$NM" ] && [ -f "$T" ] || fail 'upstream Notify/Timelapse files not found'
     mkdir -p "$GENERATED"
 
-    awk '
+    if grep -q 'notifier_photo_camera2' "$N"; then
+        cp "$N" "$GENERATED/notify.cfg.tmp"
+    else
+        awk '
 BEGIN{inside=0;done=0}
 /^\[gcode_macro _NOTIFY\]/{inside=1}
 /^\[gcode_macro _NOTIFY_ON_PERCENT\]/{inside=0}
@@ -56,10 +65,13 @@ inside && !done && /message=msg\)\}/ {
  print "        {% endif %}"
  done=1
 }' "$N" >"$GENERATED/notify.cfg.tmp"
+    fi
+    grep -q 'notifier_photo_camera2' "$GENERATED/notify.cfg.tmp" || fail 'notify patch generation failed'
     mv "$GENERATED/notify.cfg.tmp" "$GENERATED/notify.cfg"
 
     cp "$NM" "$GENERATED/notify.moonraker.cfg.tmp"
-    cat >>"$GENERATED/notify.moonraker.cfg.tmp" <<'CFG'
+    if ! grep -q '^\[notifier print_start_camera2\]' "$GENERATED/notify.moonraker.cfg.tmp"; then
+        cat >>"$GENERATED/notify.moonraker.cfg.tmp" <<'CFG'
 
 [notifier print_start_camera2]
 url: {secrets.notify.url}
@@ -103,15 +115,20 @@ events: gcode
 body: {secrets.notify.name}: {event_message} — камера 2
 attach: http://127.0.0.1:8081/?action=snapshot
 CFG
+    fi
+    grep -q '^\[notifier print_start_camera2\]' "$GENERATED/notify.moonraker.cfg.tmp" || fail 'Moonraker notify patch generation failed'
     mv "$GENERATED/notify.moonraker.cfg.tmp" "$GENERATED/notify.moonraker.cfg"
 
-    awk 'BEGIN{inside=0;done=0} /^\[gcode_macro _TIMELAPSE_NEW_FRAME\]/{inside=1} {print} inside && !done && /^gcode:/{print " RUN_SHELL_COMMAND CMD=timelapse_camera2_capture"; done=1; inside=0}' "$T" >"$GENERATED/timelapse.cfg.tmp"
+    if grep -q 'timelapse_camera2_capture' "$T"; then
+        cp "$T" "$GENERATED/timelapse.cfg.tmp"
+    else
+        awk 'BEGIN{inside=0;done=0} /^\[gcode_macro _TIMELAPSE_NEW_FRAME\]/{inside=1} {print} inside && !done && /^gcode:/{print " RUN_SHELL_COMMAND CMD=timelapse_camera2_capture"; done=1; inside=0}' "$T" >"$GENERATED/timelapse.cfg.tmp"
+    fi
+    grep -q 'timelapse_camera2_capture' "$GENERATED/timelapse.cfg.tmp" || fail 'timelapse patch generation failed'
     mv "$GENERATED/timelapse.cfg.tmp" "$GENERATED/timelapse.cfg"
-
-    grep -q 'notifier_photo_camera2' "$GENERATED/notify.cfg" || fail 'notify patch generation failed'
-    grep -q 'timelapse_camera2_capture' "$GENERATED/timelapse.cfg" || fail 'timelapse patch generation failed'
 }
 
+# First install: clone the selected branch into persistent plugin storage.
 if [ "$MODE" != --apply-only ] && [ "$MODE" != --refresh-only ] && [ "$MODE" != --status ] && [ "$MODE" != --uninstall ] && [ ! -d "$PLUGIN_DIR/.git" ]; then
     ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
     mkdir -p /opt/config/mod_data/plugins
@@ -119,11 +136,12 @@ if [ "$MODE" != --apply-only ] && [ "$MODE" != --refresh-only ] && [ "$MODE" != 
     exec "$PLUGIN_DIR/install.sh" --apply-only
 fi
 
+# Re-running the downloaded installer switches an existing installation to REF safely.
 if [ "$MODE" = "" ] && [ -d "$PLUGIN_DIR/.git" ]; then
     ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
     S="$(chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" status --porcelain)"
     [ -z "$S" ] || fail 'ad5x_custom has local changes; branch switch refused'
-    chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" fetch origin "$REF"
+    chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" fetch origin "refs/heads/$REF:refs/remotes/origin/$REF"
     chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" checkout -B "$REF" "origin/$REF"
     exec "$PLUGIN_DIR/install.sh" --apply-only
 fi
@@ -181,6 +199,7 @@ PRIMARY_CAMERA_NAME="HD Camera"
 CAMERA2_SCRIPT="/opt/config/mod_data/ad5x_custom/state/S99zzcamera2"
 CFG
 
+# Preserve local diffs, then restore clean upstream files before generating overlays.
 ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
 for S in notify:/opt/config/mod_data/plugins/notify timelapse:/opt/config/mod_data/plugins/timelapse; do
     NAME="${S%%:*}"; P="${S#*:}"
