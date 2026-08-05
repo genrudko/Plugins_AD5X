@@ -54,6 +54,7 @@ ifs_start() {
 }
 
 case "${0##*/}" in
+    S59ad5x-custom-refresh) /opt/config/mod_data/plugins/ad5x_custom/install.sh --refresh-only ;;
     S98ad5x-camera-select) camera_select ;;
     S99zzad5x-camera2) camera2_start "${1:-start}" ;;
     S66ad5x-ifs-spoolman) ifs_start "${1:-start}" ;;
