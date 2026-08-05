@@ -7,6 +7,7 @@ LOG_DIR="$STATE_DIR/log"
 LOG_FILE="$LOG_DIR/power-on.log"
 LOCK_DIR="/tmp/ad5x-custom-power-on.lock"
 PRIMARY_CAMERA_NAME="HD Camera"
+SECONDARY_CAMERA_NAME="CCX2F3298"
 CAMERA2_CONTROL="$STATE_DIR/state/S99zzcamera2"
 
 mkdir -p "$LOG_DIR"
@@ -80,25 +81,81 @@ normalize_git_hygiene()
     log "Repository hygiene normalized"
 }
 
-select_primary_camera()
+load_zmod_camera_tools()
 {
-    [ -f /opt/config/mod/.shell/0.sh ] && . /opt/config/mod/.shell/0.sh
-    V4L2_BIN="${V4l2:-/usr/bin/v4l2-ctl}"
-    FOUND_VIDEO=""
+    if [ -f /opt/config/mod/.shell/0.sh ]; then
+        . /opt/config/mod/.shell/0.sh
+    fi
+    V4L2_COMMAND="${V4l2:-/usr/bin/v4l2-ctl}"
+}
 
+v4l2_formats_available()
+{
+    DEVICE="$1"
+    # V4l2 is intentionally expanded unquoted: Z-Mod defines it as a command
+    # such as "chroot /usr/data/.mod/.zmod v4l2-ctl".
+    $V4L2_COMMAND -d "$DEVICE" --list-formats-ext >/dev/null 2>&1
+}
+
+find_named_capture_device()
+{
+    CAMERA_NAME="$1"
     for SYSDEV in /sys/class/video4linux/video*; do
         [ -r "$SYSDEV/name" ] || continue
         DEVICE_NAME="$(cat "$SYSDEV/name" 2>/dev/null || true)"
         case "$DEVICE_NAME" in
-            *"$PRIMARY_CAMERA_NAME"*)
+            *"$CAMERA_NAME"*)
                 CANDIDATE="${SYSDEV##*/}"
-                if "$V4L2_BIN" -d "/dev/$CANDIDATE" --list-formats-ext >/dev/null 2>&1; then
-                    FOUND_VIDEO="$CANDIDATE"
-                    break
+                if v4l2_formats_available "/dev/$CANDIDATE"; then
+                    echo "$CANDIDATE"
+                    return 0
                 fi
                 ;;
         esac
     done
+    return 1
+}
+
+wait_for_camera_devices()
+{
+    load_zmod_camera_tools
+    COUNT=0
+    while [ "$COUNT" -lt 60 ]; do
+        PRIMARY="$(find_named_capture_device "$PRIMARY_CAMERA_NAME" 2>/dev/null || true)"
+        SECONDARY="$(find_named_capture_device "$SECONDARY_CAMERA_NAME" 2>/dev/null || true)"
+        if [ -n "$PRIMARY" ] && [ -n "$SECONDARY" ]; then
+            log "Camera devices ready: $PRIMARY_CAMERA_NAME=/dev/$PRIMARY, $SECONDARY_CAMERA_NAME=/dev/$SECONDARY"
+            return 0
+        fi
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    log "ERROR: camera devices did not become ready: primary=${PRIMARY:-none}, secondary=${SECONDARY:-none}"
+    return 1
+}
+
+wait_snapshot()
+{
+    PORT="$1"
+    LABEL="$2"
+    LIMIT="$3"
+    COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        if wget -q -T 2 -O /dev/null "http://127.0.0.1:$PORT/?action=snapshot" 2>/dev/null; then
+            log "$LABEL is ready on port $PORT"
+            return 0
+        fi
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    log "ERROR: $LABEL did not become ready on port $PORT"
+    return 1
+}
+
+select_primary_camera()
+{
+    load_zmod_camera_tools
+    FOUND_VIDEO="$(find_named_capture_device "$PRIMARY_CAMERA_NAME" 2>/dev/null || true)"
 
     if [ -z "$FOUND_VIDEO" ]; then
         log "ERROR: primary camera not found by name: $PRIMARY_CAMERA_NAME"
@@ -116,26 +173,59 @@ select_primary_camera()
     return 0
 }
 
-start_cameras()
+start_primary_camera()
 {
-    if select_primary_camera; then
-        if [ -x /opt/config/mod/.shell/root/S99camera ]; then
-            log "Restarting primary camera"
-            /opt/config/mod/.shell/root/S99camera restart >>"$LOG_FILE" 2>&1 || true
-            sleep 5
-        else
-            log "ERROR: Z-Mod camera controller not found"
-        fi
+    if ! select_primary_camera; then
+        return 1
+    fi
+    if [ ! -x /opt/config/mod/.shell/root/S99camera ]; then
+        log "ERROR: Z-Mod camera controller not found"
+        return 1
     fi
 
-    if [ -x "$CAMERA2_CONTROL" ]; then
+    # Z-Mod's restart stops every mjpg_streamer/ustreamer process. Therefore
+    # the primary camera must always be restarted before Camera 2.
+    log "Restarting primary camera"
+    /opt/config/mod/.shell/root/S99camera restart >>"$LOG_FILE" 2>&1 || true
+    wait_snapshot 8080 "Camera 1" 30
+}
+
+start_secondary_camera()
+{
+    if [ ! -x "$CAMERA2_CONTROL" ]; then
+        log "ERROR: camera 2 controller missing: $CAMERA2_CONTROL"
+        return 1
+    fi
+
+    ATTEMPT=1
+    while [ "$ATTEMPT" -le 3 ]; do
         rm -f /opt/config/mod_data/camera2.pid 2>/dev/null || true
-        log "Restarting camera 2"
+        log "Starting Camera 2, attempt $ATTEMPT"
         "$CAMERA2_CONTROL" restart >>"$LOG_FILE" 2>&1 || \
             "$CAMERA2_CONTROL" start >>"$LOG_FILE" 2>&1 || true
-    else
-        log "ERROR: camera 2 controller missing: $CAMERA2_CONTROL"
+
+        if wait_snapshot 8081 "Camera 2" 25; then
+            return 0
+        fi
+
+        "$CAMERA2_CONTROL" stop >>"$LOG_FILE" 2>&1 || true
+        ATTEMPT=$((ATTEMPT + 1))
+        sleep 2
+    done
+
+    log "ERROR: Camera 2 failed after 3 attempts"
+    return 1
+}
+
+start_cameras()
+{
+    if ! wait_for_camera_devices; then
+        return 1
     fi
+
+    start_primary_camera || true
+    sleep 3
+    start_secondary_camera || true
 }
 
 start_ifs()
