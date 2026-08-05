@@ -33,6 +33,22 @@ find_root(){
 remove_lines(){ F="$1"; P="$2"; [ -f "$F" ] || : >"$F"; grep -Ev "$P" "$F" >"$F.tmp" 2>/dev/null || true; mv "$F.tmp" "$F"; }
 append_line(){ F="$1"; L="$2"; [ -f "$F" ] || : >"$F"; grep -Fqx "$L" "$F" 2>/dev/null || echo "$L" >>"$F"; }
 backup(){ [ -f "$1" ] && cp -p "$1" "$2/${1##*/}" || true; }
+snapshot(){
+    FILE="$1"; KEY="$2"
+    if [ -e "$FILE" ]; then
+        cp -p "$FILE" "$B/$KEY"
+    else
+        : >"$B/.absent-$KEY"
+    fi
+}
+restore_snapshot(){
+    FILE="$1"; KEY="$2"
+    if [ -f "$B/.absent-$KEY" ]; then
+        rm -f "$FILE"
+    elif [ -e "$B/$KEY" ]; then
+        cp -p "$B/$KEY" "$FILE"
+    fi
+}
 save_lines(){ [ -f "$3" ] && return 0; [ -f "$1" ] || : >"$1"; grep -E "$2" "$1" >"$3" 2>/dev/null || : >"$3"; }
 restore_lines(){ [ -f "$2" ] || return 0; while IFS= read -r L; do [ -n "$L" ] && append_line "$1" "$L"; done <"$2"; }
 strip_block(){
@@ -255,8 +271,45 @@ if [ "$MODE" = --uninstall ]; then
 fi
 
 check_idle
-STAMP="$(date +%Y%m%d-%H%M%S)"; B="$BACKUPS/$STAMP"; mkdir -p "$B"
-for F in "$KLIPPER_INCLUDES" "$MOONRAKER_INCLUDES" "$USER_MOONRAKER" "$POWER_ON" /opt/config/mod_data/camera.conf; do backup "$F" "$B"; done
+STAMP="$(date +%Y%m%d-%H%M%S)"; B="$BACKUPS/$STAMP"; mkdir -p "$B/upstream"
+SUCCESS=0
+
+rollback_install(){
+    set +e
+    echo "ОШИБКА: установка не завершена, выполняется автоматический rollback." >&2
+    restore_snapshot "$KLIPPER_INCLUDES" plugins.cfg
+    restore_snapshot "$MOONRAKER_INCLUDES" plugins.moonraker.conf
+    restore_snapshot "$USER_MOONRAKER" user.moonraker.conf
+    restore_snapshot "$POWER_ON" power_on.sh
+    restore_snapshot /opt/config/mod_data/camera.conf camera.conf
+    restore_snapshot "$GENERATED/notify.cfg" generated-notify.cfg
+    restore_snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
+    [ -f "$B/upstream/notify.cfg" ] && cp -p "$B/upstream/notify.cfg" /opt/config/mod_data/plugins/notify/ru/notify.cfg
+    [ -f "$B/upstream/notify.moonraker.cfg" ] && cp -p "$B/upstream/notify.moonraker.cfg" /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg
+    [ -f "$B/upstream/timelapse.cfg" ] && cp -p "$B/upstream/timelapse.cfg" /opt/config/mod_data/plugins/timelapse/timelapse.cfg
+    echo "Rollback завершён. Диагностический backup: $B" >&2
+}
+finish_install(){
+    RC=$?
+    trap - EXIT HUP INT TERM
+    if [ "$SUCCESS" -ne 1 ]; then
+        rollback_install
+        [ "$RC" -ne 0 ] || RC=1
+    fi
+    exit "$RC"
+}
+trap finish_install EXIT HUP INT TERM
+
+snapshot "$KLIPPER_INCLUDES" plugins.cfg
+snapshot "$MOONRAKER_INCLUDES" plugins.moonraker.conf
+snapshot "$USER_MOONRAKER" user.moonraker.conf
+snapshot "$POWER_ON" power_on.sh
+snapshot /opt/config/mod_data/camera.conf camera.conf
+snapshot "$GENERATED/notify.cfg" generated-notify.cfg
+snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
+[ -f /opt/config/mod_data/plugins/notify/ru/notify.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.cfg "$B/upstream/notify.cfg"
+[ -f /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg "$B/upstream/notify.moonraker.cfg"
+[ -f /opt/config/mod_data/plugins/timelapse/timelapse.cfg ] && cp -p /opt/config/mod_data/plugins/timelapse/timelapse.cfg "$B/upstream/timelapse.cfg"
 
 for REQUIRED in \
     /opt/config/mod_data/S99zzcamera2 \
@@ -308,5 +361,6 @@ CFG
 install_power_on_hook
 rm -f /etc/init.d/S99zzcamera2 /etc/init.d/S59ad5x-custom-refresh /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S98ad5x-camera-select /etc/init.d/S99zzad5x-camera2 2>/dev/null || true
 
+SUCCESS=1
 echo "AD5X Custom применён. Backup: $B"
 echo 'Для активации требуется полное выключение и включение принтера.'
