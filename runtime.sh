@@ -6,6 +6,7 @@ STATE_DIR="/opt/config/mod_data/ad5x_custom"
 LOG_DIR="$STATE_DIR/log"
 LOG_FILE="$LOG_DIR/power-on.log"
 LOCK_DIR="/tmp/ad5x-custom-power-on.lock"
+CAMERA_RECOVERY_LOCK="/tmp/ad5x-custom-camera-recovery.lock"
 PRIMARY_CAMERA_NAME="HD Camera"
 SECONDARY_CAMERA_NAME="CCX2F3298"
 CAMERA2_CONTROL="$STATE_DIR/state/S99zzcamera2"
@@ -47,7 +48,6 @@ normalize_git_hygiene()
 {
     LEGACY_DIR="$STATE_DIR/legacy-repository-files"
 
-    # Preserve old manual backup files outside Git working trees.
     move_legacy_group "$LEGACY_DIR/zmod-shell" \
         /opt/config/mod/.shell/*.before-*
     move_legacy_group "$LEGACY_DIR/zmod-start" \
@@ -57,9 +57,6 @@ normalize_git_hygiene()
     move_legacy_group "$LEGACY_DIR/timelapse" \
         /opt/config/mod_data/plugins/timelapse/*.bak_*
 
-    # Z-Mod itself creates these runtime configuration files in its repository
-    # root. Keep them in place, but hide only these exact known generated paths
-    # from Git status through the repository-local exclude file.
     ZMOD_EXCLUDE="/opt/config/mod/.git/info/exclude"
     append_ignore "$ZMOD_EXCLUDE" "# AD5X Custom: Z-Mod runtime generated files"
     for ENTRY in \
@@ -92,8 +89,9 @@ load_zmod_camera_tools()
 v4l2_formats_available()
 {
     DEVICE="$1"
-    # V4l2 is intentionally expanded unquoted: Z-Mod defines it as a command
-    # such as "chroot /usr/data/.mod/.zmod v4l2-ctl".
+    # Z-Mod defines V4l2 as a compound command, for example:
+    # chroot /usr/data/.mod/.zmod v4l2-ctl
+    # It must therefore be expanded unquoted.
     $V4L2_COMMAND -d "$DEVICE" --list-formats-ext >/dev/null 2>&1
 }
 
@@ -118,9 +116,12 @@ find_named_capture_device()
 
 wait_for_camera_devices()
 {
+    LIMIT="${1:-30}"
     load_zmod_camera_tools
     COUNT=0
-    while [ "$COUNT" -lt 60 ]; do
+    PRIMARY=""
+    SECONDARY=""
+    while [ "$COUNT" -lt "$LIMIT" ]; do
         PRIMARY="$(find_named_capture_device "$PRIMARY_CAMERA_NAME" 2>/dev/null || true)"
         SECONDARY="$(find_named_capture_device "$SECONDARY_CAMERA_NAME" 2>/dev/null || true)"
         if [ -n "$PRIMARY" ] && [ -n "$SECONDARY" ]; then
@@ -130,8 +131,14 @@ wait_for_camera_devices()
         COUNT=$((COUNT + 1))
         sleep 1
     done
-    log "ERROR: camera devices did not become ready: primary=${PRIMARY:-none}, secondary=${SECONDARY:-none}"
+    log "WARN: initial camera wait expired: primary=${PRIMARY:-none}, secondary=${SECONDARY:-none}"
     return 1
+}
+
+snapshot_ready()
+{
+    PORT="$1"
+    wget -q -T 2 -O /dev/null "http://127.0.0.1:$PORT/?action=snapshot" 2>/dev/null
 }
 
 wait_snapshot()
@@ -141,7 +148,7 @@ wait_snapshot()
     LIMIT="$3"
     COUNT=0
     while [ "$COUNT" -lt "$LIMIT" ]; do
-        if wget -q -T 2 -O /dev/null "http://127.0.0.1:$PORT/?action=snapshot" 2>/dev/null; then
+        if snapshot_ready "$PORT"; then
             log "$LABEL is ready on port $PORT"
             return 0
         fi
@@ -183,8 +190,6 @@ start_primary_camera()
         return 1
     fi
 
-    # Z-Mod's restart stops every mjpg_streamer/ustreamer process. Therefore
-    # the primary camera must always be restarted before Camera 2.
     log "Restarting primary camera"
     /opt/config/mod/.shell/root/S99camera restart >>"$LOG_FILE" 2>&1 || true
     wait_snapshot 8080 "Camera 1" 30
@@ -219,13 +224,65 @@ start_secondary_camera()
 
 start_cameras()
 {
-    if ! wait_for_camera_devices; then
+    if ! wait_for_camera_devices 30; then
         return 1
     fi
 
     start_primary_camera || true
     sleep 3
-    start_secondary_camera || true
+    start_secondary_camera
+}
+
+camera_recover()
+{
+    if ! mkdir "$CAMERA_RECOVERY_LOCK" 2>/dev/null; then
+        log "Camera recovery is already running"
+        return 0
+    fi
+    trap 'rmdir "$CAMERA_RECOVERY_LOCK" 2>/dev/null || true' EXIT INT TERM
+
+    COUNT=0
+    while [ "$COUNT" -lt 60 ]; do
+        if snapshot_ready 8081; then
+            log "Camera 2 recovery completed: port 8081 is available"
+            return 0
+        fi
+
+        load_zmod_camera_tools
+        SECONDARY="$(find_named_capture_device "$SECONDARY_CAMERA_NAME" 2>/dev/null || true)"
+        if [ -n "$SECONDARY" ]; then
+            log "Camera 2 device appeared during recovery: /dev/$SECONDARY"
+
+            if snapshot_ready 8080; then
+                start_secondary_camera || true
+            else
+                log "Camera 1 is unavailable during recovery; running full camera sequence"
+                start_cameras || true
+            fi
+
+            if snapshot_ready 8081; then
+                log "Camera 2 recovery completed successfully"
+                return 0
+            fi
+        fi
+
+        COUNT=$((COUNT + 1))
+        sleep 10
+    done
+
+    log "ERROR: Camera 2 did not recover within 10 minutes"
+    return 1
+}
+
+launch_camera_recovery()
+{
+    if snapshot_ready 8081; then
+        return 0
+    fi
+
+    log "Scheduling background Camera 2 recovery"
+    nohup "$PLUGIN_DIR/runtime.sh" camera-recover \
+        </dev/null >>"$LOG_FILE" 2>&1 &
 }
 
 start_ifs()
@@ -282,8 +339,13 @@ power_on()
     RC="${RC:-0}"
     [ "$RC" -eq 10 ] && CHANGED=1
 
-    start_cameras
+    # IFS must not be delayed by slow USB camera enumeration.
     start_ifs
+
+    if ! start_cameras; then
+        log "Initial camera sequence incomplete; delayed recovery will continue in background"
+    fi
+    launch_camera_recovery
 
     if [ "$CHANGED" -eq 1 ]; then
         sleep 3
@@ -298,9 +360,10 @@ case "${1:-}" in
     hygiene) normalize_git_hygiene ;;
     camera-select) select_primary_camera ;;
     cameras) start_cameras ;;
+    camera-recover) camera_recover ;;
     ifs) start_ifs ;;
     *)
-        echo "Usage: $0 {power-on|hygiene|camera-select|cameras|ifs}" >&2
+        echo "Usage: $0 {power-on|hygiene|camera-select|cameras|camera-recover|ifs}" >&2
         exit 2
         ;;
 esac
