@@ -4,21 +4,23 @@
 
 ## What it does
 
-Calibration Center provides:
+Current Draft provides:
 
 - up to 8 persistent hotend/nozzle profiles;
-- a simple Fluidd/Mainsail action-prompt entry point: `CALIBRATION_CENTER`;
+- a Fluidd/Mainsail action-prompt entry point: `CALIBRATION_CENTER`;
 - five independent load-cell/contact probes per automatic run;
 - mean/median/range evidence and a strict repeatability gate;
+- bed-mesh isolation during physical-reference measurement;
 - rejection of unstable or unexpectedly large geometric changes;
 - separate `AUTO MEASURED` and `USER VERIFIED` states;
+- persistent `needs_calibration` readiness state;
 - one-level previous-known-good rollback;
-- a documented `_USER_START_PRINT` integration which applies only the selected profile correction after Z-Mod finishes its own start logic;
+- documented `_USER_START_PRINT` integration after Z-Mod finishes its own start logic;
 - no edit of Klipper `[probe] z_offset`;
 - no write to Flashforge `zProbeOffset`;
 - no MCU firmware operation, USB reset or background polling.
 
-The physical/correction model and its evidence are documented in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md).
+The physical/correction evidence is documented in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md). The exact safety contract is in [`docs/ALGORITHM_AND_SAFETY.md`](docs/ALGORITHM_AND_SAFETY.md).
 
 ## Important technical boundary
 
@@ -27,16 +29,18 @@ A repeatable nozzle contact proves a stable physical reference. Public AD5X/Z-Mo
 Therefore a new profile follows this lifecycle:
 
 ```text
-NEW
-  ↓ automatic 5-probe measurement
+NEW / NEEDS CALIBRATION
+        ↓ automatic 5-probe measurement
 AUTO MEASURED
-  ↓ optional first-layer verification once
+        ↓ one real first-layer verification if this profile has never been verified
 USER VERIFIED
-  ↓ future nozzle/hotend swaps
-automatic measurement → geometric delta → ready to print
+        ↓ later switch back to this profile
+automatic 5-probe measurement → accepted geometric state → ready to print
 ```
 
-This is intentionally stricter than pretending that five probe contacts automatically determine perfect first-layer extrusion.
+A switched profile is deliberately blocked from affecting print Z until a new five-probe run succeeds. A rejected run preserves previous known-good correction values, but it does **not** make the profile ready again.
+
+This is stricter than pretending that five probe contacts automatically determine perfect first-layer extrusion.
 
 ## Default automatic sequence
 
@@ -44,33 +48,44 @@ This is intentionally stricter than pretending that five probe contacts automati
 
 1. rejects printing/paused state;
 2. validates AD5X/profile/temperature/safety bounds;
-3. schedules a heater failsafe;
-4. reuses Z-Mod `_ORIG_CLEAR_NOZZLE` for the existing proven cleaning path;
-5. stabilises bed/nozzle temperature;
-6. homes with Z-Mod `_G28`;
-7. derives the XY measurement point from the configured AD5X client limits;
-8. performs 5 × `LOAD_CELL_TARE → PROBE → capture → lift`;
-9. calculates median, mean and total range;
-10. rejects the whole series if `range > MAX_RANGE` (default provisional `0.030 mm`);
-11. for an already verified profile, calculates `fresh_reference - verified_reference` and rejects an excessive jump;
-12. persists accepted evidence in `save_variables` and an on-demand audit log.
+3. saves G-code state and current bed-mesh profile;
+4. immediately marks the profile as requiring a successful calibration;
+5. schedules a heater/state failsafe;
+6. reuses Z-Mod `_ORIG_CLEAR_NOZZLE` for the existing cleaning/contact path;
+7. stabilises bed/nozzle temperature;
+8. clears loaded bed mesh so physical reference is not contaminated by mesh compensation;
+9. homes with Z-Mod `_G28`;
+10. derives the XY measurement point from configured AD5X client limits;
+11. performs 5 × `LOAD_CELL_TARE → PROBE → capture → lift`;
+12. calculates median, mean and total range;
+13. rejects the whole series if `range > MAX_RANGE` (provisional default `0.030 mm`);
+14. for an already verified profile, calculates `fresh_reference - verified_reference` and rejects an excessive jump;
+15. only on success stores accepted evidence and clears `needs_calibration`;
+16. turns heaters off and restores previous mesh/G-code state.
 
-No outlier is silently removed in order to pass a bad series.
+No outlier is silently removed in order to make a bad series pass.
 
 ## How profile correction is layered
 
 At the end of Z-Mod `START_PRINT`, the documented `_USER_START_PRINT` hook calls `CC_APPLY_PROFILE`.
 
-Calibration Center stores a **process bias** separately from the automatic geometric delta.
+Calibration Center stores a **process bias** separately from the automatic profile reference delta.
 
-- If Z-Mod `MESH_TEST=3/4` is active, Z-Mod already performs its own fresh-reference AutoZOffset. Calibration Center does not add its geometric delta a second time; it only adds the verified profile process bias.
-- If `MESH_TEST=1/2` is active, Calibration Center may add the last accepted profile geometric delta plus the verified process bias.
+- With Z-Mod `MESH_TEST=3/4`, Z-Mod already performs its own print-time `fresh probe - saved mesh reference` AutoZOffset. Calibration Center does not add its profile delta a second time and does not try to subtract/replace that upstream delta because the two references have different physical anchors. The accepted five-probe run is the profile/stability gate; only verified process bias is layered on top.
+- With `MESH_TEST=1/2`, Z-Mod does not apply AutoZOffset, so Calibration Center can apply its last accepted profile reference delta plus verified process bias.
 
-This avoids double-applying the same physical change.
+If the selected enabled profile has `needs_calibration=1`, the print-start hook emits a clear error and invokes normal Z-Mod `CANCEL_PRINT`. The explicit fallback is `CC_DISABLE`, which leaves stock Z-Mod behaviour available.
 
 ## Profiles
 
-Common profile creation is available from the `CALIBRATION_CENTER` prompt. Generic operations are also exposed for the UI layer and expert recovery:
+The prompt provides one-button creation of common profiles such as:
+
+- Stock / 0.4;
+- A1 / 0.4;
+- A1 / 0.6;
+- A1 / 0.8.
+
+Generic profile operations are also exposed as stable macro API for the UI layer and expert recovery:
 
 ```gcode
 CC_PROFILE_CREATE SLOT=1 HOTEND=Stock NOZZLE=0.4 NAME=Stock_0.4
@@ -81,25 +96,33 @@ CC_PROFILE_SELECT SLOT=4
 CC_PROFILE_RENAME SLOT=4 NAME=A1_08_Hardened
 ```
 
-A profile stores measured reference, measurement quality, verified reference/bias, previous verified pair, nozzle/hotend metadata and calibration temperatures.
+A profile stores measured reference, accepted quality, verified reference/bias, previous verified pair, readiness, hotend/nozzle metadata and calibration temperatures.
+
+### Current Draft UX boundary
+
+The action-prompt UI is deliberately built without DOM patching or a permanent web daemon. Current Z-Mod action prompts do not provide a free-text input control, so arbitrary profile renaming/custom profile text still uses the stable macro API above. Likewise, the event audit has a real timestamp, but the current prompt does not yet surface a human-readable “last calibration date”.
+
+These are **UI completion gaps**, not hidden as accepted functionality. They should be closed only with a clean plugin/frontend integration rather than a legacy DOM hack. The physical calibration chain is the acceptance-critical gate first.
 
 ## First-layer verification
 
-The first-layer path is deliberately optional and is **not** the automatic calibration mechanism.
+The first-layer path is optional and is **not** the automatic calibration mechanism.
 
 During a real test print, `CC_FIRST_LAYER_CONTROLS` exposes:
 
-- `-0.05`
-- `-0.01`
-- `+0.01`
-- `+0.05`
-- `Сохранить как USER VERIFIED`
+- `-0.05`;
+- `-0.01`;
+- `+0.01`;
+- `+0.05`;
+- `Сохранить как USER VERIFIED`.
 
-`CC_VERIFY_CURRENT` records the resulting **process bias** relative to the Z-Mod runtime base that existed before Calibration Center added its profile correction. It also anchors the latest accepted physical reference.
+For a never-verified profile, the deliberately chosen live adjustment becomes its process bias; the existing native/Z-Mod baseline is not incorrectly treated as zero. Later verification updates are calculated relative to the actual runtime baseline captured after Z-Mod `_START_PRINT`.
+
+The Draft does not yet generate a material-specific first-layer G-code object itself; it controls/records a real test print supplied through the normal print path. This avoids inventing extrusion temperature/flow/speed assumptions before physical acceptance.
 
 ## Install — current Draft branch
 
-For acceptance of this work item before merge:
+For runtime acceptance before merge:
 
 ```sh
 rm -f /tmp/calibration-center-install.sh
@@ -111,16 +134,18 @@ CALIBRATION_CENTER_REF="codex/5-calibration-center-001" /tmp/calibration-center-
 
 The installer:
 
-- refuses an active print/pause;
+- refuses printing/paused state;
+- fails closed if Moonraker cannot prove printer state;
 - refuses pre-existing dirty Z-Mod/Klipper/Moonraker repositories;
-- checks the required Z-Mod safety/extension primitives;
+- checks required Z-Mod safety/extension primitives;
 - creates a separate git checkout at `/opt/config/mod_data/plugins/calibration_center`;
 - adds only an include in `mod_data/plugins.cfg`;
-- uses the officially documented `mod_data/user.cfg` `_USER_START_PRINT` extension point;
+- uses the documented `mod_data/user.cfg` `_USER_START_PRINT` extension point;
 - refuses to overwrite an already customised `_USER_START_PRINT`;
 - adds a dedicated Moonraker Update Manager entry;
 - snapshots all touched custom config files before modification;
-- leaves Z-Mod/Klipper/Moonraker repositories untouched.
+- scans every split Calibration Center cfg for forbidden operational primitives;
+- leaves Z-Mod/Klipper/Moonraker tracked repositories untouched.
 
 A normal Klipper `FIRMWARE_RESTART` is required once to load a new cfg include. The installer does not execute it automatically and never flashes an MCU.
 
@@ -145,7 +170,7 @@ CalibCenter    CLEAN
 CC_DISABLE
 ```
 
-This disables profile corrections only. Stock Z-Mod calibration remains available.
+This disables Calibration Center profile enforcement/corrections. Stock Z-Mod calibration remains available.
 
 Re-enable:
 
@@ -159,10 +184,10 @@ CC_ENABLE
 /opt/config/mod_data/plugins/calibration_center/calibration_center/install.sh --uninstall
 ```
 
-Uninstall removes the include, the marked `_USER_START_PRINT` hook, Update Manager entry and plugin checkout. It intentionally preserves `/opt/config/mod_data/calibration_center` profile/audit data for recovery. It never restores/writes Flashforge Z calibration files because it never modified them.
+Uninstall removes the include, the marked `_USER_START_PRINT` hook, Update Manager entry and plugin checkout. It intentionally preserves `/opt/config/mod_data/calibration_center` profile/audit data for recovery. It never restores or writes Flashforge Z calibration files because it never modified them.
 
 ## Runtime acceptance
 
-Source/static acceptance is automated in `tests/test_calibration_center.py`. Physical acceptance must be performed on the target AD5X because probe repeatability, hotend mechanics and temperature dependence cannot be proved by repository tests.
+Repository/static acceptance is automated in `tests/test_calibration_center.py`. Physical acceptance must be performed on the target AD5X because load-cell repeatability, hotend mechanics, temperature dependence and process-bias invariance cannot be proven by repository tests.
 
-See [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) for the exact evidence matrix.
+See [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) for the evidence matrix and physical test gates.
