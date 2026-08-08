@@ -35,6 +35,8 @@ find_root() {
 
 check_idle() {
     DATA="$(wget -qO- 'http://127.0.0.1:7125/printer/objects/query?print_stats' 2>/dev/null || true)"
+    [ -n "$DATA" ] || fail "Moonraker недоступен; безопасное состояние принтера не подтверждено"
+    printf '%s' "$DATA" | grep -q '"state"' || fail "Moonraker не вернул print_stats.state; установка остановлена fail-closed"
     case "$DATA" in
         *'"state":"printing"'*|*'"state": "printing"'*|*'"state":"paused"'*|*'"state": "paused"'*)
             fail "принтер печатает или стоит на паузе"
@@ -188,11 +190,12 @@ ensure_checkout() {
 }
 
 payload_safety_check() {
-    CFG="$PLUGIN_DIR/calibration_center/calibration_center.cfg"
-    AUDIT="$PLUGIN_DIR/calibration_center/cc_audit.sh"
-    # Match executable command lines, not documentation or this guard's own text.
-    if grep -E '^[[:space:]]*(UPDATE_MCU|Z_OFFSET_APPLY_PROBE|Z_OFFSET_APPLY_ENDSTOP|SAVE_CONFIG)([[:space:]]|$)' "$CFG" >/dev/null 2>&1; then
-        fail "calibration_center.cfg содержит запрещённую operational primitive"
+    CFG_DIR="$PLUGIN_DIR/calibration_center"
+    AUDIT="$CFG_DIR/cc_audit.sh"
+    # Match executable command lines in every split Klipper cfg, not docs or
+    # this installer's own guard text.
+    if grep -E '^[[:space:]]*(UPDATE_MCU|Z_OFFSET_APPLY_PROBE|Z_OFFSET_APPLY_ENDSTOP|SAVE_CONFIG)([[:space:]]|$)' "$CFG_DIR"/*.cfg >/dev/null 2>&1; then
+        fail "Calibration Center cfg содержит запрещённую operational primitive"
     fi
     if grep -E '/sys/.*/(unbind|bind)|usb.*reset' "$AUDIT" >/dev/null 2>&1; then
         fail "audit helper содержит запрещённую USB primitive"
