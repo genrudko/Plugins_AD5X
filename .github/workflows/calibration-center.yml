@@ -1,0 +1,31 @@
+name: Calibration Center
+
+on:
+  push:
+    branches:
+      - codex/5-calibration-center-001
+      - main
+    paths:
+      - 'calibration_center/**'
+      - 'tests/test_calibration_center.py'
+      - '.github/workflows/calibration-center.yml'
+  pull_request:
+    paths:
+      - 'calibration_center/**'
+      - 'tests/test_calibration_center.py'
+      - '.github/workflows/calibration-center.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  static-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run Calibration Center tests
+        run: python -m unittest tests.test_calibration_center -v
