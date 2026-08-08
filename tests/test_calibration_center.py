@@ -5,6 +5,7 @@ import importlib.util
 import pathlib
 import re
 import subprocess
+import sys
 import unittest
 
 
@@ -18,6 +19,7 @@ MODEL = CC / "model.py"
 spec = importlib.util.spec_from_file_location("calibration_center_model", MODEL)
 assert spec and spec.loader
 model = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = model
 spec.loader.exec_module(model)
 
 
