@@ -11,7 +11,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CC = ROOT / "calibration_center"
-CFG = CC / "calibration_center.cfg"
+ENTRY = CC / "calibration_center.cfg"
+CFG_FILES = sorted(CC.glob("*.cfg"))
 INSTALLER = CC / "install.sh"
 AUDIT = CC / "cc_audit.sh"
 MODEL = CC / "model.py"
@@ -92,11 +93,21 @@ class CalibrationMathTests(unittest.TestCase):
 class CalibrationConfigTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.text = CFG.read_text(encoding="utf-8")
+        cls.text = "\n\n".join(path.read_text(encoding="utf-8") for path in CFG_FILES)
+        cls.measure = (CC / "cc_measure.cfg").read_text(encoding="utf-8")
+        cls.print_cfg = (CC / "cc_print.cfg").read_text(encoding="utf-8")
 
-    def test_cfg_parses_as_klipper_style_ini(self) -> None:
-        parser = configparser.RawConfigParser(strict=False, interpolation=None)
-        parser.read_string(self.text)
+    def test_entrypoint_includes_split_modules(self) -> None:
+        entry = ENTRY.read_text(encoding="utf-8")
+        for filename in (
+            "cc_core.cfg",
+            "cc_profiles.cfg",
+            "cc_measure.cfg",
+            "cc_print.cfg",
+        ):
+            self.assertIn(f"[include ./{filename}]", entry)
+
+    def test_each_functional_cfg_parses_as_klipper_style_ini(self) -> None:
         required = {
             "gcode_macro CALIBRATION_CENTER",
             "gcode_macro CC_CALIBRATE",
@@ -107,30 +118,77 @@ class CalibrationConfigTests(unittest.TestCase):
             "gcode_macro CC_VERIFY_CURRENT",
             "gcode_macro CC_ROLLBACK",
         }
-        self.assertTrue(required.issubset(set(parser.sections())))
+        sections: set[str] = set()
+        for path in sorted(CC.glob("cc_*.cfg")):
+            parser = configparser.RawConfigParser(strict=False, interpolation=None)
+            parser.read_string(path.read_text(encoding="utf-8"))
+            sections.update(parser.sections())
+        self.assertTrue(required.issubset(sections))
 
     def test_automatic_path_runs_five_measurements(self) -> None:
-        block = self.text.split("[gcode_macro CC_CALIBRATE]", 1)[1].split(
+        block = self.measure.split("[gcode_macro CC_CALIBRATE]", 1)[1].split(
             "[gcode_macro _CC_PREPARE_MEASUREMENTS]", 1
         )[0]
         calls = re.findall(r"^\s*_CC_MEASURE INDEX=([1-5])\s*$", block, re.M)
         self.assertEqual(calls, ["1", "2", "3", "4", "5"])
 
     def test_each_measurement_tares_before_probe(self) -> None:
-        block = self.text.split("[gcode_macro _CC_MEASURE]", 1)[1].split(
+        block = self.measure.split("[gcode_macro _CC_MEASURE]", 1)[1].split(
             "[gcode_macro _CC_CAPTURE]", 1
         )[0]
         self.assertLess(block.index("LOAD_CELL_TARE"), block.index("PROBE"))
         self.assertLess(block.index("PROBE"), block.index("_CC_CAPTURE"))
 
-    def test_unstable_result_is_rejected_before_auto_ref_save(self) -> None:
-        block = self.text.split("[gcode_macro _CC_FINALIZE]", 1)[1].split(
-            "[delayed_gcode _CC_FAILSAFE]", 1
+    def test_measurement_isolated_from_loaded_bed_mesh_and_restored(self) -> None:
+        calibrate = self.measure.split("[gcode_macro CC_CALIBRATE]", 1)[1].split(
+            "[gcode_macro _CC_PREPARE_MEASUREMENTS]", 1
         )[0]
-        self.assertIn("spread > st.max_range", block)
-        self.assertIn("calibration_reject", block)
-        self.assertIn("VARIABLE=cc_p{slot}_auto_ref", block)
-        self.assertLess(block.index("spread > st.max_range"), block.index("VARIABLE=cc_p{slot}_auto_ref"))
+        restore = self.measure.split("[gcode_macro _CC_RESTORE_MESH]", 1)[1].split(
+            "[gcode_macro _CC_CLEANUP]", 1
+        )[0]
+        self.assertIn("BED_MESH_CLEAR FROM=CALIBRATION_CENTER", calibrate)
+        self.assertIn("BED_MESH_PROFILE LOAD={mesh_name}", restore)
+
+    def test_reject_cleanup_executes_before_separate_error_macro(self) -> None:
+        finalize = self.measure.split("[gcode_macro _CC_FINALIZE]", 1)[1].split(
+            "[gcode_macro _CC_RESTORE_MESH]", 1
+        )[0]
+        self.assertNotRegex(finalize, r"\{\s*action_raise_error")
+        self.assertIn("_CC_CLEANUP\n        _CC_ERROR_INCOMPLETE", finalize)
+        self.assertIn("_CC_CLEANUP\n        _CC_ERROR_UNSTABLE", finalize)
+        self.assertIn("_CC_CLEANUP\n        _CC_ERROR_DELTA", finalize)
+
+    def test_unstable_result_is_rejected_before_auto_ref_save(self) -> None:
+        finalize = self.measure.split("[gcode_macro _CC_FINALIZE]", 1)[1].split(
+            "[gcode_macro _CC_RESTORE_MESH]", 1
+        )[0]
+        self.assertIn("spread > st.max_range", finalize)
+        self.assertIn("calibration_reject", finalize)
+        self.assertIn("VARIABLE=cc_p{slot}_auto_ref", finalize)
+        self.assertLess(
+            finalize.index("spread > st.max_range"),
+            finalize.index("VARIABLE=cc_p{slot}_auto_ref"),
+        )
+
+    def test_rejected_remeasure_preserves_existing_verified_profile(self) -> None:
+        finalize = self.measure.split("[gcode_macro _CC_FINALIZE]", 1)[1].split(
+            "[gcode_macro _CC_RESTORE_MESH]", 1
+        )[0]
+        self.assertIn("verified_ref >= 9000.0", finalize)
+        self.assertIn("SAVE_VARIABLE VARIABLE=cc_p{slot}_state VALUE=3", finalize)
+        # A delta-limit rejection for an established verified profile must not
+        # replace the USER VERIFIED state with REJECTED.
+        delta_branch = finalize.split(
+            "verified_ref < 9000.0 and (median - verified_ref)|abs", 1
+        )[1].split("{% else %}", 1)[0]
+        self.assertNotIn("VARIABLE=cc_p{slot}_state VALUE=3", delta_branch)
+
+    def test_cleanup_turns_heaters_off_before_restoration(self) -> None:
+        cleanup = self.measure.split("[gcode_macro _CC_CLEANUP]", 1)[1].split(
+            "[gcode_macro _CC_ERROR_INCOMPLETE]", 1
+        )[0]
+        self.assertLess(cleanup.index("TURN_OFF_HEATERS"), cleanup.index("_CC_RESTORE_MESH"))
+        self.assertLess(cleanup.index("TURN_OFF_HEATERS"), cleanup.index("RESTORE_GCODE_STATE"))
 
     def test_profile_model_keeps_auto_and_verified_separate(self) -> None:
         for token in (
@@ -143,6 +201,21 @@ class CalibrationConfigTests(unittest.TestCase):
         ):
             self.assertIn(token, self.text)
 
+    def test_initial_verification_uses_deliberate_live_adjustment(self) -> None:
+        verify = self.print_cfg.split("[gcode_macro CC_VERIFY_CURRENT]", 1)[1].split(
+            "[gcode_macro CC_ROLLBACK]", 1
+        )[0]
+        self.assertIn("old_ref >= 9000.0", verify)
+        self.assertIn("new_bias = st.live_adjust|float", verify)
+
+    def test_print_hook_captures_zmod_baseline_before_profile_adjustment(self) -> None:
+        apply = self.print_cfg.split("[gcode_macro CC_APPLY_PROFILE]", 1)[1].split(
+            "[gcode_macro CC_FIRST_LAYER_CONTROLS]", 1
+        )[0]
+        self.assertLess(apply.index("last_base_runtime"), apply.index("_SET_GCODE_OFFSET_FAST"))
+        self.assertIn("mesh_test in [3, 4]", apply)
+        self.assertIn("cc_auto = 0.0", apply)
+
     def test_stock_calibration_storage_is_not_written(self) -> None:
         forbidden_commands = re.compile(
             r"^\s*(?:Z_OFFSET_APPLY_PROBE|Z_OFFSET_APPLY_ENDSTOP|SAVE_CONFIG|UPDATE_MCU)(?:\s|$)",
@@ -154,18 +227,18 @@ class CalibrationConfigTests(unittest.TestCase):
     def test_no_usb_reset_or_firmware_flash(self) -> None:
         operational = self.text.lower()
         self.assertNotIn("/sys/bus/usb", operational)
-        self.assertNotIn("unbind", operational)
-        self.assertNotIn("bind", operational)
+        self.assertNotRegex(operational, r"\bunbind\b")
+        self.assertNotRegex(operational, r"\bbind\b")
         self.assertNotIn("flash_mcu", operational)
 
     def test_print_busy_guards_exist(self) -> None:
-        self.assertGreaterEqual(self.text.count("['printing', 'paused']"), 4)
+        self.assertGreaterEqual(self.text.count("['printing', 'paused']"), 5)
 
-    def test_failsafe_turns_heaters_off(self) -> None:
-        block = self.text.split("[delayed_gcode _CC_FAILSAFE]", 1)[1].split(
-            "[gcode_macro CC_APPLY_PROFILE]", 1
-        )[0]
+    def test_failsafe_turns_heaters_off_and_restores_state(self) -> None:
+        block = self.measure.split("[delayed_gcode _CC_FAILSAFE]", 1)[1]
         self.assertIn("TURN_OFF_HEATERS", block)
+        self.assertIn("_CC_RESTORE_MESH", block)
+        self.assertIn("RESTORE_GCODE_STATE NAME=cc_calibration", block)
 
 
 class InstallerTests(unittest.TestCase):
@@ -188,6 +261,13 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("/opt/config/base/klipper", self.text)
         self.assertIn("/opt/config/base/moonraker", self.text)
         self.assertIn("upstream уже DIRTY", self.text)
+
+    def test_installer_fails_closed_when_printer_state_is_unknown(self) -> None:
+        self.assertIn("Moonraker недоступен; безопасное состояние принтера не подтверждено", self.text)
+        self.assertIn("print_stats.state; установка остановлена fail-closed", self.text)
+
+    def test_payload_safety_guard_scans_every_split_cfg(self) -> None:
+        self.assertIn('"$CFG_DIR"/*.cfg', self.text)
 
     def test_user_start_hook_is_conflict_safe(self) -> None:
         self.assertIn("CALIBRATION_CENTER_START_HOOK_BEGIN", self.text)
