@@ -124,16 +124,12 @@ compatibility_check() {
 
 check_user_hook_conflict() {
     [ -f "$USER_CFG" ] || return 0
-    # Our own marker is safe. Any other user definition must not be overwritten.
     TMP="$STATE_DIR/user.no-cc.$$"
-    strip_block_copy() {
-        awk -v b="$HOOK_BEGIN" -v e="$HOOK_END" '
-            index($0,b){skip=1;next}
-            index($0,e){skip=0;next}
-            !skip{print}
-        ' "$USER_CFG" >"$TMP"
-    }
-    strip_block_copy
+    awk -v b="$HOOK_BEGIN" -v e="$HOOK_END" '
+        index($0,b){skip=1;next}
+        index($0,e){skip=0;next}
+        !skip{print}
+    ' "$USER_CFG" >"$TMP"
     if grep -q '^\[gcode_macro _USER_START_PRINT\]' "$TMP"; then
         rm -f "$TMP"
         fail "mod_data/user.cfg уже содержит пользовательский _USER_START_PRINT. Автоматически объединять его небезопасно; hook не изменён."
@@ -191,6 +187,18 @@ ensure_checkout() {
     chmod +x "$PLUGIN_DIR/calibration_center/install.sh" "$PLUGIN_DIR/calibration_center/cc_audit.sh"
 }
 
+payload_safety_check() {
+    CFG="$PLUGIN_DIR/calibration_center/calibration_center.cfg"
+    AUDIT="$PLUGIN_DIR/calibration_center/cc_audit.sh"
+    # Match executable command lines, not documentation or this guard's own text.
+    if grep -E '^[[:space:]]*(UPDATE_MCU|Z_OFFSET_APPLY_PROBE|Z_OFFSET_APPLY_ENDSTOP|SAVE_CONFIG)([[:space:]]|$)' "$CFG" >/dev/null 2>&1; then
+        fail "calibration_center.cfg содержит запрещённую operational primitive"
+    fi
+    if grep -E '/sys/.*/(unbind|bind)|usb.*reset' "$AUDIT" >/dev/null 2>&1; then
+        fail "audit helper содержит запрещённую USB primitive"
+    fi
+}
+
 install_now() {
     check_idle
     check_upstream_clean
@@ -206,19 +214,14 @@ install_now() {
     snapshot_file "$USER_MOONRAKER" user.moonraker.conf "$B"
     printf '%s\n' "$B" >"$STATE_DIR/last-install-backup"
 
-    # Roll back config files on any interrupted/failed install after this point.
     SUCCESS=0
     trap 'if [ "$SUCCESS" -ne 1 ]; then restore_file "$KLIPPER_PLUGINS" plugins.cfg "$B"; restore_file "$USER_CFG" user.cfg "$B"; restore_file "$USER_MOONRAKER" user.moonraker.conf "$B"; fi' EXIT HUP INT TERM
 
     ensure_checkout
+    payload_safety_check
     append_line "$KLIPPER_PLUGINS" "$INCLUDE_LINE"
     write_hook
     write_update_manager
-
-    # Static forbidden-operation guard in the installed payload.
-    if grep -R -E -n 'UPDATE_MCU|USB.*(unbind|bind|reset)|Z_OFFSET_APPLY_(PROBE|ENDSTOP)|SAVE_CONFIG' "$PLUGIN_DIR/calibration_center" 2>/dev/null | grep -v '/docs/' | grep -v 'forbidden' >/dev/null 2>&1; then
-        fail "payload содержит запрещённую operational primitive"
-    fi
 
     sync
     check_upstream_clean
