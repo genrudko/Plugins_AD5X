@@ -54,7 +54,7 @@ class CalibrationMathTests(unittest.TestCase):
         with self.assertRaises(model.CalibrationRejected):
             model.reference_delta(0.500, 0.100, max_delta=0.300)
 
-    def test_mesh_test_3_4_does_not_double_apply_auto_delta(self) -> None:
+    def test_mesh_test_3_4_does_not_double_apply_profile_delta(self) -> None:
         self.assertAlmostEqual(
             model.runtime_adjust(
                 verified_bias=-0.170, auto_delta=0.025, mesh_test=3
@@ -96,6 +96,7 @@ class CalibrationConfigTests(unittest.TestCase):
         cls.text = "\n\n".join(path.read_text(encoding="utf-8") for path in CFG_FILES)
         cls.measure = (CC / "cc_measure.cfg").read_text(encoding="utf-8")
         cls.print_cfg = (CC / "cc_print.cfg").read_text(encoding="utf-8")
+        cls.profiles = (CC / "cc_profiles.cfg").read_text(encoding="utf-8")
 
     def test_entrypoint_includes_split_modules(self) -> None:
         entry = ENTRY.read_text(encoding="utf-8")
@@ -176,12 +177,44 @@ class CalibrationConfigTests(unittest.TestCase):
         )[0]
         self.assertIn("verified_ref >= 9000.0", finalize)
         self.assertIn("SAVE_VARIABLE VARIABLE=cc_p{slot}_state VALUE=3", finalize)
-        # A delta-limit rejection for an established verified profile must not
-        # replace the USER VERIFIED state with REJECTED.
         delta_branch = finalize.split(
             "verified_ref < 9000.0 and (median - verified_ref)|abs", 1
         )[1].split("{% else %}", 1)[0]
         self.assertNotIn("VARIABLE=cc_p{slot}_state VALUE=3", delta_branch)
+
+    def test_calibration_marks_profile_pending_until_full_series_accepts(self) -> None:
+        calibrate = self.measure.split("[gcode_macro CC_CALIBRATE]", 1)[1].split(
+            "[gcode_macro _CC_PREPARE_MEASUREMENTS]", 1
+        )[0]
+        finalize = self.measure.split("[gcode_macro _CC_FINALIZE]", 1)[1].split(
+            "[gcode_macro _CC_RESTORE_MESH]", 1
+        )[0]
+        self.assertIn("VARIABLE=cc_p{slot}_needs_calibration VALUE=1", calibrate)
+        self.assertIn("VARIABLE=cc_p{slot}_needs_calibration VALUE=0", finalize)
+        success_branch = finalize.rsplit("{% else %}", 1)[1]
+        self.assertIn("VARIABLE=cc_p{slot}_needs_calibration VALUE=0", success_branch)
+
+    def test_switching_profiles_requires_fresh_calibration(self) -> None:
+        select = self.profiles.split("[gcode_macro CC_PROFILE_SELECT]", 1)[1].split(
+            "[gcode_macro CC_PROFILE_RENAME]", 1
+        )[0]
+        self.assertIn("old_slot != slot", select)
+        self.assertIn("VARIABLE=cc_p{slot}_needs_calibration VALUE=1", select)
+
+    def test_print_start_cancels_if_selected_profile_is_not_ready(self) -> None:
+        apply = self.print_cfg.split("[gcode_macro CC_APPLY_PROFILE]", 1)[1].split(
+            "[gcode_macro CC_FIRST_LAYER_CONTROLS]", 1
+        )[0]
+        self.assertIn("needs == 1", apply)
+        self.assertIn("CANCEL_PRINT", apply)
+        self.assertLess(apply.index("needs == 1"), apply.index("_SET_GCODE_OFFSET_FAST"))
+
+    def test_failed_probe_evidence_cannot_be_cleared_by_rollback(self) -> None:
+        rollback = self.print_cfg.split("[gcode_macro CC_ROLLBACK]", 1)[1].split(
+            "[gcode_macro CC_ENABLE]", 1
+        )[0]
+        self.assertIn("last_result != 3", rollback)
+        self.assertIn("VARIABLE=cc_p{slot}_needs_calibration VALUE=0", rollback)
 
     def test_cleanup_turns_heaters_off_before_restoration(self) -> None:
         cleanup = self.measure.split("[gcode_macro _CC_CLEANUP]", 1)[1].split(
@@ -198,6 +231,7 @@ class CalibrationConfigTests(unittest.TestCase):
             "_auto_delta",
             "_prev_verified_ref",
             "_prev_verified_bias",
+            "_needs_calibration",
         ):
             self.assertIn(token, self.text)
 
@@ -215,6 +249,7 @@ class CalibrationConfigTests(unittest.TestCase):
         self.assertLess(apply.index("last_base_runtime"), apply.index("_SET_GCODE_OFFSET_FAST"))
         self.assertIn("mesh_test in [3, 4]", apply)
         self.assertIn("cc_auto = 0.0", apply)
+        self.assertIn("different anchor", apply)
 
     def test_stock_calibration_storage_is_not_written(self) -> None:
         forbidden_commands = re.compile(
