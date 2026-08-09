@@ -144,6 +144,13 @@ compatibility_check() {
     require_runtime_token "gcode_macro _set_gcode_offset_fast" "_SET_GCODE_OFFSET_FAST"
     require_runtime_token "LOAD_CELL_TARE" "LOAD_CELL_TARE"
     require_runtime_token "gcode_macro _client_variable" "_CLIENT_VARIABLE"
+    # The built-in first-layer verifier is intentionally streamed as a real
+    # virtual-SD job so it uses the same START_PRINT/_USER_START_PRINT stack as
+    # normal prints and permits live Z commands while the patch is being drawn.
+    require_runtime_token "gcode_macro start_print" "START_PRINT"
+    require_runtime_token "gcode_macro end_print" "END_PRINT"
+    require_runtime_token "SDCARD_PRINT_FILE" "SDCARD_PRINT_FILE"
+    require_runtime_token "SET_PRINT_STATS_INFO" "SET_PRINT_STATS_INFO"
 }
 
 check_user_hook_conflict() {
