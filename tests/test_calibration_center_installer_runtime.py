@@ -34,6 +34,10 @@ class CalibrationCenterRuntimePreflightTests(unittest.TestCase):
             "gcode_macro _set_gcode_offset_fast",
             "LOAD_CELL_TARE",
             "gcode_macro _client_variable",
+            "gcode_macro start_print",
+            "gcode_macro end_print",
+            "SDCARD_PRINT_FILE",
+            "SET_PRINT_STATS_INFO",
         ):
             self.assertIn(token, self.compat)
         self.assertNotIn('require_runtime_token "_START_PRECLEAR"', self.compat)
