@@ -50,19 +50,25 @@ generate_first_layer() {
     TMP="$OUT.tmp.$$"
     umask 022
 
-    # The patch is centered on the 220x220 AD5X bed. Line width/layer height and
-    # extrusion are derived from the selected nozzle. The file deliberately uses
-    # START_PRINT/END_PRINT so Z-Mod and the Calibration Center start hook see the
-    # same print-time coordinate/offset stack as a normal sliced job.
+    # The patch is centered on the 220x220 AD5X bed. Geometry follows the same
+    # rounded-rectangle bead model commonly used by slicers for line packing:
+    #   bead_area = h*(w-h) + pi*h^2/4
+    #   line_spacing = bead_area/h
+    # Using pitch=line_width leaves a theoretical gap between rounded beads and
+    # produced a false "nozzle too high" signal during physical acceptance.
     awk -v mat="$MATERIAL" -v nt="$NOZZLE_TEMP" -v bt="$BED_TEMP" -v nozzle="$NOZZLE" '
         BEGIN {
-            filament_area = 3.141592653589793 * 1.75 * 1.75 / 4.0
+            pi = 3.141592653589793
+            filament_area = pi * 1.75 * 1.75 / 4.0
             layer = nozzle * 0.50
             if (layer < 0.15) layer = 0.15
             if (layer > 0.40) layer = 0.40
             width = nozzle * 1.12
-            pitch = width
-            e_per_mm = width * layer / filament_area
+            if (width <= layer) width = layer * 1.20
+
+            bead_area = layer * (width - layer) + pi * layer * layer / 4.0
+            pitch = bead_area / layer
+            e_per_mm = bead_area / filament_area
 
             x0 = 80.0
             x1 = 140.0
@@ -72,14 +78,17 @@ generate_first_layer() {
             print_feed = 1200
             travel_feed = 6000
             line_e = (x1 - x0) * e_per_mm
+            connector_e = pitch * e_per_mm
 
             print "; Calibration Center built-in first-layer verification"
             printf "; material=%s nozzle=%.3f nozzle_temp=%.1f bed_temp=%.1f\n", mat, nozzle, nt, bt
-            printf "; layer_height=%.3f line_width=%.3f\n", layer, width
+            printf "; layer_height=%.3f line_width=%.3f line_spacing=%.3f bead_area=%.5f\n", layer, width, pitch, bead_area
             printf "START_PRINT EXTRUDER_TEMP=%.1f BED_TEMP=%.1f\n", nt, bt
             printf "CC_FIRST_LAYER_TEST_BEGIN MATERIAL=%s NOZZLE_TEMP=%.1f BED_TEMP=%.1f NOZZLE=%.3f\n", mat, nt, bt, nozzle
             print "SET_PRINT_STATS_INFO TOTAL_LAYER=1 CURRENT_LAYER=1"
             print "M106 S0"
+            print "M220 S100"
+            print "M221 S100"
             print "G90"
             print "M83"
             print "G92 E0"
@@ -96,13 +105,16 @@ generate_first_layer() {
 
                 if (i < lines - 1) {
                     next_y = y0 + (i + 1) * pitch
-                    printf "G1 Y%.3f F1800\n", next_y
+                    printf "G1 Y%.3f E%.5f F%d\n", next_y, connector_e, print_feed
                 }
             }
 
             print "G1 E-0.6 F900"
             print "G1 Z5 F1200"
             print "M400"
+            # Stop the virtual-SD stream for human review. Accept/abort cancels
+            # the test; Resume without a decision falls through to FILE_END.
+            print "CC_FIRST_LAYER_TEST_REVIEW"
             print "CC_FIRST_LAYER_TEST_FILE_END"
             print "END_PRINT"
         }
@@ -148,8 +160,8 @@ if [ "$SIZE" -gt 262144 ]; then
     if [ -f "${LOG_FILE}.1" ]; then
         rm -f "${LOG_FILE}.1"
     fi
-    mv "${LOG_FILE}" "${LOG_FILE}.1"
-    : >"${LOG_FILE}"
+    mv "$LOG_FILE" "${LOG_FILE}.1"
+    : >"$LOG_FILE"
 fi
 
 exit 0
