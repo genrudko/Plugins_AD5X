@@ -150,6 +150,7 @@ compatibility_check() {
     require_runtime_token "gcode_macro start_print" "START_PRINT"
     require_runtime_token "gcode_macro end_print" "END_PRINT"
     require_runtime_token "SDCARD_PRINT_FILE" "SDCARD_PRINT_FILE"
+    require_runtime_token "PAUSE" "PAUSE"
     require_runtime_token "SET_PRINT_STATS_INFO" "SET_PRINT_STATS_INFO"
 }
 
