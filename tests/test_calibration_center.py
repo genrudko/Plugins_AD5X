@@ -69,7 +69,10 @@ class CalibrationMathTests(unittest.TestCase):
             model.initial_verified_process_bias(live_adjust=-0.010), -0.010
         )
         self.assertAlmostEqual(
-            model.reverified_process_bias(old_bias=-0.010, live_adjust=0.005), -0.005
+            model.reverified_process_bias(
+                applied_profile_correction=-0.035, live_adjust=0.005
+            ),
+            -0.030,
         )
 
 
@@ -206,7 +209,9 @@ class CalibrationConfigTests(unittest.TestCase):
             "[gcode_macro CC_FIRST_LAYER_ACCEPT]", 1
         )[0]
         self.assertIn("new_bias = st.live_adjust|float", verify)
-        self.assertIn("new_bias = old_bias + st.live_adjust|float", verify)
+        self.assertIn(
+            "new_bias = st.profile_origin_adjust|float + st.live_adjust|float", verify
+        )
         self.assertIn("verified_probe_format VALUE={auto_format}", verify)
         self.assertIn("verified_global_z VALUE={global_z}", verify)
         self.assertIn("builtin_review", verify)
