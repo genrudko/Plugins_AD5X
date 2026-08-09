@@ -87,7 +87,7 @@ generate_first_layer() {
             printf "CC_FIRST_LAYER_TEST_BEGIN MATERIAL=%s NOZZLE_TEMP=%.1f BED_TEMP=%.1f NOZZLE=%.3f\n", mat, nt, bt, nozzle
             # Event-scoped fail-safe: while this generated job exists, a tiny
             # delayed check protects the temporary live-Z delta even if the user
-            # presses the screen's generic CANCEL rather than our Abort button.
+            # presses the screen generic CANCEL rather than our Abort button.
             print "UPDATE_DELAYED_GCODE ID=_CC_FIRST_LAYER_WATCHDOG DURATION=2"
             print "SET_PRINT_STATS_INFO TOTAL_LAYER=1 CURRENT_LAYER=1"
             print "M106 S0"
