@@ -91,7 +91,8 @@ class FirstLayerGeneratorTests(unittest.TestCase):
             path = self._generate(pathlib.Path(tmp))
             text = path.read_text(encoding="utf-8")
 
-        self.assertIn("START_PRINT EXTRUDER_TEMP=210.0 BED_TEMP=60.0 SKIP_LEVELING=True", text)
+        self.assertIn("START_PRINT EXTRUDER_TEMP=210.0 BED_TEMP=60.0", text)
+        self.assertNotIn("SKIP_LEVELING", text)
         self.assertIn("CC_FIRST_LAYER_TEST_BEGIN MATERIAL=PLA", text)
         self.assertIn("SET_PRINT_STATS_INFO TOTAL_LAYER=1 CURRENT_LAYER=1", text)
         self.assertIn("G1 Z0.200 F600", text)
