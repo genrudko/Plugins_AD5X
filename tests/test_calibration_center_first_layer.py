@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CC = ROOT / "calibration_center"
 PRINT_CFG = CC / "cc_print.cfg"
+CORE_CFG = CC / "cc_core.cfg"
 AUDIT = CC / "cc_audit.sh"
 
 
@@ -15,6 +17,7 @@ class FirstLayerUiContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.text = PRINT_CFG.read_text(encoding="utf-8")
+        cls.core = CORE_CFG.read_text(encoding="utf-8")
 
     def test_beginner_material_presets_are_exposed(self) -> None:
         for material in ("PLA", "PETG", "ABS", "ASA", "TPU"):
@@ -48,16 +51,53 @@ class FirstLayerUiContractTests(unittest.TestCase):
         self.assertIn("NOZZLE_TEMP вне диапазона 170..280 C", block)
         self.assertIn("BED_TEMP вне диапазона 0..110 C", block)
 
-    def test_generated_test_has_live_controls_and_explicit_accept_abort(self) -> None:
-        for token in (
-            "CC_FIRST_LAYER_TEST_BEGIN",
-            "CC_LIVE_Z DELTA=-0.01",
-            "CC_LIVE_Z DELTA=0.01",
-            "CC_FIRST_LAYER_ACCEPT",
-            "CC_FIRST_LAYER_ABORT",
-            "first_layer_verified VALUE=1",
-        ):
-            self.assertIn(token, self.text)
+    def test_live_controls_show_offsets_and_reopen_after_each_step(self) -> None:
+        controls = self.text.split("[gcode_macro CC_FIRST_LAYER_CONTROLS]", 1)[1].split(
+            "[gcode_macro CC_FIRST_LAYER_PRESET]", 1
+        )[0]
+        self.assertIn("Z-Mod база:", controls)
+        self.assertIn("тест ΔZ:", controls)
+        self.assertIn("Текущий runtime Z-offset:", controls)
+
+        live = self.text.split("[gcode_macro CC_LIVE_Z]", 1)[1].split(
+            "[gcode_macro CC_FIRST_LAYER_TEST_REVIEW]", 1
+        )[0]
+        self.assertLess(live.index("_SET_GCODE_OFFSET_FAST"), live.index("CC_FIRST_LAYER_CONTROLS"))
+        self.assertIn("VARIABLE=live_adjust VALUE={current_live + delta}", live)
+
+    def test_review_pause_and_runtime_restore_are_explicit(self) -> None:
+        review = self.text.split("[gcode_macro CC_FIRST_LAYER_TEST_REVIEW]", 1)[1].split(
+            "[gcode_macro CC_VERIFY_CURRENT]", 1
+        )[0]
+        self.assertIn("VARIABLE=first_layer_review VALUE=1", review)
+        self.assertIn("PAUSE", review)
+        self.assertIn("CC_FIRST_LAYER_CONTROLS", review)
+
+        restore = self.text.split("[gcode_macro _CC_FIRST_LAYER_RESTORE_RUNTIME]", 1)[1].split(
+            "[gcode_macro CC_FIRST_LAYER_ACCEPT]", 1
+        )[0]
+        self.assertIn("Z_ADJUST={-live}", restore)
+        self.assertIn("VARIABLE=live_adjust VALUE=0.0", restore)
+
+        for macro in ("CC_FIRST_LAYER_ACCEPT", "CC_FIRST_LAYER_ABORT", "CC_FIRST_LAYER_TEST_FILE_END"):
+            block = self.text.split(f"[gcode_macro {macro}]", 1)[1]
+            if macro != "CC_FIRST_LAYER_TEST_FILE_END":
+                block = block.split("[gcode_macro", 1)[0]
+            self.assertIn("_CC_FIRST_LAYER_RESTORE_RUNTIME", block)
+
+    def test_review_pause_can_save_user_verified(self) -> None:
+        verify = self.text.split("[gcode_macro CC_VERIFY_CURRENT]", 1)[1].split(
+            "[gcode_macro _CC_FIRST_LAYER_RESTORE_RUNTIME]", 1
+        )[0]
+        self.assertIn("builtin_review", verify)
+        self.assertIn("print_state == 'paused'", verify)
+        self.assertIn("new_bias = st.live_adjust|float", verify)
+
+    def test_helix_critical_buttons_use_short_labels(self) -> None:
+        self.assertIn("action:prompt_button Первый слой|CC_FIRST_LAYER_CONTROLS", self.core)
+        self.assertNotIn("action:prompt_button Проверка первого слоя|", self.core)
+        for label in ("Сохранить|CC_FIRST_LAYER_ACCEPT", "Без сохранения|CC_FIRST_LAYER_ABORT"):
+            self.assertIn(label, self.text)
 
 
 class FirstLayerGeneratorTests(unittest.TestCase):
@@ -86,7 +126,16 @@ class FirstLayerGeneratorTests(unittest.TestCase):
         )
         return directory / "Calibration_Center_First_Layer.gcode"
 
-    def test_generator_creates_real_start_print_job_for_04_nozzle(self) -> None:
+    def _geometry(self, text: str) -> tuple[float, float, float]:
+        match = re.search(
+            r"layer_height=([0-9.]+) line_width=([0-9.]+) line_spacing=([0-9.]+)",
+            text,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        return tuple(float(value) for value in match.groups())
+
+    def test_generator_creates_slicer_like_solid_job_for_04_nozzle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = self._generate(pathlib.Path(tmp))
             text = path.read_text(encoding="utf-8")
@@ -96,13 +145,24 @@ class FirstLayerGeneratorTests(unittest.TestCase):
         self.assertIn("CC_FIRST_LAYER_TEST_BEGIN MATERIAL=PLA", text)
         self.assertIn("SET_PRINT_STATS_INFO TOTAL_LAYER=1 CURRENT_LAYER=1", text)
         self.assertIn("G1 Z0.200 F600", text)
+        self.assertIn("M220 S100", text)
+        self.assertIn("M221 S100", text)
         self.assertIn("M83", text)
-        self.assertIn("CC_FIRST_LAYER_TEST_FILE_END", text)
+        self.assertLess(text.index("CC_FIRST_LAYER_TEST_REVIEW"), text.index("CC_FIRST_LAYER_TEST_FILE_END"))
         self.assertTrue(text.rstrip().endswith("END_PRINT"))
-        extrusion_lines = [line for line in text.splitlines() if " E" in line and line.startswith("G1 X")]
-        self.assertGreater(len(extrusion_lines), 30)
 
-    def test_generator_scales_layer_height_for_08_nozzle(self) -> None:
+        layer, width, spacing = self._geometry(text)
+        self.assertAlmostEqual(layer, 0.200, places=3)
+        self.assertAlmostEqual(width, 0.448, places=3)
+        self.assertAlmostEqual(spacing, 0.405, places=3)
+        self.assertLess(spacing, width)
+
+        x_extrusion = [line for line in text.splitlines() if line.startswith("G1 X") and " E" in line]
+        y_connectors = [line for line in text.splitlines() if line.startswith("G1 Y") and " E" in line]
+        self.assertGreater(len(x_extrusion), 40)
+        self.assertEqual(len(y_connectors), len(x_extrusion) - 1)
+
+    def test_generator_scales_geometry_for_08_nozzle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = self._generate(
                 pathlib.Path(tmp),
@@ -115,8 +175,13 @@ class FirstLayerGeneratorTests(unittest.TestCase):
 
         self.assertIn("material=ASA nozzle=0.800", text)
         self.assertIn("G1 Z0.400 F600", text)
-        extrusion_lines = [line for line in text.splitlines() if " E" in line and line.startswith("G1 X")]
-        self.assertGreater(len(extrusion_lines), 15)
+        layer, width, spacing = self._geometry(text)
+        self.assertAlmostEqual(layer, 0.400, places=3)
+        self.assertAlmostEqual(width, 0.896, places=3)
+        self.assertAlmostEqual(spacing, 0.810, places=3)
+        self.assertLess(spacing, width)
+        extrusion_lines = [line for line in text.splitlines() if line.startswith("G1 X") and " E" in line]
+        self.assertGreater(len(extrusion_lines), 20)
         self.assertLess(len(extrusion_lines), 30)
 
     def test_generator_rejects_unsafe_inputs_fail_closed(self) -> None:
