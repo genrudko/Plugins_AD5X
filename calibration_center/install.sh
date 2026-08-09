@@ -136,7 +136,7 @@ compatibility_check() {
 
     require_runtime_token "gcode_macro _user_start_print" "_USER_START_PRINT"
     require_runtime_token "gcode_macro _orig_clear_nozzle" "_ORIG_CLEAR_NOZZLE"
-    require_runtime_token "gcode_macro _pre_clear_nozzle" "_PRE_CLEAR_NOZZLE"
+    require_runtime_token "_START_PRECLEAR" "_START_PRECLEAR"
     if ! runtime_has_token "gcode_macro _g28" && ! runtime_has_token "gcode_macro _home"; then
         fail "Z-Mod runtime: не найден безопасный homing path (_G28/_HOME)"
     fi
