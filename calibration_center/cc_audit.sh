@@ -76,7 +76,7 @@ generate_first_layer() {
             print "; Calibration Center built-in first-layer verification"
             printf "; material=%s nozzle=%.3f nozzle_temp=%.1f bed_temp=%.1f\n", mat, nozzle, nt, bt
             printf "; layer_height=%.3f line_width=%.3f\n", layer, width
-            printf "START_PRINT EXTRUDER_TEMP=%.1f BED_TEMP=%.1f SKIP_LEVELING=True\n", nt, bt
+            printf "START_PRINT EXTRUDER_TEMP=%.1f BED_TEMP=%.1f\n", nt, bt
             printf "CC_FIRST_LAYER_TEST_BEGIN MATERIAL=%s NOZZLE_TEMP=%.1f BED_TEMP=%.1f NOZZLE=%.3f\n", mat, nt, bt, nozzle
             print "SET_PRINT_STATS_INFO TOTAL_LAYER=1 CURRENT_LAYER=1"
             print "M106 S0"
