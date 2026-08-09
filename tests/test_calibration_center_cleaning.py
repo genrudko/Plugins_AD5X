@@ -19,10 +19,11 @@ class CalibrationCenterCleaningRegressionTests(unittest.TestCase):
         )[0]
         self.assertIn("_ORIG_CLEAR_NOZZLE", block)
         self.assertIn("TEMPERATURE_WAIT SENSOR=extruder", block)
-        self.assertIn("_PRE_CLEAR_NOZZLE", block)
+        self.assertIn("_START_PRECLEAR BED={bed_temp} EXTRUDER={measure_temp}", block)
+        self.assertNotIn("\n        _PRE_CLEAR_NOZZLE\n", block)
         self.assertIn("_CC_MEASURE INDEX=1", block)
-        self.assertLess(block.index("_ORIG_CLEAR_NOZZLE"), block.index("_PRE_CLEAR_NOZZLE"))
-        self.assertLess(block.index("_PRE_CLEAR_NOZZLE"), block.index("_CC_MEASURE INDEX=1"))
+        self.assertLess(block.index("_ORIG_CLEAR_NOZZLE"), block.index("_START_PRECLEAR"))
+        self.assertLess(block.index("_START_PRECLEAR"), block.index("_CC_MEASURE INDEX=1"))
         self.assertIn("final_wipe", block)
 
     def test_unset_repeatability_is_not_rendered_as_9999_mm(self) -> None:
