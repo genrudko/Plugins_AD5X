@@ -37,6 +37,7 @@ class CalibrationCenterRuntimePreflightTests(unittest.TestCase):
             "gcode_macro start_print",
             "gcode_macro end_print",
             "SDCARD_PRINT_FILE",
+            "PAUSE",
             "SET_PRINT_STATS_INFO",
         ):
             self.assertIn(token, self.compat)
