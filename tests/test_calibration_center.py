@@ -52,15 +52,24 @@ class CalibrationMathTests(unittest.TestCase):
             -0.145,
         )
 
-    def test_verified_bias_is_separate_from_auto_delta(self) -> None:
-        bias = model.verified_process_bias(
-            current_offset=-0.130,
-            base_runtime_offset=0.015,
-            runtime_auto_delta=0.025,
-        )
-        self.assertAlmostEqual(bias, -0.170)
+    def test_global_z_change_is_normalized_in_transient_layer(self) -> None:
         self.assertAlmostEqual(
-            model.initial_verified_process_bias(live_adjust=-0.170), -0.170
+            model.runtime_adjust(
+                verified_bias=-0.010,
+                auto_delta=0.000,
+                mesh_test=3,
+                verified_global_z=-0.130,
+                current_global_z=-0.100,
+            ),
+            -0.040,
+        )
+
+    def test_first_and_repeat_verification_use_only_isolated_live_delta(self) -> None:
+        self.assertAlmostEqual(
+            model.initial_verified_process_bias(live_adjust=-0.010), -0.010
+        )
+        self.assertAlmostEqual(
+            model.reverified_process_bias(old_bias=-0.010, live_adjust=0.005), -0.005
         )
 
 
@@ -71,14 +80,22 @@ class CalibrationConfigTests(unittest.TestCase):
         cls.profiles = (CC / "cc_profiles.cfg").read_text(encoding="utf-8")
         cls.measure = (CC / "cc_measure.cfg").read_text(encoding="utf-8")
         cls.print_cfg = (CC / "cc_print.cfg").read_text(encoding="utf-8")
+        cls.transient = (CC / "cc_transient_z.cfg").read_text(encoding="utf-8")
         cls.all_cfg = "\n".join(
             path.read_text(encoding="utf-8") for path in sorted(CC.glob("*.cfg"))
         )
 
     def test_entrypoint_includes_reviewable_modules(self) -> None:
         entry = ENTRY.read_text(encoding="utf-8")
-        for filename in ("cc_core.cfg", "cc_profiles.cfg", "cc_measure.cfg", "cc_print.cfg"):
+        for filename in (
+            "cc_core.cfg",
+            "cc_profiles.cfg",
+            "cc_measure.cfg",
+            "cc_print.cfg",
+            "cc_transient_z.cfg",
+        ):
             self.assertIn(f"[include ./{filename}]", entry)
+        self.assertNotIn("cc_first_layer_watchdog.cfg", entry)
 
     def test_split_cfg_is_ini_parseable(self) -> None:
         sections: set[str] = set()
@@ -93,6 +110,8 @@ class CalibrationConfigTests(unittest.TestCase):
             "gcode_macro CC_APPLY_PROFILE",
             "gcode_macro CC_VERIFY_CURRENT",
             "gcode_macro CC_ROLLBACK",
+            "gcode_macro _CC_PROFILE_TRANSIENT_APPLY",
+            "gcode_macro _CC_FIRST_LAYER_TRANSIENT_STEP",
         ):
             self.assertIn(required, sections)
 
@@ -146,21 +165,32 @@ class CalibrationConfigTests(unittest.TestCase):
         self.assertIn("old_slot != slot", select)
         self.assertIn("VARIABLE=cc_p{slot}_needs_calibration VALUE=1", select)
 
-    def test_print_start_cancels_unready_profile(self) -> None:
+    def test_print_start_cancels_unready_profile_before_transient_apply(self) -> None:
         apply = self.print_cfg.split("[gcode_macro CC_APPLY_PROFILE]", 1)[1].split(
             "[gcode_macro CC_FIRST_LAYER_CONTROLS]", 1
         )[0]
         self.assertIn("needs == 1", apply)
         self.assertIn("CANCEL_PRINT", apply)
-        self.assertLess(apply.index("needs == 1"), apply.index("_SET_GCODE_OFFSET_FAST"))
+        self.assertLess(apply.index("needs == 1"), apply.index("_CC_PROFILE_TRANSIENT_APPLY"))
 
-    def test_auto_and_user_verified_layers_are_separate(self) -> None:
+    def test_print_and_live_paths_never_execute_persistent_offset_commands(self) -> None:
+        operational = self.print_cfg + "\n" + self.transient
+        forbidden = re.compile(
+            r"^\s*(?:SET_GCODE_OFFSET|_SET_GCODE_OFFSET|_SET_GCODE_OFFSET_FAST)(?:\s|$)",
+            re.M,
+        )
+        self.assertIsNone(forbidden.search(operational))
+        self.assertIn("G92 Z=", self.transient)
+
+    def test_auto_user_and_global_baseline_layers_are_separate(self) -> None:
         for token in (
             "_auto_ref",
             "_verified_ref",
             "_verified_bias",
+            "_verified_global_z",
             "_auto_delta",
             "_prev_verified_ref",
+            "_prev_verified_global_z",
         ):
             self.assertIn(token, self.all_cfg)
         apply = self.print_cfg.split("[gcode_macro CC_APPLY_PROFILE]", 1)[1].split(
@@ -168,13 +198,25 @@ class CalibrationConfigTests(unittest.TestCase):
         )[0]
         self.assertIn("mesh_test in [3, 4]", apply)
         self.assertIn("cc_auto = 0.0", apply)
+        self.assertIn("global_comp = verified_global - global_z", apply)
+        self.assertIn("bias + cc_auto + global_comp", apply)
 
-    def test_first_verification_uses_deliberate_live_adjustment(self) -> None:
+    def test_first_verification_uses_deliberate_isolated_live_adjustment(self) -> None:
         verify = self.print_cfg.split("[gcode_macro CC_VERIFY_CURRENT]", 1)[1].split(
-            "[gcode_macro CC_ROLLBACK]", 1
+            "[gcode_macro CC_FIRST_LAYER_ACCEPT]", 1
         )[0]
         self.assertIn("new_bias = st.live_adjust|float", verify)
+        self.assertIn("new_bias = old_bias + st.live_adjust|float", verify)
         self.assertIn("verified_probe_format VALUE={auto_format}", verify)
+        self.assertIn("verified_global_z VALUE={global_z}", verify)
+        self.assertIn("builtin_review", verify)
+
+    def test_probe_format_rebase_preserves_global_baseline_as_history(self) -> None:
+        finalize = self.measure.split("[gcode_macro _CC_FINALIZE]", 1)[1].split(
+            "[gcode_macro _CC_RESTORE_MESH]", 1
+        )[0]
+        self.assertIn("prev_verified_global_z VALUE={verified_global}", finalize)
+        self.assertIn("verified_global_z VALUE=9999.0", finalize)
 
     def test_forbidden_firmware_and_native_probe_storage_operations_absent(self) -> None:
         forbidden = re.compile(
