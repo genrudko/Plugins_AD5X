@@ -29,12 +29,14 @@ class CalibrationCenterRuntimePreflightTests(unittest.TestCase):
         for token in (
             "gcode_macro _user_start_print",
             "gcode_macro _orig_clear_nozzle",
-            "_START_PRECLEAR",
+            "_GOTO_TRASH",
+            "_CLEAR_REZINA",
             "gcode_macro _set_gcode_offset_fast",
             "LOAD_CELL_TARE",
             "gcode_macro _client_variable",
         ):
             self.assertIn(token, self.compat)
+        self.assertNotIn('require_runtime_token "_START_PRECLEAR"', self.compat)
         self.assertNotIn("gcode_macro _pre_clear_nozzle", self.compat)
         self.assertIn("gcode_macro _g28", self.compat)
         self.assertIn("gcode_macro _home", self.compat)
