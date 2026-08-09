@@ -85,6 +85,10 @@ generate_first_layer() {
             printf "; layer_height=%.3f line_width=%.3f line_spacing=%.3f bead_area=%.5f\n", layer, width, pitch, bead_area
             printf "START_PRINT EXTRUDER_TEMP=%.1f BED_TEMP=%.1f\n", nt, bt
             printf "CC_FIRST_LAYER_TEST_BEGIN MATERIAL=%s NOZZLE_TEMP=%.1f BED_TEMP=%.1f NOZZLE=%.3f\n", mat, nt, bt, nozzle
+            # Event-scoped fail-safe: while this generated job exists, a tiny
+            # delayed check protects the temporary live-Z delta even if the user
+            # presses the screen's generic CANCEL rather than our Abort button.
+            print "UPDATE_DELAYED_GCODE ID=_CC_FIRST_LAYER_WATCHDOG DURATION=2"
             print "SET_PRINT_STATS_INFO TOTAL_LAYER=1 CURRENT_LAYER=1"
             print "M106 S0"
             print "M220 S100"
