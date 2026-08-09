@@ -8,17 +8,18 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CC = ROOT / "calibration_center"
 ENTRY = CC / "calibration_center.cfg"
-WATCHDOG = CC / "cc_first_layer_watchdog.cfg"
+TRANSIENT = CC / "cc_transient_z.cfg"
 AUDIT = CC / "cc_audit.sh"
 
 
 class FirstLayerExternalCancelSafetyTests(unittest.TestCase):
-    def test_watchdog_is_included_but_not_idle_armed(self) -> None:
+    def test_transient_layer_is_included_and_watchdogs_are_not_idle_armed(self) -> None:
         entry = ENTRY.read_text(encoding="utf-8")
-        watchdog = WATCHDOG.read_text(encoding="utf-8")
-        self.assertIn("[include ./cc_first_layer_watchdog.cfg]", entry)
-        self.assertIn("[delayed_gcode _CC_FIRST_LAYER_WATCHDOG]", watchdog)
-        self.assertNotIn("initial_duration:", watchdog)
+        transient = TRANSIENT.read_text(encoding="utf-8")
+        self.assertIn("[include ./cc_transient_z.cfg]", entry)
+        self.assertIn("[delayed_gcode _CC_FIRST_LAYER_WATCHDOG]", transient)
+        self.assertIn("[delayed_gcode _CC_PROFILE_ORIGIN_WATCHDOG]", transient)
+        self.assertNotIn("initial_duration:", transient)
 
     def test_generated_job_arms_watchdog_only_after_test_begin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -38,8 +39,9 @@ class FirstLayerExternalCancelSafetyTests(unittest.TestCase):
         self.assertLess(begin, arm)
         self.assertLess(arm, layer)
 
-    def test_external_cancel_restores_only_temporary_live_delta(self) -> None:
-        watchdog = WATCHDOG.read_text(encoding="utf-8")
+    def test_external_cancel_restores_only_g92_test_origin(self) -> None:
+        transient = TRANSIENT.read_text(encoding="utf-8")
+        watchdog = transient.split("[delayed_gcode _CC_FIRST_LAYER_WATCHDOG]", 1)[1]
         self.assertIn("first_layer_active|int == 1", watchdog)
         self.assertIn("print_state in ['printing', 'paused']", watchdog)
         self.assertIn("UPDATE_DELAYED_GCODE ID=_CC_FIRST_LAYER_WATCHDOG DURATION=2", watchdog)
@@ -49,6 +51,23 @@ class FirstLayerExternalCancelSafetyTests(unittest.TestCase):
         self.assertIn("VARIABLE=first_layer_review VALUE=0", watchdog)
         self.assertNotIn("CANCEL_PRINT", watchdog)
         self.assertNotIn("SAVE_VARIABLE", watchdog)
+
+        restore = transient.split("[gcode_macro _CC_FIRST_LAYER_RESTORE_RUNTIME]", 1)[1].split(
+            "[delayed_gcode _CC_FIRST_LAYER_WATCHDOG]", 1
+        )[0]
+        self.assertIn("G92 Z={z + live}", restore)
+        self.assertNotIn("SET_GCODE_OFFSET", restore)
+
+    def test_profile_origin_cleanup_is_event_scoped(self) -> None:
+        transient = TRANSIENT.read_text(encoding="utf-8")
+        watchdog = transient.split("[delayed_gcode _CC_PROFILE_ORIGIN_WATCHDOG]", 1)[1].split(
+            "[gcode_macro _CC_FIRST_LAYER_TRANSIENT_STEP]", 1
+        )[0]
+        self.assertIn("profile_origin_adjust", watchdog)
+        self.assertIn("print_state in ['printing', 'paused']", watchdog)
+        self.assertIn("DURATION=5", watchdog)
+        self.assertIn("_CC_PROFILE_TRANSIENT_RESTORE", watchdog)
+        self.assertNotIn("initial_duration", watchdog)
 
 
 if __name__ == "__main__":
