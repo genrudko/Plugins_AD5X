@@ -16,6 +16,7 @@ Current Draft provides:
 - persistent `needs_calibration` readiness state;
 - one-level previous-known-good rollback;
 - documented `_USER_START_PRINT` integration after Z-Mod finishes its own start logic;
+- a built-in guided first-layer test with beginner material presets;
 - no edit of Klipper `[probe] z_offset`;
 - no write to Flashforge `zProbeOffset`;
 - no MCU firmware operation, USB reset or background polling.
@@ -32,7 +33,7 @@ Therefore a new profile follows this lifecycle:
 NEW / NEEDS CALIBRATION
         ↓ automatic 5-probe measurement
 AUTO MEASURED
-        ↓ one real first-layer verification if this profile has never been verified
+        ↓ one guided first-layer verification if this profile has never been verified
 USER VERIFIED
         ↓ later switch back to this profile
 automatic 5-probe measurement → accepted geometric state → ready to print
@@ -52,16 +53,17 @@ This is stricter than pretending that five probe contacts automatically determin
 4. immediately marks the profile as requiring a successful calibration;
 5. schedules a heater/state failsafe;
 6. reuses Z-Mod `_ORIG_CLEAR_NOZZLE` for the existing cleaning/contact path;
-7. stabilises bed/nozzle temperature;
-8. clears loaded bed mesh so physical reference is not contaminated by mesh compensation;
-9. homes with Z-Mod `_G28`;
-10. derives the XY measurement point from configured AD5X client limits;
-11. performs 5 × `LOAD_CELL_TARE → PROBE → capture → lift`;
-12. calculates median, mean and total range;
-13. rejects the whole series if `range > MAX_RANGE` (provisional default `0.030 mm`);
-14. for an already verified profile, calculates `fresh_reference - verified_reference` and rejects an excessive jump;
-15. only on success stores accepted evidence and clears `needs_calibration`;
-16. turns heaters off and restores previous mesh/G-code state.
+7. stabilises bed/nozzle at measurement temperature;
+8. performs a final low-temperature mechanical wipe with Z-Mod `_GOTO_TRASH` + `_CLEAR_REZINA CLEAR_NOZ=1`;
+9. clears loaded bed mesh so physical reference is not contaminated by mesh compensation;
+10. homes with Z-Mod `_G28`;
+11. derives the XY measurement point from configured AD5X client limits;
+12. performs 5 × `LOAD_CELL_TARE → PROBE → capture → lift`;
+13. calculates median, mean and total range;
+14. rejects the whole series if `range > MAX_RANGE` (provisional default `0.030 mm`);
+15. for an already verified profile, calculates `fresh_reference - verified_reference` and rejects an excessive jump;
+16. only on success stores accepted evidence and clears `needs_calibration`;
+17. turns heaters off and restores previous mesh/G-code state.
 
 No outlier is silently removed in order to make a bad series pass.
 
@@ -102,23 +104,40 @@ A profile stores measured reference, accepted quality, verified reference/bias, 
 
 The action-prompt UI is deliberately built without DOM patching or a permanent web daemon. Current Z-Mod action prompts do not provide a free-text input control, so arbitrary profile renaming/custom profile text still uses the stable macro API above. Likewise, the event audit has a real timestamp, but the current prompt does not yet surface a human-readable “last calibration date”.
 
-These are **UI completion gaps**, not hidden as accepted functionality. They should be closed only with a clean plugin/frontend integration rather than a legacy DOM hack. The physical calibration chain is the acceptance-critical gate first.
+These are UI completion gaps, not hidden as accepted functionality.
 
-## First-layer verification
+## Guided built-in first-layer verification
 
-The first-layer path is optional and is **not** the automatic calibration mechanism.
+A novice does not need to prepare an STL/G-code file or know first-layer temperatures by heart.
 
-During a real test print, `CC_FIRST_LAYER_CONTROLS` exposes:
+From `CALIBRATION_CENTER → Проверка первого слоя`, the idle prompt offers material presets:
 
-- `-0.05`;
-- `-0.01`;
-- `+0.01`;
-- `+0.05`;
-- `Сохранить как USER VERIFIED`.
+- PLA — 210 / 60 °C;
+- PETG — 240 / 75 °C;
+- ABS — 250 / 100 °C;
+- ASA — 250 / 100 °C;
+- TPU — 225 / 50 °C.
 
-For a never-verified profile, the deliberately chosen live adjustment becomes its process bias; the existing native/Z-Mod baseline is not incorrectly treated as zero. Later verification updates are calculated relative to the actual runtime baseline captured after Z-Mod `_START_PRINT`.
+These are conservative **starter verification presets**, not claimed as universally optimal material profiles. `Другой / вручную` keeps an expert fallback:
 
-The Draft does not yet generate a material-specific first-layer G-code object itself; it controls/records a real test print supplied through the normal print path. This avoids inventing extrusion temperature/flow/speed assumptions before physical acceptance.
+```gcode
+CC_FIRST_LAYER_TEST MATERIAL=CUSTOM NOZZLE_TEMP=... BED_TEMP=...
+```
+
+Safety limits are 170..280 °C for the nozzle and 0..110 °C for the bed.
+
+The plugin generates `Calibration_Center_First_Layer.gcode` on demand inside the configured `virtual_sdcard` directory. It is not a static STL. The generated file:
+
+1. uses normal Z-Mod `START_PRINT EXTRUDER_TEMP=... BED_TEMP=...` with no special skip flags;
+2. therefore traverses the same Z-Mod start/mesh/native-offset logic and `_USER_START_PRINT` Calibration Center hook as an ordinary sliced print;
+3. marks itself as the built-in verification job;
+4. prints a centered serpentine patch whose layer height, line width and extrusion scale from the selected nozzle diameter;
+5. exposes live `-0.05 / -0.01 / +0.01 / +0.05` Z controls while `print_stats=printing`;
+6. lets the user choose `Сохранить и завершить тест` or abort without saving.
+
+For a never-verified profile, the deliberately chosen live adjustment becomes its `verified_bias`. A successful save turns the profile into `USER VERIFIED`; later return to that same nozzle profile is intended to require only automatic physical remeasurement, not another manual first-layer test.
+
+The built-in first-layer path is repository-tested but remains **physical-acceptance pending** until exercised on the target AD5X.
 
 ## Install — current Draft branch
 
@@ -137,7 +156,7 @@ The installer:
 - refuses printing/paused state;
 - fails closed if Moonraker cannot prove printer state;
 - refuses pre-existing dirty Z-Mod/Klipper/Moonraker repositories;
-- checks required Z-Mod safety/extension primitives;
+- checks required Z-Mod safety/extension primitives, including the virtual-SD print contract used by the built-in first-layer test;
 - creates a separate git checkout at `/opt/config/mod_data/plugins/calibration_center`;
 - adds only an include in `mod_data/plugins.cfg`;
 - uses the documented `mod_data/user.cfg` `_USER_START_PRINT` extension point;
@@ -188,6 +207,6 @@ Uninstall removes the include, the marked `_USER_START_PRINT` hook, Update Manag
 
 ## Runtime acceptance
 
-Repository/static acceptance is automated in `tests/test_calibration_center.py`. Physical acceptance must be performed on the target AD5X because load-cell repeatability, hotend mechanics, temperature dependence and process-bias invariance cannot be proven by repository tests.
+Repository/static acceptance is automated in `tests/test_calibration_center*.py`. Physical acceptance must be performed on the target AD5X because load-cell repeatability, hotend mechanics, temperature dependence, built-in first-layer print behaviour and process-bias invariance cannot be proven by repository tests.
 
 See [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) for the evidence matrix and physical test gates.
