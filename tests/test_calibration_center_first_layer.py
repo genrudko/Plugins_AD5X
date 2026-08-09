@@ -114,7 +114,9 @@ class FirstLayerUiContractTests(unittest.TestCase):
         self.assertIn("print_state == 'paused'", verify)
         self.assertIn("if not builtin_review", verify)
         self.assertIn("new_bias = st.live_adjust|float", verify)
-        self.assertIn("new_bias = old_bias + st.live_adjust|float", verify)
+        self.assertIn(
+            "new_bias = st.profile_origin_adjust|float + st.live_adjust|float", verify
+        )
         self.assertIn("verified_global_z VALUE={global_z}", verify)
 
     def test_helix_critical_buttons_use_short_labels(self) -> None:
