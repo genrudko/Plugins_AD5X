@@ -17,9 +17,10 @@ Current Draft provides:
 - one-level previous-known-good rollback;
 - documented `_USER_START_PRINT` integration after Z-Mod finishes its own start logic;
 - a built-in guided first-layer test with beginner material presets;
+- transient Calibration Center print/live correction isolated from the user's global Z-Mod offset via reversible `G92` coordinate-origin transforms;
 - no edit of Klipper `[probe] z_offset`;
 - no write to Flashforge `zProbeOffset`;
-- no MCU firmware operation, USB reset or background polling.
+- no MCU firmware operation, USB reset or permanent background polling.
 
 The physical/correction evidence is documented in [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md). The exact safety contract is in [`docs/ALGORITHM_AND_SAFETY.md`](docs/ALGORITHM_AND_SAFETY.md).
 
@@ -40,8 +41,6 @@ automatic 5-probe measurement → accepted geometric state → ready to print
 ```
 
 A switched profile is deliberately blocked from affecting print Z until a new five-probe run succeeds. A rejected run preserves previous known-good correction values, but it does **not** make the profile ready again.
-
-This is stricter than pretending that five probe contacts automatically determine perfect first-layer extrusion.
 
 ## Default automatic sequence
 
@@ -71,10 +70,18 @@ No outlier is silently removed in order to make a bad series pass.
 
 At the end of Z-Mod `START_PRINT`, the documented `_USER_START_PRINT` hook calls `CC_APPLY_PROFILE`.
 
-Calibration Center stores a **process bias** separately from the automatic profile reference delta.
+Calibration Center keeps three concepts separate:
 
-- With Z-Mod `MESH_TEST=3/4`, Z-Mod already performs its own print-time `fresh probe - saved mesh reference` AutoZOffset. Calibration Center does not add its profile delta a second time and does not try to subtract/replace that upstream delta because the two references have different physical anchors. The accepted five-probe run is the profile/stability gate; only verified process bias is layered on top.
-- With `MESH_TEST=1/2`, Z-Mod does not apply AutoZOffset, so Calibration Center can apply its last accepted profile reference delta plus verified process bias.
+1. **user/Z-Mod global Z baseline** — persistent and owned by Z-Mod/Helix/user;
+2. **physical reference delta** — produced by accepted automatic probing;
+3. **verified process bias** — learned by the guided first-layer verification.
+
+A profile also stores `verified_global_z`: the global Z-Mod value that existed when the process layer was USER VERIFIED. If the user later changes the global baseline, Calibration Center normalises the profile in its own transient correction rather than rewriting the user's setting.
+
+- With `MESH_TEST=3/4`, Z-Mod already performs its own differently anchored print-time AutoZOffset. Calibration Center does not add its profile reference delta a second time.
+- With `MESH_TEST=1/2`, Calibration Center may include the accepted `auto_delta` in its transient correction.
+
+The resulting Calibration Center correction is applied with a **G92 coordinate-origin transform**, not with `SET_GCODE_OFFSET` or Z-Mod `_SET_GCODE_OFFSET_FAST`. A short delayed cleanup check exists only while that transient profile origin is active and reverses it after the print ends.
 
 If the selected enabled profile has `needs_calibration=1`, the print-start hook emits a clear error and invokes normal Z-Mod `CANCEL_PRINT`. The explicit fallback is `CC_DISABLE`, which leaves stock Z-Mod behaviour available.
 
@@ -87,7 +94,7 @@ The prompt provides one-button creation of common profiles such as:
 - A1 / 0.6;
 - A1 / 0.8.
 
-Generic profile operations are also exposed as stable macro API for the UI layer and expert recovery:
+Generic profile operations are also exposed as stable macro API:
 
 ```gcode
 CC_PROFILE_CREATE SLOT=1 HOTEND=Stock NOZZLE=0.4 NAME=Stock_0.4
@@ -98,7 +105,7 @@ CC_PROFILE_SELECT SLOT=4
 CC_PROFILE_RENAME SLOT=4 NAME=A1_08_Hardened
 ```
 
-A profile stores measured reference, accepted quality, verified reference/bias, previous verified pair, readiness, hotend/nozzle metadata and calibration temperatures.
+A profile stores measured reference, accepted quality, verified reference/bias/global-Z baseline, previous verified tuple, readiness, hotend/nozzle metadata and calibration temperatures.
 
 ### Current Draft UX boundary
 
@@ -106,13 +113,9 @@ The action-prompt UI is deliberately built without DOM patching or a permanent w
 
 Critical Helix buttons deliberately use short labels (`Автокалибровка`, `Первый слой`, `Откат`, `Сохранить`, `Отмена`) because physical testing showed longer labels are clipped on the Helix screen.
 
-These are UI completion gaps and runtime constraints, not hidden as accepted functionality.
-
 ## Guided built-in first-layer verification
 
-A novice does not need to prepare an STL/G-code file or know first-layer temperatures by heart.
-
-From `CALIBRATION_CENTER → Первый слой`, the idle prompt offers material presets:
+From `CALIBRATION_CENTER → Первый слой`, the idle prompt offers starter presets:
 
 - PLA — 210 / 60 °C;
 - PETG — 240 / 75 °C;
@@ -128,28 +131,33 @@ CC_FIRST_LAYER_TEST MATERIAL=CUSTOM NOZZLE_TEMP=... BED_TEMP=...
 
 Safety limits are 170..280 °C for the nozzle and 0..110 °C for the bed.
 
-The plugin generates `Calibration_Center_First_Layer.gcode` on demand inside the configured `virtual_sdcard` directory. It is not a static STL. The generated file:
+The plugin generates `Calibration_Center_First_Layer.gcode` on demand inside the configured `virtual_sdcard` directory. The generated file:
 
 1. uses normal Z-Mod `START_PRINT EXTRUDER_TEMP=... BED_TEMP=...` with no special skip flags;
-2. therefore traverses the same Z-Mod start/mesh/native-offset logic and `_USER_START_PRINT` Calibration Center hook as an ordinary sliced print;
+2. traverses the same Z-Mod start/mesh/global-offset logic and `_USER_START_PRINT` hook as an ordinary sliced print;
 3. prints a centered serpentine patch whose layer height/line width scale from the selected nozzle diameter;
-4. packs neighbouring roads with a rounded-rectangle bead model rather than `pitch = line_width`, preventing the generator itself from creating theoretical gaps between otherwise-correct first-layer roads;
-5. extrudes the short Y connectors as part of one continuous serpentine and explicitly normalises `M220/M221` to 100% for a deterministic verification job;
-6. exposes live `-0.05 / -0.01 / +0.01 / +0.05` Z controls only while lines are being printed;
-7. after every live-Z button press reopens the action prompt and shows `Z-Mod base`, accumulated test `ΔZ`, and the actual runtime Z-offset;
-8. after the patch is complete, lifts the nozzle and enters a controlled `PAUSE` review state so the operator can inspect the result without racing the end of the file;
-9. lets the operator choose `Сохранить` or `Без сохранения` while paused;
-10. explicitly removes the temporary live-Z delta on save, abort, or natural fall-through, so a verification experiment cannot silently leave its temporary runtime adjustment active after the test.
-
-For a never-verified profile, the deliberately chosen live adjustment becomes its `verified_bias`. A successful save turns the profile into `USER VERIFIED`; later return to that same nozzle profile is intended to require only automatic physical remeasurement, not another manual first-layer test.
+4. packs neighbouring roads with a rounded-rectangle bead model rather than the rejected `pitch = line_width` model;
+5. extrudes short Y connectors as part of one continuous serpentine and normalises `M220/M221` to 100%;
+6. exposes `-0.05 / -0.01 / +0.01 / +0.05` only while the generated test is actually printing;
+7. applies each live step with isolated `G92` origin change + matching immediate relative Z move, leaving the global Z-Mod offset untouched;
+8. caps total test adjustment at ±0.10 mm (with a tighter negative limit for thinner generated layers);
+9. reopens the prompt after every live step and separately shows `Глобальный Z-Mod`, `CC профиль`, and `test ΔZ`;
+10. after the patch, lifts the nozzle and enters controlled `PAUSE` review;
+11. permits `Сохранить` only from that review pause;
+12. reverses the test G92 origin on save, abort, natural fall-through or external cancel;
+13. on first verification stores the deliberate test delta as process bias; on re-verification it absorbs the **profile correction actually active during the test plus final test delta** before moving the verified anchors.
 
 ### Physical first-layer evidence so far
 
-The first built-in generator revision was physically exercised on the target AD5X with PLA at 210/60 °C and A1/0.4. The normal print path loaded the pre-existing working Z-Mod/native runtime baseline around `-0.125 mm`. The generated patch showed visible separation between roads. Applying two live `-0.05 mm` steps moved the displayed runtime offset to about `-0.225 mm` and improved merging, but the sheet still separated visibly along print roads.
+The first built-in generator revision was physically exercised on the target AD5X with PLA at 210/60 °C and A1/0.4. The normal working Z-Mod/Helix baseline was approximately `-0.125...-0.130 mm`. The generated patch showed visible separation between roads. Applying two live `-0.05 mm` steps moved the displayed Z state to about `-0.225 mm` and improved merging, but the sheet still separated visibly along print roads.
 
-That run is **not accepted as Z-offset evidence** and no `USER VERIFIED` value was saved. The stronger evidence is that a separately sliced 100×100 single-layer object had previously printed acceptably at the ordinary `-0.125 mm` baseline, while the built-in pattern still showed road gaps after much more negative live Z. This exposed a generator defect: the old implementation used `line_spacing = line_width`, which is not a valid solid-fill spacing model for rounded deposited roads.
+That run is **not accepted as Z-offset evidence** and no `USER VERIFIED` value was saved.
 
-The revised bead-spacing/review/restore implementation is repository-tested and still requires the next physical run before the built-in first-layer path can be accepted.
+Physical follow-up exposed a second safety issue: after the experiment the operator found the printer's Z-offset at `-0.225 mm` and had to restore it manually. The operator then set approximately `-0.13 mm` and an ordinary sliced print again produced a visually coherent first layer in camera evidence. This makes `-0.13 mm` the current practical control baseline, not a value discovered by Calibration Center.
+
+The revised design therefore fixes **both** failure classes: bead spacing and Z-state isolation. Source/CI acceptance now explicitly rejects any executable `SET_GCODE_OFFSET`, `_SET_GCODE_OFFSET`, or `_SET_GCODE_OFFSET_FAST` in the Calibration Center print/live operational layer. Physical acceptance must still prove before/after that the global Z-Mod value is unchanged.
+
+See [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) for that exact procedure.
 
 ## Install — current Draft branch
 
@@ -168,7 +176,7 @@ The installer:
 - refuses printing/paused state;
 - fails closed if Moonraker cannot prove printer state;
 - refuses pre-existing dirty Z-Mod/Klipper/Moonraker repositories;
-- checks required Z-Mod safety/extension primitives, including `START_PRINT`, `END_PRINT`, virtual-SD printing and `PAUSE` used by the built-in first-layer review path;
+- checks required Z-Mod safety/extension primitives, including `START_PRINT`, `END_PRINT`, virtual-SD printing and `PAUSE`;
 - creates a separate git checkout at `/opt/config/mod_data/plugins/calibration_center`;
 - adds only an include in `mod_data/plugins.cfg`;
 - uses the documented `mod_data/user.cfg` `_USER_START_PRINT` extension point;
@@ -219,6 +227,6 @@ Uninstall removes the include, the marked `_USER_START_PRINT` hook, Update Manag
 
 ## Runtime acceptance
 
-Repository/static acceptance is automated in `tests/test_calibration_center*.py`. Physical acceptance must be performed on the target AD5X because load-cell repeatability, hotend mechanics, temperature dependence, built-in first-layer print behaviour and process-bias invariance cannot be proven by repository tests.
+Repository/static acceptance is automated in `tests/test_calibration_center*.py`. Physical acceptance must be performed on the target AD5X because load-cell repeatability, hotend mechanics, temperature dependence, first-layer behaviour and global-offset isolation cannot be proven by repository tests.
 
 See [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) for the evidence matrix and physical test gates.
