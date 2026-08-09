@@ -77,42 +77,45 @@ def reference_delta(
 
 
 def runtime_adjust(
-    *, verified_bias: float, auto_delta: float, mesh_test: int
+    *,
+    verified_bias: float,
+    auto_delta: float,
+    mesh_test: int,
+    verified_global_z: float = 0.0,
+    current_global_z: float = 0.0,
 ) -> float:
-    """Layer profile correction without double-applying Z-Mod AutoZOffset.
+    """Return the transient Calibration Center correction for one print.
 
-    Z-Mod MESH_TEST 3/4 already performs fresh-reference AutoZOffset during
-    START_PRINT. In those modes Calibration Center adds only process bias.
+    The user's Z-Mod global offset is an independent persistent baseline.
+    Calibration Center records the global value present when a profile is
+    USER VERIFIED, then compensates any later global change in its own transient
+    G92 layer. MESH_TEST 3/4 already owns the geometric AutoZOffset term.
     """
     bias = float(verified_bias)
     delta = float(auto_delta)
-    if not math.isfinite(bias) or not math.isfinite(delta):
+    verified_global = float(verified_global_z)
+    current_global = float(current_global_z)
+    if not all(
+        math.isfinite(value)
+        for value in (bias, delta, verified_global, current_global)
+    ):
         raise CalibrationRejected("runtime corrections must be finite")
-    return bias if int(mesh_test) in (3, 4) else bias + delta
-
-
-def verified_process_bias(
-    *,
-    current_offset: float,
-    base_runtime_offset: float,
-    runtime_auto_delta: float,
-) -> float:
-    """Extract process bias from a verified first-layer runtime state."""
-    current = float(current_offset)
-    base = float(base_runtime_offset)
-    auto = float(runtime_auto_delta)
-    if not all(math.isfinite(value) for value in (current, base, auto)):
-        raise CalibrationRejected("runtime offsets must be finite")
-    return current - base - auto
+    cc_auto = 0.0 if int(mesh_test) in (3, 4) else delta
+    return bias + cc_auto + (verified_global - current_global)
 
 
 def initial_verified_process_bias(*, live_adjust: float) -> float:
-    """For a new profile, the deliberate first-layer live adjustment is bias.
-
-    This avoids assuming that the machine's pre-existing/native base offset is
-    zero when the profile has never had a prior verified anchor.
-    """
+    """For a new profile, deliberate built-in-test transient adjustment is bias."""
     value = float(live_adjust)
     if not math.isfinite(value):
         raise CalibrationRejected("live adjustment must be finite")
     return value
+
+
+def reverified_process_bias(*, old_bias: float, live_adjust: float) -> float:
+    """Update an existing profile from an isolated first-layer re-verification."""
+    old = float(old_bias)
+    live = float(live_adjust)
+    if not math.isfinite(old) or not math.isfinite(live):
+        raise CalibrationRejected("verification adjustments must be finite")
+    return old + live
