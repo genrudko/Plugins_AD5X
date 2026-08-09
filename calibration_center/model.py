@@ -112,10 +112,19 @@ def initial_verified_process_bias(*, live_adjust: float) -> float:
     return value
 
 
-def reverified_process_bias(*, old_bias: float, live_adjust: float) -> float:
-    """Update an existing profile from an isolated first-layer re-verification."""
-    old = float(old_bias)
+def reverified_process_bias(
+    *, applied_profile_correction: float, live_adjust: float
+) -> float:
+    """Re-anchor a verified profile without changing its effective print plane.
+
+    The already-applied transient correction may contain the old bias, a fresh
+    physical-reference delta, and compensation for a changed global Z-Mod
+    baseline. Once verification saves the current physical/global anchors, those
+    extra terms become zero on the next print, so the new bias must absorb the
+    correction that was actually active plus the operator's final live delta.
+    """
+    applied = float(applied_profile_correction)
     live = float(live_adjust)
-    if not math.isfinite(old) or not math.isfinite(live):
+    if not math.isfinite(applied) or not math.isfinite(live):
         raise CalibrationRejected("verification adjustments must be finite")
-    return old + live
+    return applied + live
