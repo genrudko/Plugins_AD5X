@@ -7,35 +7,58 @@ This document separates repository evidence from physical printer evidence. A re
 ## Status vocabulary
 
 - **PASS (source/CI)** — demonstrated by repository structure, static/model tests or GitHub Actions.
+- **PASS (physical, partial)** — physically observed on the target, but the broader acceptance gate still has remaining scenarios.
 - **PENDING (runtime)** — requires the physical AD5X.
 - **PENDING (UX)** — required product UX is not yet complete in the action-prompt Draft.
-- **FAIL** — demonstrated violation; must block acceptance.
+- **FAIL / REJECTED** — demonstrated violation or invalid evidence; must not be promoted to accepted calibration data.
 
 ## Required acceptance
 
 | # | Requirement | Evidence / procedure | Status |
 |---|---|---|---|
-| 1 | Plugin installs without dirty upstream repositories | Installer refuses unknown printer state and pre-existing dirty Z-Mod/Klipper/Moonraker, writes only `mod_data`, and rechecks clean state. Runtime `--status` must show all three CLEAN. | PASS (source/CI), PENDING (runtime) |
-| 2 | Z-Mod / Klipper / Moonraker remain clean | No tracked upstream path is modified by the implementation. Verify after install on target. | PASS (source/CI), PENDING (runtime) |
-| 3 | Plugin is independently updateable | Dedicated git checkout + Moonraker `[update_manager calibration_center]`. | PASS (source/CI), PENDING (runtime UI) |
-| 4 | Multiple nozzle profiles can be created | 8 persistent slots; common Stock/A1 one-button actions plus generic macro API. | PASS (source/CI), PENDING (runtime UI) |
-| 5 | Profile selection works | `CC_PROFILE_SELECT`, active slot persisted; changing profile marks it `needs_calibration=1`. | PASS (source/CI), PENDING (runtime) |
-| 6 | Automatic calibration performs a real measurement procedure | `CC_CALIBRATE` performs cleaning/preparation, clears mesh compensation, then five independent `LOAD_CELL_TARE → PROBE → capture → lift` cycles. | PASS (source/CI), PENDING (physical) |
-| 7 | Multiple measurements are performed | CI asserts exactly five calls and separate post-probe capture. | PASS (source/CI), PENDING (physical) |
-| 8 | Unstable result is rejected | Full-series range gate; no outlier is silently dropped. Previous USER VERIFIED values are preserved, but the profile remains `needs_calibration=1` and cannot affect print Z until a later successful physical run. | PASS (source/CI), PENDING (physical observation) |
-| 9 | Stable result can be saved | Accepted median/mean/range/reference persist through `save_variables`; only success clears `needs_calibration`. | PASS (source/CI), PENDING (physical) |
+| 1 | Plugin installs without dirty upstream repositories | Installer refuses unknown printer state and pre-existing dirty Z-Mod/Klipper/Moonraker, writes only `mod_data`, and rechecks clean state. Runtime `--status` must show all three CLEAN. | PASS (source/CI), PASS (physical, partial) |
+| 2 | Z-Mod / Klipper / Moonraker remain clean | No tracked upstream path is modified by the implementation. Verified during Draft installs on target. | PASS (source/CI), PASS (physical, partial) |
+| 3 | Plugin is independently updateable | Dedicated git checkout + Moonraker `[update_manager calibration_center]`. | PASS (source/CI), PASS (physical, partial) |
+| 4 | Multiple nozzle profiles can be created | 8 persistent slots; common Stock/A1 one-button actions plus generic macro API. | PASS (source/CI), PENDING (runtime UI breadth) |
+| 5 | Profile selection works | `CC_PROFILE_SELECT`, active slot persisted; changing profile marks it `needs_calibration=1`. | PASS (source/CI), PASS (physical, partial) |
+| 6 | Automatic calibration performs a real measurement procedure | `CC_CALIBRATE` performs cleaning/preparation, clears mesh compensation, then five independent `LOAD_CELL_TARE → PROBE → capture → lift` cycles. | PASS (source/CI), PASS (physical, partial) |
+| 7 | Multiple measurements are performed | CI asserts exactly five calls and separate post-probe capture. Three clean-path physical series completed. | PASS (source/CI), PASS (physical, partial) |
+| 8 | Unstable result is rejected | Full-series range gate; no outlier is silently dropped. A physical `Range=0.0600 mm` series was rejected fail-closed. | PASS (source/CI), PASS (physical, partial) |
+| 9 | Stable result can be saved | Accepted median/mean/range/reference persist through `save_variables`; only success clears `needs_calibration`. | PASS (source/CI), PASS (physical, partial) |
 | 10 | Previous verified calibration can be restored | Previous reference/bias pair is retained and `CC_ROLLBACK` swaps it back while idle without erasing failed-probe evidence. | PASS (source/CI), PENDING (runtime) |
-| 11 | FIRMWARE_RESTART preserves state | Persistent profile/readiness state is `save_variables`; volatile run state is intentionally reset. | PASS (design), PENDING (runtime) |
-| 12 | Reboot preserves state | Same persistence contract; audit/profile state lives under `mod_data`. | PASS (design), PENDING (runtime) |
-| 13 | Normal printing uses the selected effective Z | `_USER_START_PRINT` layers verified process bias and, with `MESH_TEST=1/2`, the accepted profile delta. With `MESH_TEST=3/4`, Z-Mod owns its dynamic mesh-reference AutoZOffset and Calibration Center does not double-apply a differently anchored delta. | PASS (source/model), PENDING (first-layer print) |
-| 14 | Plugin does not interfere with an active print | Calibration/profile changes/rollback/disable reject printing/paused state; live Z is limited to an active first-layer verification. A selected unready profile cancels during print start before it may affect object Z. | PASS (source/CI), PENDING (runtime) |
+| 11 | FIRMWARE_RESTART preserves state | Persistent profile/readiness state is `save_variables`; volatile run state is intentionally reset. | PASS (design), PASS (physical, partial) |
+| 12 | Reboot preserves state | Same persistence contract; audit/profile state lives under `mod_data`. | PASS (design), PENDING (cold reboot) |
+| 13 | Normal printing uses the selected effective Z | `_USER_START_PRINT` layers verified process bias and, with `MESH_TEST=1/2`, the accepted profile delta. With `MESH_TEST=3/4`, Z-Mod owns its dynamic mesh-reference AutoZOffset and Calibration Center does not double-apply a differently anchored delta. | PASS (source/model), PENDING (USER VERIFIED print) |
+| 14 | Plugin does not interfere with an active print | Calibration/profile changes/rollback/disable reject printing/paused state; live Z is limited to active first-layer verification. A selected unready profile cancels during print start before it may affect object Z. | PASS (source/CI), PASS (physical, partial) |
 | 15 | Uninstall restores stock behaviour | Removes only marked custom include/hook/update-manager entry and checkout; keeps user state; never rewrites stock calibration files. | PASS (source/CI), PENDING (runtime) |
 | 16 | Idle load is practically zero | No daemon, polling loop or periodic telemetry. Audit helper runs only on Calibration Center events. | PASS (source), PENDING (`ps`/load observation) |
 | 17 | No MCU firmware modifications | No MCU flash/update command in operational payload. | PASS (source/CI) |
 | 18 | No USB resets | No USB reset/unbind/bind path in operational payload. | PASS (source/CI) |
-| 19 | Ordinary-user profile rename/custom text | Macro API exists, but current Z-Mod action-prompt UX has no free-text input and the Draft does not add DOM hacks. A clean frontend/input mechanism is still required. | PENDING (UX) |
+| 19 | Ordinary-user profile rename/custom text | Macro API exists, but current Z-Mod action-prompt UX has no free-text input and the Draft does not add DOM hacks. | PENDING (UX) |
 | 20 | Last successful calibration date visible in main UI | Timestamped event audit exists, but the action prompt does not yet read/render it. | PENDING (UX) |
-| 21 | “Print first-layer test” generates a test object itself | Live adjustment/verification controls exist; current Draft deliberately uses a normal real test print rather than guessing material-specific extrusion parameters. | PENDING (UX/product decision) |
+| 21 | Built-in first-layer test is self-contained and does not manufacture false Z evidence | Material presets + generated virtual-SD patch exist. Revised generator uses rounded-bead line spacing, continuous connectors, explicit runtime-Z display, review pause and temporary live-Z restore. | PASS (source/CI), PENDING (revised physical run) |
+
+## Physical evidence already recorded
+
+### Clean-path automatic reference
+
+A1-compatible hotend / 0.4 mm nozzle, final rubber-wipe path at ~150 °C:
+
+- run #1: `Median=-0.48333`, `Mean=-0.48217`, `Range=0.01000 mm`;
+- run #2: `Median=-0.49667`, `Mean=-0.49567`, `Range=0.01833 mm`;
+- run #3: `Median=-0.48833`, `Mean=-0.48700`, `Range=0.00917 mm`.
+
+Between-run median span is `0.01334 mm`. This is sufficient to continue first-layer product validation, but it does not replace the broader thermal/reinstall dataset.
+
+### First built-in first-layer generator — REJECTED as calibration evidence
+
+The first generated PLA test was physically run through normal Z-Mod `START_PRINT` at 210/60 °C. The ordinary Z-Mod/native runtime baseline shown during print was about `-0.125 mm`. The generated sheet had obvious separations along adjacent roads. Two live `-0.05 mm` steps moved the displayed runtime value to about `-0.225 mm`; merging improved, but the patch still separated along print roads.
+
+No `USER VERIFIED` value was saved. This result must **not** be interpreted as evidence that the correct process bias is `-0.100 mm` or that the correct runtime Z is `-0.225 mm`.
+
+The key counter-evidence is a separately sliced ~100×100 single-layer object that had printed acceptably at the ordinary `-0.125 mm` baseline. Code inspection then identified a generator defect: the old patch used `line_spacing = line_width`, which leaves a theoretical gap for rounded deposited beads and can mimic a nozzle-too-high condition.
+
+The revised generator now uses a rounded-rectangle bead-area/spacing model, extrudes serpentine connectors, normalises flow/speed multipliers, shows base/live/current runtime Z explicitly, reopens Helix controls after every live step, pauses after the patch for review, and removes temporary live Z on accept/abort/fall-through. This revision is CI-covered but remains physically unaccepted until the next run.
 
 ## Physical proof plan
 
@@ -57,13 +80,13 @@ Any unknown printer state or dirty upstream repository is an acceptance failure.
 Start with the currently known-good mechanically seated hotend/nozzle and a clean bed.
 
 1. Create/select the matching profile.
-2. Run automatic calibration with the initial controlled condition: bed 60 °C, cleaning 240 °C, measurement 150 °C.
+2. Run automatic calibration with the controlled condition: bed 60 °C, cleaning 240 °C, measurement 150 °C.
 3. Observe all five contacts. Stop immediately on any abnormal motion/nozzle-bed collision tendency.
 4. Record all five samples, median, mean and range from the audit evidence.
-5. Repeat the complete calibration run at least 10 times under the same mechanical/thermal condition.
+5. Later extend the current three clean-path runs toward a broader dataset under the same mechanical/thermal condition.
 6. Calculate between-run variation of medians as well as each run's internal range.
 
-The provisional per-run gate is `range <= 0.030 mm`. This threshold is not declared physically final until the target AD5X dataset exists.
+The provisional per-run gate is `range <= 0.030 mm`. This threshold is not declared physically final until the broader target AD5X dataset exists.
 
 ### Gate C — thermal sensitivity
 
@@ -79,12 +102,16 @@ Only after Gate B demonstrates safe repeatability:
 For a profile with no USER VERIFIED correction:
 
 1. Obtain a successful AUTO MEASURED reference.
-2. Print a normal first-layer verification object through the normal print path.
-3. Use optional live controls only if required.
-4. Once the layer is physically accepted, save `USER VERIFIED`.
-5. Record process bias separately from physical reference.
+2. Launch the built-in first-layer test through the material preset UI.
+3. Confirm the UI displays the ordinary Z-Mod base, accumulated test `ΔZ`, and current runtime Z-offset.
+4. If adjustment is required, use `±0.01/±0.05`; after every press the control prompt must reopen with updated values.
+5. Confirm adjacent roads merge as a continuous sheet without requiring a correction that contradicts a known-good normal sliced first layer.
+6. At patch completion, confirm the job enters review `PAUSE` rather than racing directly to `END_PRINT`.
+7. Inspect the layer. If accepted, press `Сохранить`; otherwise press `Без сохранения`.
+8. Confirm the temporary live delta is removed from runtime after either decision.
+9. Only after physical acceptance confirm the profile becomes `USER VERIFIED` and record process bias separately from physical reference.
 
-This gate is specifically where the motivating A1-compatible-hotend case is tested. The implementation must not prefill `-0.170 mm`.
+If the revised generated pattern still requires a materially different Z from an ordinary sliced first layer, reject the generator again. Do not compensate a generator defect by saving a larger process bias.
 
 ### Gate E — automatic return to a verified profile
 
