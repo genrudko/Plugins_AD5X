@@ -9,6 +9,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CC = ROOT / "calibration_center"
 PRINT_CFG = CC / "cc_print.cfg"
+TRANSIENT_CFG = CC / "cc_transient_z.cfg"
 CORE_CFG = CC / "cc_core.cfg"
 AUDIT = CC / "cc_audit.sh"
 
@@ -17,6 +18,7 @@ class FirstLayerUiContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.text = PRINT_CFG.read_text(encoding="utf-8")
+        cls.transient = TRANSIENT_CFG.read_text(encoding="utf-8")
         cls.core = CORE_CFG.read_text(encoding="utf-8")
 
     def test_beginner_material_presets_are_exposed(self) -> None:
@@ -51,21 +53,39 @@ class FirstLayerUiContractTests(unittest.TestCase):
         self.assertIn("NOZZLE_TEMP вне диапазона 170..280 C", block)
         self.assertIn("BED_TEMP вне диапазона 0..110 C", block)
 
-    def test_live_controls_show_offsets_and_reopen_after_each_step(self) -> None:
+    def test_live_controls_show_global_profile_and_test_layers(self) -> None:
         controls = self.text.split("[gcode_macro CC_FIRST_LAYER_CONTROLS]", 1)[1].split(
             "[gcode_macro CC_FIRST_LAYER_PRESET]", 1
         )[0]
-        self.assertIn("Z-Mod база:", controls)
-        self.assertIn("тест ΔZ:", controls)
-        self.assertIn("Текущий runtime Z-offset:", controls)
+        self.assertIn("Глобальный Z-Mod:", controls)
+        self.assertIn("CC профиль:", controls)
+        self.assertIn("test ΔZ:", controls)
+        self.assertIn("не изменяет", controls)
+        self.assertIn("±0.10 mm", controls)
 
+    def test_live_button_delegates_to_transient_step_and_reopens_prompt(self) -> None:
         live = self.text.split("[gcode_macro CC_LIVE_Z]", 1)[1].split(
             "[gcode_macro CC_FIRST_LAYER_TEST_REVIEW]", 1
         )[0]
-        self.assertLess(live.index("_SET_GCODE_OFFSET_FAST"), live.index("CC_FIRST_LAYER_CONTROLS"))
-        self.assertIn("VARIABLE=live_adjust VALUE={current_live + delta}", live)
+        self.assertIn("_CC_FIRST_LAYER_TRANSIENT_STEP DELTA={delta}", live)
+        self.assertLess(
+            live.index("_CC_FIRST_LAYER_TRANSIENT_STEP"),
+            live.index("CC_FIRST_LAYER_CONTROLS"),
+        )
+        self.assertNotIn("_SET_GCODE_OFFSET_FAST", live)
 
-    def test_review_pause_and_runtime_restore_are_explicit(self) -> None:
+    def test_transient_step_uses_g92_and_immediate_relative_z_move(self) -> None:
+        step = self.transient.split("[gcode_macro _CC_FIRST_LAYER_TRANSIENT_STEP]", 1)[1].split(
+            "[gcode_macro _CC_FIRST_LAYER_RESTORE_RUNTIME]", 1
+        )[0]
+        self.assertIn("G92 Z={z - delta}", step)
+        self.assertIn("G91", step)
+        self.assertIn("G1 Z{delta} F300", step)
+        self.assertIn("G90", step)
+        self.assertIn("new_live < -down_limit or new_live > 0.100", step)
+        self.assertIn("VARIABLE=live_adjust VALUE={new_live}", step)
+
+    def test_review_pause_and_origin_restore_are_explicit(self) -> None:
         review = self.text.split("[gcode_macro CC_FIRST_LAYER_TEST_REVIEW]", 1)[1].split(
             "[gcode_macro CC_VERIFY_CURRENT]", 1
         )[0]
@@ -73,11 +93,12 @@ class FirstLayerUiContractTests(unittest.TestCase):
         self.assertIn("PAUSE", review)
         self.assertIn("CC_FIRST_LAYER_CONTROLS", review)
 
-        restore = self.text.split("[gcode_macro _CC_FIRST_LAYER_RESTORE_RUNTIME]", 1)[1].split(
-            "[gcode_macro CC_FIRST_LAYER_ACCEPT]", 1
+        restore = self.transient.split("[gcode_macro _CC_FIRST_LAYER_RESTORE_RUNTIME]", 1)[1].split(
+            "[delayed_gcode _CC_FIRST_LAYER_WATCHDOG]", 1
         )[0]
-        self.assertIn("Z_ADJUST={-live}", restore)
+        self.assertIn("G92 Z={z + live}", restore)
         self.assertIn("VARIABLE=live_adjust VALUE=0.0", restore)
+        self.assertNotIn("SET_GCODE_OFFSET", restore)
 
         for macro in ("CC_FIRST_LAYER_ACCEPT", "CC_FIRST_LAYER_ABORT", "CC_FIRST_LAYER_TEST_FILE_END"):
             block = self.text.split(f"[gcode_macro {macro}]", 1)[1]
@@ -85,13 +106,16 @@ class FirstLayerUiContractTests(unittest.TestCase):
                 block = block.split("[gcode_macro", 1)[0]
             self.assertIn("_CC_FIRST_LAYER_RESTORE_RUNTIME", block)
 
-    def test_review_pause_can_save_user_verified(self) -> None:
+    def test_only_review_pause_can_save_user_verified(self) -> None:
         verify = self.text.split("[gcode_macro CC_VERIFY_CURRENT]", 1)[1].split(
-            "[gcode_macro _CC_FIRST_LAYER_RESTORE_RUNTIME]", 1
+            "[gcode_macro CC_FIRST_LAYER_ACCEPT]", 1
         )[0]
         self.assertIn("builtin_review", verify)
         self.assertIn("print_state == 'paused'", verify)
+        self.assertIn("if not builtin_review", verify)
         self.assertIn("new_bias = st.live_adjust|float", verify)
+        self.assertIn("new_bias = old_bias + st.live_adjust|float", verify)
+        self.assertIn("verified_global_z VALUE={global_z}", verify)
 
     def test_helix_critical_buttons_use_short_labels(self) -> None:
         self.assertIn("action:prompt_button Первый слой|CC_FIRST_LAYER_CONTROLS", self.core)
