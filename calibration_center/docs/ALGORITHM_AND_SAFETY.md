@@ -5,25 +5,25 @@
 Calibration Center distinguishes two operations:
 
 - **automatic physical-reference calibration** — contact measurement, repeatability validation and geometric-delta calculation;
-- **first-layer verification** — optional process validation which can establish/update a profile's `USER VERIFIED` process correction.
+- **first-layer verification** — process validation which can establish/update a profile's `USER VERIFIED` process correction.
 
 For a brand-new hotend/nozzle profile with no verified process correction, a stable probe series is reported as `AUTO MEASURED`, not falsely promoted to `USER VERIFIED`.
 
-Once a profile has a verified reference and process correction, subsequent profile changes can be handled automatically as long as the physical acceptance proves that the profile-specific process bias is sufficiently invariant. A fresh accepted contact series is compared with the profile's verified physical reference using the same `fresh - saved` sign convention as current Z-Mod AutoZOffset.
+Once a profile has a verified reference and process correction, subsequent profile changes can be handled automatically as long as physical acceptance proves that the profile-specific process bias is sufficiently invariant.
 
 ## Preconditions — fail closed
 
 `CC_CALIBRATE` rejects execution unless all applicable checks pass:
 
 1. AD5X is detected through `_CLIENT_VARIABLE.ad5x`.
-2. Klipper is operational enough for the macro itself to execute and expose `print_stats`, `probe`, `bed_mesh` and save variables.
+2. Klipper exposes the required `print_stats`, `probe`, `bed_mesh` and save-variable objects.
 3. `print_stats.state` is neither `printing` nor `paused`.
-4. Installer compatibility checks have established the required Z-Mod primitives: `_G28`, `LOAD_CELL_TARE`, `_ORIG_CLEAR_NOZZLE`, `_SET_GCODE_OFFSET_FAST`, `_USER_START_PRINT` and the AD5X client contract.
+4. Installer compatibility checks have established the required current Z-Mod primitives (`_G28`, `LOAD_CELL_TARE`, `_ORIG_CLEAR_NOZZLE`, cleaning primitives, `_USER_START_PRINT`, etc.). `_SET_GCODE_OFFSET_FAST` remains part of the upstream compatibility contract because current Z-Mod cleaning/start logic uses it; **Calibration Center's own print/live correction path does not execute it**.
 5. The selected profile exists.
-6. Requested temperature/repeatability/delta limits remain inside conservative hard bounds.
-7. Another Calibration Center run is not already active.
+6. Requested temperature/repeatability/delta limits remain inside hard bounds.
+7. Another Calibration Center measurement run is not already active.
 
-The plugin does not invent an `eboard ready` object that current public Z-Mod does not expose as a documented macro contract. If the MCU/load-cell path is unavailable, existing Z-Mod/Klipper homing, tare or probe commands fail naturally and no accepted profile result is committed.
+If the MCU/load-cell path is unavailable, existing Z-Mod/Klipper homing, tare or probe commands fail naturally and no accepted profile result is committed.
 
 The standalone installer also fails closed if Moonraker cannot prove `print_stats.state`; it does not treat an empty/unreachable response as “idle”.
 
@@ -33,35 +33,31 @@ The implementation mirrors current Z-Mod safe movement/preparation primitives ra
 
 1. Save the current G-code state.
 2. Remember the currently loaded bed-mesh profile.
-3. Mark the selected profile `needs_calibration=1` immediately. From this point it may not affect print Z unless the complete run is accepted.
-4. Reset Calibration Center's five volatile sample slots.
+3. Mark the selected profile `needs_calibration=1` immediately.
+4. Reset five volatile sample slots.
 5. Arm a delayed heater/state failsafe.
 6. Prepare and clean the nozzle through current Z-Mod `_ORIG_CLEAR_NOZZLE`.
-7. Stabilise nozzle and bed at the configured measurement temperatures.
-8. Clear the currently loaded bed mesh for the measurement. A hotend/nozzle physical reference must not accidentally include a previously loaded mesh compensation.
-9. Home through `_G28`.
-10. Move XY to the centre derived from the configured AD5X client limits: `(min_x+max_x)/2`, `(min_y+max_y)/2`.
-11. For each of five independent measurements:
-    - `LOAD_CELL_TARE`;
-    - `PROBE`;
-    - capture the completed probe result in a separate macro invocation;
-    - lift to `Z=5`.
+7. Stabilise nozzle and bed at configured measurement temperatures.
+8. Perform the final low-temperature mechanical rubber wipe.
+9. Clear the loaded bed mesh for physical-reference measurement.
+10. Home through `_G28` and move to the AD5X client-area centre.
+11. Perform five independent `LOAD_CELL_TARE → PROBE → capture → lift` cycles.
 12. Evaluate all five samples.
-13. Reject the complete run if the range exceeds the configured threshold. No outlier is silently removed to manufacture a pass.
+13. Reject the complete run if total range exceeds the configured threshold; no outlier is silently removed.
 14. Reject an already verified profile if the new median differs from its verified physical reference by more than the configured maximum delta.
-15. Only on full success persist median/mean/range/reference evidence and set `needs_calibration=0`.
-16. Turn heaters off, restore the previous mesh and restore the saved G-code state.
+15. Only on full success persist evidence and set `needs_calibration=0`.
+16. Turn heaters off and restore mesh/G-code state.
 
-The default `MAX_RANGE=0.030 mm` is deliberately provisional until the target AD5X runtime dataset exists. It is a conservative software gate, not a claim that every AD5X load cell has a universal 30 µm specification.
+The default `MAX_RANGE=0.030 mm` is provisional until a broader target-AD5X runtime dataset exists.
 
 ## Probe coordinate compatibility
 
-Calibration Center follows the same Klipper-version distinction already used by current Z-Mod:
+Calibration Center follows the Klipper-version distinction already used by current Z-Mod:
 
 - older path: `printer.probe.last_z_result`;
 - Klipper 13 path: `printer.probe.last_probe_position.z`.
 
-A change of Klipper measurement convention is therefore treated as a compatibility concern rather than silently mixing two reference coordinate formats.
+A change of probe-result convention is treated as a coordinate-format change. A stable new reference can be accepted, but the old verified physical/process/global tuple becomes historical previous state and the profile returns to `AUTO MEASURED` until one new first-layer verification is performed. Cross-format deltas and rollback are prohibited.
 
 ## Statistics
 
@@ -73,148 +69,170 @@ For five samples `z1..z5`:
 - `mean = sum / 5`;
 - `median = third value after sorting`.
 
-Acceptance requires `range <= MAX_RANGE`.
-
-The total range is used for the hard gate because it exposes any one divergent contact. Mean and median are recorded; median is the primary profile reference.
+Acceptance requires `range <= MAX_RANGE`. Mean and median are recorded; median is the primary profile reference.
 
 ## Correction layers
 
 For an already verified profile:
 
 ```text
-fresh_reference    = median of the accepted new five-probe series
-verified_reference = physical reference stored when the profile was USER VERIFIED
+fresh_reference    = median of accepted new five-probe series
+verified_reference = physical reference stored when profile was USER VERIFIED
 reference_delta    = fresh_reference - verified_reference
-verified_bias      = process correction established by first-layer verification
+verified_bias      = accepted process correction
+verified_global_z  = user/Z-Mod global baseline present at verification
+current_global_z   = current saved user/Z-Mod global baseline
 ```
 
-`reference_delta = fresh - saved` matches the sign convention used by current Z-Mod `_TEST_POINT` AutoZOffset.
+The persistent global baseline is explicitly **not owned by Calibration Center**.
 
-A large `reference_delta` is rejected as changed/dirty/loose mechanics instead of being blindly compensated.
-
-## Interaction with Z-Mod MESH_TEST
-
-This is intentionally mode-aware.
-
-### `MESH_TEST=1/2`
-
-Z-Mod does not apply its AutoZOffset correction. Calibration Center can therefore apply:
+For a print, Calibration Center calculates:
 
 ```text
-verified_bias + accepted profile reference_delta
+global_comp = verified_global_z - current_global_z
 ```
 
-### `MESH_TEST=3/4`
+Then:
 
-Z-Mod already performs its own print-time `fresh probe - saved mesh reference` AutoZOffset during `_START_PRINT`.
+- `MESH_TEST=1/2`: `cc_total = verified_bias + reference_delta + global_comp`;
+- `MESH_TEST=3/4`: `cc_total = verified_bias + global_comp`, because Z-Mod already owns its differently anchored dynamic AutoZOffset.
 
-Calibration Center **does not** add its profile `reference_delta` a second time. Nor does it algebraically subtract/replace the upstream delta: the Z-Mod mesh reference and Calibration Center's verified profile reference are different physical anchors, so treating them as interchangeable would be an unsupported assumption.
+A large physical `reference_delta` is rejected rather than blindly compensated.
 
-In these modes the accepted five-probe Calibration Center run is a required stability/profile-validity gate and the plugin layers only the separately verified process bias on top of the Z-Mod dynamic AutoZOffset.
+## Applying Z — hard isolation boundary
 
-This preserves Z-Mod's per-print dynamic bed/reference compensation without double counting a profile correction.
+Calibration Center never changes Klipper `[probe] z_offset`, never writes Flashforge `leftExtruderOffset.zProbeOffset`, and **does not execute the Z-Mod/Klipper `SET_GCODE_OFFSET` family in its print/live correction path**.
 
-## Applying Z
+Physical testing of the first first-layer implementation showed why this boundary is necessary: after two experimental `-0.05 mm` live steps the operator later found the printer Z-offset at about `-0.225 mm` and had to restore the normal working value manually. Even without claiming which persistence layer had captured that exact value, a test-only adjustment escaping the test boundary is unacceptable.
 
-Calibration Center never changes Klipper `[probe] z_offset` and never writes Flashforge `leftExtruderOffset.zProbeOffset`.
+The revised implementation uses Klipper's standard **G92 origin transformation** as a separate transient coordinate layer:
 
-The platform's existing native/Z-Mod print-offset layer remains authoritative. Calibration Center applies only its own explicit runtime adjustment through the same `_SET_GCODE_OFFSET_FAST` mechanism already used by Z-Mod.
+```text
+current logical Z = g
+requested transient correction = d
+G92 Z=(g - d)
+```
 
-The documented Z-Mod `_USER_START_PRINT` hook runs after `_START_PRINT`. Calibration Center captures the actual runtime baseline there before applying profile correction; this prevents the first verification from assuming the native/Z-Mod base is zero.
+This changes the G-code origin/base-position used by future absolute moves without altering `gcode_move.homing_origin`, which is the coordinate status altered by `SET_GCODE_OFFSET`.
 
-No `SAVE_CONFIG`, MCU restart, MCU flash, firmware rollback, USB reset, USB unbind or USB bind is part of a calibration run.
+### Profile correction
+
+At `_USER_START_PRINT`, after normal Z-Mod start logic, `_CC_PROFILE_TRANSIENT_APPLY` applies `cc_total` via `G92`. No immediate physical move is required because subsequent object G-code contains absolute Z moves.
+
+A delayed profile-origin watchdog is armed only while a non-zero CC profile origin exists. While printing/paused it reschedules at a low rate; once print state leaves those states it reverses the exact G92 origin and stops. There is no idle `initial_duration` and no permanent polling daemon.
+
+### Built-in first-layer live adjustment
+
+For an immediate test step `d`, Calibration Center performs:
+
+```gcode
+G92 Z={current_gcode_z - d}
+G91
+G1 Z{d} F300
+G90
+```
+
+The G92 part changes future absolute-Z mapping; the relative move applies the step physically immediately while keeping the generated layer's logical Z coherent.
+
+One live step is limited to ±0.05 mm. Total test correction is limited to ±0.10 mm, with a tighter downward bound for generated layers thinner than 0.20 mm. If acceptable first-layer quality cannot be reached inside that bounded region, the test is rejected instead of inviting progressively larger nozzle-down movement.
 
 ## Profile readiness
 
-Persistent profile readiness is independent from correction history.
-
 - Creating a profile sets `needs_calibration=1`.
-- Switching from one profile to another sets the newly selected profile `needs_calibration=1`.
+- Switching profiles sets the newly selected profile `needs_calibration=1`.
 - Starting any new calibration run sets `needs_calibration=1` before physical work begins.
 - Only a completely accepted five-probe run sets it back to `0`.
 - A failed/interrupted run preserves previous `USER VERIFIED` values for recovery but leaves the profile blocked from affecting print Z.
 
-If an enabled selected profile has `needs_calibration=1`, `_USER_START_PRINT` emits a clear error and calls the normal Z-Mod `CANCEL_PRINT` path. The user can either complete Calibration Center calibration or explicitly `CC_DISABLE` and use stock Z-Mod behaviour. This is the intended fail-closed boundary.
+If an enabled selected profile has `needs_calibration=1`, `_USER_START_PRINT` emits an error and uses normal Z-Mod `CANCEL_PRINT`. The user can complete Calibration Center calibration or explicitly `CC_DISABLE` and use stock Z-Mod behaviour.
 
 ## Profile state
 
 Each profile keeps separate values for:
 
-- name;
-- hotend type;
-- nozzle diameter;
-- `needs_calibration` readiness flag;
-- last accepted auto-reference median;
-- last accepted mean/range;
-- last rejected range/evidence marker;
-- verified physical reference, if any;
-- verified process bias, if any;
+- name / hotend type / nozzle diameter;
+- `needs_calibration`;
+- last accepted auto-reference median, mean and range;
+- last rejected evidence marker;
+- auto probe-coordinate format;
+- verified physical reference;
+- verified process bias;
+- **verified user/Z-Mod global-Z baseline**;
 - accepted automatic profile delta;
-- previous verified reference/bias pair for one-step rollback;
+- previous verified reference/bias/probe-format/global-Z tuple for one-step rollback;
 - calibration temperature metadata;
 - logical state: `NEW`, `AUTO MEASURED`, `USER VERIFIED`, `REJECTED`;
-- last result marker independent from the preserved known-good correction.
+- last result marker independent from preserved known-good correction.
 
-Operational profile values are persisted through Klipper/Z-Mod `save_variables`. The event-only `cc_audit.sh` appends a bounded timestamped audit log under `mod_data`; it is not a daemon and performs no polling.
+Operational profile values persist through `save_variables`. The event-only audit helper appends a bounded timestamped log; it is not a daemon.
 
 ## First-layer verification
 
-The first-layer path is deliberately optional and is not presented as automatic calibration.
+The supported verification path is the generated virtual-SD first-layer test. Calibration Center does **not** expose its transient Z controls over an arbitrary ordinary print; this narrows the safety boundary and gives the plugin a deterministic review/cleanup lifecycle.
 
-After a successful first `AUTO MEASURED` run, the user can print a real first-layer test and optionally use:
+The generated test:
 
-- `CC_LIVE_Z DELTA=-0.05`;
-- `CC_LIVE_Z DELTA=-0.01`;
-- `CC_LIVE_Z DELTA=+0.01`;
-- `CC_LIVE_Z DELTA=+0.05`.
+1. uses normal Z-Mod `START_PRINT`;
+2. uses rounded-bead line spacing and continuous serpentine connectors;
+3. starts with `test ΔZ=0` relative to whatever global/profile layers are active;
+4. permits bounded isolated ±Z while lines are printing;
+5. shows global Z-Mod, profile transient and test transient separately;
+6. lifts and enters `PAUSE` after the patch;
+7. allows `Сохранить` only from that review pause.
 
-`CC_VERIFY_CURRENT` then stores:
+For a never-verified profile:
 
-- the latest accepted physical reference as `verified_reference`;
-- the deliberate process correction as `verified_bias`;
-- the previous verified pair for rollback;
-- state `USER VERIFIED`.
+```text
+new_verified_bias = final_test_live_delta
+```
 
-For the first verification, the process bias is the deliberate live adjustment itself, not `current offset - 0`. For later verifications it is derived relative to the runtime baseline captured after Z-Mod `_START_PRINT`.
+For an existing verified profile, the active profile transient may already contain old bias, accepted `auto_delta`, and global-baseline normalisation. Saving new physical/global anchors makes the latter components zero on the next print, so re-verification stores:
 
-This preserves the epistemic distinction between a sensor measurement and an accepted extrusion result.
+```text
+new_verified_bias = profile_correction_actually_active_during_test
+                    + final_test_live_delta
+```
+
+This preserves the same accepted effective print plane after the anchors move.
+
+`CC_VERIFY_CURRENT` also stores the current `verified_global_z`, resets `auto_delta` to zero and moves the old verified tuple to previous history.
+
+## Test cleanup and external cancel
+
+Accept, no-save abort and natural file fall-through reverse the test G92 origin explicitly. A delayed first-layer watchdog is armed by the generated test only; if the operator uses the generic Helix/system cancel path, it detects that the job has ended, reverses the test G92 origin and stops rescheduling.
+
+The separate profile-origin watchdog then removes any verified-profile G92 layer after print cancellation/end.
+
+**Physical acceptance requires proving that the user/Z-Mod global offset is identical before and after every one of these paths.** A later compensating write is not acceptable; the requirement is that Calibration Center never writes that global value in the first place.
 
 ## Rollback
 
-Before replacing a verified pair, Calibration Center copies it into previous-known-good fields. `CC_ROLLBACK` swaps that pair back while idle.
+Before replacing a verified tuple, Calibration Center copies reference, bias, probe format and verified global-Z baseline into previous-known-good fields. `CC_ROLLBACK` swaps that tuple back while idle.
 
-Rollback does **not** erase evidence that the latest physical probe run failed. If `last_result=REJECTED`, the profile remains `needs_calibration=1` until a new physical run succeeds.
+Rollback does not erase evidence that the latest physical probe run failed. If `last_result=REJECTED`, the profile remains `needs_calibration=1` until a new physical run succeeds.
 
-Rollback never rewrites Flashforge native calibration files or Klipper probe configuration.
+Rollback never rewrites the user's global Z-Mod offset, Flashforge native calibration files or Klipper probe configuration.
 
-## Cleanup and error handling
+## Measurement cleanup and error handling
 
-Klipper/Jinja evaluates `action_raise_error()` while rendering a macro. Therefore `_CC_FINALIZE` deliberately contains **no** `action_raise_error` in its rejection branches.
+Klipper/Jinja evaluates `action_raise_error()` while rendering a macro. Therefore `_CC_FINALIZE` contains no `action_raise_error` in rejection branches. It queues rejection evidence, `_CC_CLEANUP`, then a separate `_CC_ERROR_*` macro so heaters/state restoration happen before the user-facing error.
 
-Instead it queues:
+The measurement failsafe also turns heaters off and attempts to restore mesh/G-code state if the run remains active too long. If Klipper itself enters shutdown during a hardware/probe failure, no macro can guarantee further motion/restoration; importantly, `needs_calibration` remains set and no newly accepted correction is committed.
 
-1. rejection evidence/state preservation;
-2. `_CC_CLEANUP`;
-3. a separate `_CC_ERROR_*` macro.
+## Global/native-base caveat
 
-This ensures heaters are turned off and state restoration commands are queued/executed before the user-facing error is raised.
+Calibration Center does not own the Flashforge native `zProbeOffset` or the user/Z-Mod global `gcode_offsets.z` setting.
 
-The delayed failsafe also turns heaters off and attempts to restore mesh/G-code state if the run remains active too long. If Klipper itself enters a shutdown state during a hardware/probe failure, no macro can guarantee further motion/restoration; importantly, `needs_calibration` remains set and no newly accepted correction is committed.
-
-## Native-base caveat
-
-Calibration Center intentionally does not own or rewrite the Flashforge native `zProbeOffset`. If the user independently runs a native/stock Z calibration, that native base may change outside Calibration Center's profile history.
-
-The current safe contract is therefore:
+The current contract is:
 
 - stock calibration remains available as fallback;
-- profile process bias remains a separate layer;
-- after a meaningful native calibration/hotend change, rerun Calibration Center before relying on its profile.
-
-Runtime acceptance must determine how stable the native base and profile bias are in the real A1-compatible-hotend workflow before any stronger automation claim is made.
+- user/Z-Mod global Z remains independently editable by the user/Helix/Z-Mod;
+- Calibration Center records the global value at profile verification and normalises later changes inside its own transient layer;
+- meaningful hotend/nozzle changes still require a fresh accepted physical Calibration Center run;
+- if the user intentionally wants a changed global Z to redefine all existing profile process planes, those profiles should be re-verified rather than relying on implicit side effects.
 
 ## Compatibility guard
 
-Calibration Center intentionally reuses current Z-Mod extension/safety primitives rather than forking them. The installer checks their presence and fails closed if the supported contract disappears.
+Calibration Center reuses current Z-Mod extension/safety primitives rather than forking them. The installer checks their presence and fails closed if the supported contract disappears.
 
 The stock Z-Mod calibration path remains untouched and available after `CC_DISABLE` or uninstall.
