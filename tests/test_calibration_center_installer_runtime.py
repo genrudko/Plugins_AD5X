@@ -29,6 +29,7 @@ class CalibrationCenterRuntimePreflightTests(unittest.TestCase):
         for token in (
             "gcode_macro _user_start_print",
             "gcode_macro _orig_clear_nozzle",
+            "gcode_macro _pre_clear_nozzle",
             "gcode_macro _set_gcode_offset_fast",
             "LOAD_CELL_TARE",
             "gcode_macro _client_variable",
