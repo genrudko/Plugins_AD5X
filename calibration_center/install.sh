@@ -33,8 +33,12 @@ find_root() {
     return 1
 }
 
+moonraker_get() {
+    wget -qO- "http://127.0.0.1:7125$1" 2>/dev/null || true
+}
+
 check_idle() {
-    DATA="$(wget -qO- 'http://127.0.0.1:7125/printer/objects/query?print_stats' 2>/dev/null || true)"
+    DATA="$(moonraker_get '/printer/objects/query?print_stats')"
     [ -n "$DATA" ] || fail "Moonraker недоступен; безопасное состояние принтера не подтверждено"
     printf '%s' "$DATA" | grep -q '"state"' || fail "Moonraker не вернул print_stats.state; установка остановлена fail-closed"
     case "$DATA" in
@@ -111,21 +115,38 @@ check_upstream_clean() {
     [ "$BAD" -eq 0 ] || fail "upstream уже DIRTY; установка остановлена, чтобы не смешивать изменения"
 }
 
+runtime_has_token() {
+    TOKEN="$1"
+    printf '%s\n%s\n' "$RUNTIME_CONFIG" "$GCODE_HELP" | grep -Fiq "$TOKEN"
+}
+
+require_runtime_token() {
+    TOKEN="$1"; LABEL="$2"
+    runtime_has_token "$TOKEN" || fail "Z-Mod runtime: отсутствует $LABEL"
+}
+
 compatibility_check() {
-    BASE="/opt/config/mod"
-    [ -d "$BASE" ] || fail "Z-Mod не найден: $BASE"
-    # Calibration Center intentionally depends on the current, documented AD5X
-    # extension and probe safety primitives. Fail closed if they disappear.
-    grep -R -q '^\[gcode_macro _USER_START_PRINT\]' "$BASE" 2>/dev/null || fail "Z-Mod: отсутствует _USER_START_PRINT"
-    grep -R -q '^\[gcode_macro _ORIG_CLEAR_NOZZLE\]' "$BASE" 2>/dev/null || fail "Z-Mod: отсутствует _ORIG_CLEAR_NOZZLE"
-    grep -R -q '^\[gcode_macro _G28\]' "$BASE" 2>/dev/null || grep -R -q '^\[gcode_macro _HOME\]' "$BASE" 2>/dev/null || fail "Z-Mod: не найден безопасный homing path"
-    grep -R -q '_SET_GCODE_OFFSET_FAST' "$BASE" 2>/dev/null || fail "Z-Mod: отсутствует _SET_GCODE_OFFSET_FAST"
-    grep -R -q 'LOAD_CELL_TARE' "$BASE" 2>/dev/null || fail "Z-Mod: отсутствует LOAD_CELL_TARE"
-    grep -R -q 'variable_ad5x' "$BASE" 2>/dev/null || fail "Z-Mod: AD5X client contract не найден"
+    # /opt/config/mod is the Z-Mod git checkout, not necessarily the selected,
+    # translated cfg that Klipper has actually loaded. Query the live runtime
+    # through Moonraker instead of grepping the source checkout.
+    RUNTIME_CONFIG="$(moonraker_get '/printer/objects/query?configfile')"
+    GCODE_HELP="$(moonraker_get '/printer/gcode/help')"
+    [ -n "$RUNTIME_CONFIG" ] || fail "Moonraker не вернул загруженную конфигурацию Klipper"
+    [ -n "$GCODE_HELP" ] || fail "Moonraker не вернул список зарегистрированных G-code команд"
+
+    require_runtime_token "gcode_macro _user_start_print" "_USER_START_PRINT"
+    require_runtime_token "gcode_macro _orig_clear_nozzle" "_ORIG_CLEAR_NOZZLE"
+    if ! runtime_has_token "gcode_macro _g28" && ! runtime_has_token "gcode_macro _home"; then
+        fail "Z-Mod runtime: не найден безопасный homing path (_G28/_HOME)"
+    fi
+    require_runtime_token "gcode_macro _set_gcode_offset_fast" "_SET_GCODE_OFFSET_FAST"
+    require_runtime_token "LOAD_CELL_TARE" "LOAD_CELL_TARE"
+    require_runtime_token "gcode_macro _client_variable" "_CLIENT_VARIABLE"
 }
 
 check_user_hook_conflict() {
     [ -f "$USER_CFG" ] || return 0
+    mkdir -p "$STATE_DIR"
     TMP="$STATE_DIR/user.no-cc.$$"
     awk -v b="$HOOK_BEGIN" -v e="$HOOK_END" '
         index($0,b){skip=1;next}
