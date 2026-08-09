@@ -7,7 +7,7 @@
 Current Draft provides:
 
 - up to 8 persistent hotend/nozzle profiles;
-- a Fluidd/Mainsail action-prompt entry point: `CALIBRATION_CENTER`;
+- a Fluidd/Mainsail/Helix action-prompt entry point: `CALIBRATION_CENTER`;
 - five independent load-cell/contact probes per automatic run;
 - mean/median/range evidence and a strict repeatability gate;
 - bed-mesh isolation during physical-reference measurement;
@@ -104,13 +104,15 @@ A profile stores measured reference, accepted quality, verified reference/bias, 
 
 The action-prompt UI is deliberately built without DOM patching or a permanent web daemon. Current Z-Mod action prompts do not provide a free-text input control, so arbitrary profile renaming/custom profile text still uses the stable macro API above. Likewise, the event audit has a real timestamp, but the current prompt does not yet surface a human-readable “last calibration date”.
 
-These are UI completion gaps, not hidden as accepted functionality.
+Critical Helix buttons deliberately use short labels (`Автокалибровка`, `Первый слой`, `Откат`, `Сохранить`, `Отмена`) because physical testing showed longer labels are clipped on the Helix screen.
+
+These are UI completion gaps and runtime constraints, not hidden as accepted functionality.
 
 ## Guided built-in first-layer verification
 
 A novice does not need to prepare an STL/G-code file or know first-layer temperatures by heart.
 
-From `CALIBRATION_CENTER → Проверка первого слоя`, the idle prompt offers material presets:
+From `CALIBRATION_CENTER → Первый слой`, the idle prompt offers material presets:
 
 - PLA — 210 / 60 °C;
 - PETG — 240 / 75 °C;
@@ -118,7 +120,7 @@ From `CALIBRATION_CENTER → Проверка первого слоя`, the idle
 - ASA — 250 / 100 °C;
 - TPU — 225 / 50 °C.
 
-These are conservative **starter verification presets**, not claimed as universally optimal material profiles. `Другой / вручную` keeps an expert fallback:
+These are conservative **starter verification presets**, not claimed as universally optimal material profiles. `Другой` keeps an expert fallback:
 
 ```gcode
 CC_FIRST_LAYER_TEST MATERIAL=CUSTOM NOZZLE_TEMP=... BED_TEMP=...
@@ -130,14 +132,24 @@ The plugin generates `Calibration_Center_First_Layer.gcode` on demand inside the
 
 1. uses normal Z-Mod `START_PRINT EXTRUDER_TEMP=... BED_TEMP=...` with no special skip flags;
 2. therefore traverses the same Z-Mod start/mesh/native-offset logic and `_USER_START_PRINT` Calibration Center hook as an ordinary sliced print;
-3. marks itself as the built-in verification job;
-4. prints a centered serpentine patch whose layer height, line width and extrusion scale from the selected nozzle diameter;
-5. exposes live `-0.05 / -0.01 / +0.01 / +0.05` Z controls while `print_stats=printing`;
-6. lets the user choose `Сохранить и завершить тест` or abort without saving.
+3. prints a centered serpentine patch whose layer height/line width scale from the selected nozzle diameter;
+4. packs neighbouring roads with a rounded-rectangle bead model rather than `pitch = line_width`, preventing the generator itself from creating theoretical gaps between otherwise-correct first-layer roads;
+5. extrudes the short Y connectors as part of one continuous serpentine and explicitly normalises `M220/M221` to 100% for a deterministic verification job;
+6. exposes live `-0.05 / -0.01 / +0.01 / +0.05` Z controls only while lines are being printed;
+7. after every live-Z button press reopens the action prompt and shows `Z-Mod base`, accumulated test `ΔZ`, and the actual runtime Z-offset;
+8. after the patch is complete, lifts the nozzle and enters a controlled `PAUSE` review state so the operator can inspect the result without racing the end of the file;
+9. lets the operator choose `Сохранить` or `Без сохранения` while paused;
+10. explicitly removes the temporary live-Z delta on save, abort, or natural fall-through, so a verification experiment cannot silently leave its temporary runtime adjustment active after the test.
 
 For a never-verified profile, the deliberately chosen live adjustment becomes its `verified_bias`. A successful save turns the profile into `USER VERIFIED`; later return to that same nozzle profile is intended to require only automatic physical remeasurement, not another manual first-layer test.
 
-The built-in first-layer path is repository-tested but remains **physical-acceptance pending** until exercised on the target AD5X.
+### Physical first-layer evidence so far
+
+The first built-in generator revision was physically exercised on the target AD5X with PLA at 210/60 °C and A1/0.4. The normal print path loaded the pre-existing working Z-Mod/native runtime baseline around `-0.125 mm`. The generated patch showed visible separation between roads. Applying two live `-0.05 mm` steps moved the displayed runtime offset to about `-0.225 mm` and improved merging, but the sheet still separated visibly along print roads.
+
+That run is **not accepted as Z-offset evidence** and no `USER VERIFIED` value was saved. The stronger evidence is that a separately sliced 100×100 single-layer object had previously printed acceptably at the ordinary `-0.125 mm` baseline, while the built-in pattern still showed road gaps after much more negative live Z. This exposed a generator defect: the old implementation used `line_spacing = line_width`, which is not a valid solid-fill spacing model for rounded deposited roads.
+
+The revised bead-spacing/review/restore implementation is repository-tested and still requires the next physical run before the built-in first-layer path can be accepted.
 
 ## Install — current Draft branch
 
@@ -156,7 +168,7 @@ The installer:
 - refuses printing/paused state;
 - fails closed if Moonraker cannot prove printer state;
 - refuses pre-existing dirty Z-Mod/Klipper/Moonraker repositories;
-- checks required Z-Mod safety/extension primitives, including the virtual-SD print contract used by the built-in first-layer test;
+- checks required Z-Mod safety/extension primitives, including `START_PRINT`, `END_PRINT`, virtual-SD printing and `PAUSE` used by the built-in first-layer review path;
 - creates a separate git checkout at `/opt/config/mod_data/plugins/calibration_center`;
 - adds only an include in `mod_data/plugins.cfg`;
 - uses the documented `mod_data/user.cfg` `_USER_START_PRINT` extension point;
