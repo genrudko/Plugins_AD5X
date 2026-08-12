@@ -4,7 +4,7 @@
 
 **Последнее обновление:** 2026-08-12  
 **Текущая фаза:** Phase 0 — Platform Foundation  
-**Статус:** Fluidd frontend shell PoC архитектурно реализован и прошёл coordinator code review; Definition of Done не закрыт до обязательных проверок exact feature-head  
+**Статус:** Fluidd frontend shell PoC accepted / Definition of Done complete; Phase 0 продолжается  
 **Активный issue:** [#7 — PLATFORM-FOUNDATION-001: исследовать точки интеграции Fluidd](https://github.com/genrudko/Plugins_AD5X/issues/7)  
 **Изменения на принтере для текущей фазы:** отсутствуют
 
@@ -38,12 +38,13 @@
 - `genrudko/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
 - `genrudko/fluidd:ad5x-dev` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`.
 
-Текущий frontend shell PoC:
+Принятый frontend shell PoC после final acceptance:
 
 - base `genrudko/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
-- feature head `genrudko/fluidd:ad5x-dev` — `c0810f5ec3a2795b9743a48fbf00737ff0c43d0d`;
-- compare: `ahead_by: 4`, `behind_by: 0`;
-- `ghzserg/fluidd:develop` на момент coordinator review оставался на том же base commit.
+- final head `genrudko/fluidd:ad5x-dev` — `c56cec9a2c846ee5b492242887051c8d2d74eb5a`;
+- compare: `ahead_by: 11`, `behind_by: 0`;
+- `ghzserg/fluidd:develop` и `genrudko/fluidd:develop` после acceptance остаются на том же base commit;
+- upstream unchanged; real conflict rehearsal not applicable.
 
 Z-Mod **не форкаем**.
 
@@ -94,7 +95,7 @@ Side / AUX Fan
 → появляется управление/тест
 ```
 
-Но реализация Side/AUX/PLA Fan **не входит** в текущий frontend shell proof-of-concept.
+Но реализация Side/AUX/PLA Fan **не входит** в frontend shell proof-of-concept и не начиналась в рамках его acceptance.
 
 ---
 
@@ -104,7 +105,7 @@ Side / AUX Fan
 
 Discovery-часть issue завершена по фактическому коду `genrudko/fluidd:ad5x-dev` и согласована владельцем продукта.
 
-Frontend shell PoC реализован, но acceptance не закрыт до выполнения обязательных проверок exact feature-head.
+Frontend shell PoC прошёл downstream CI и final automated acceptance. Его Definition of Done закрыт, но issue #7 и вся Phase 0 этим не закрываются; решение о следующем этапе принимает координатор.
 
 ### 5.1. Найденные integration points Fluidd
 
@@ -163,7 +164,7 @@ src/ad5x/
         └── Ad5xShell.spec.ts
 ```
 
-Не создаются заранее полноценные `hardware/`, `ifs/`, `calibration/`, `manifest/` и другие продуктовые подсистемы до завершения базового Platform Foundation acceptance.
+Не создаются заранее полноценные `hardware/`, `ifs/`, `calibration/`, `manifest/` и другие продуктовые подсистемы до дальнейшего решения по Platform Foundation.
 
 ### 5.3. Минимальный upstream patch surface
 
@@ -182,11 +183,13 @@ src/ad5x/
 - `src/api/socketActions.ts`;
 - `src/plugins/socketClient.ts`.
 
-Coordinator review подтвердил соответствие D-018.
+Отдельно добавлен downstream infrastructure-файл `.github/workflows/ad5x-ci.yml`; upstream `.github/workflows/build.yml` не изменён.
+
+Final diff review подтвердил соответствие D-018 и D-021.
 
 ### 5.4. Согласованная route/navigation policy
 
-Реализовано:
+Реализовано и подтверждено unit acceptance:
 
 - `/ad5x` регистрируется статически;
 - пункт Plugins AD5X в основной навигации capability-gated;
@@ -216,62 +219,143 @@ Coarse detection использует существующий механизм 
 
 ### 5.6. Реализация frontend shell PoC
 
-Feature-head:
+Initial reviewed feature-head:
 
 `c0810f5ec3a2795b9743a48fbf00737ff0c43d0d`
 
-Коммиты:
+Исходные PoC-коммиты:
 
 - `4e1cfe3534af5fc7eff3a1c18b616dec038ba911` — `feat(ad5x): add local frontend shell foundation`;
 - `aa9261eaa5c50aab9f43bc7a8abb0229a1f66918` — `feat(ad5x): register local route tree`;
 - `0919b70d4bf5751ffb9ae6192e4896ef3b1a499f` — `feat(ad5x): gate navigation on backend support`;
 - `c0810f5ec3a2795b9743a48fbf00737ff0c43d0d` — `fix(ad5x): reset dynamic store with Fluidd lifecycle`.
 
-Реализованы unit specs для:
+Downstream CI и acceptance-fix commits:
+
+- `97fa35e9987644142c5dd5d73756e443f84fd62a` — `ci(ad5x): add downstream verification workflow`;
+- `f0f590ba945b4bfba4d9bd44d089fc26c4d451a2` — `fix(ad5x): satisfy Fluidd lint rules`;
+- `c662cc04fbf993ad39fecb7f7629c03344e1109a` — `fix(ad5x): decouple dynamic store typing from Fluidd root`;
+- `69a9f349fc529da74af39963e27c8cdb77893a32` — `fix(ad5x): isolate store tests from Fluidd root types`;
+- `1cda7ffacab2d8e0b95e2839e789f0376d1edb98` — `fix(ad5x): type local socket boundary explicitly`;
+- `47cddb6c770501bcbd0a284dd6d414ffed4b9f0d` — `fix(ad5x): make socket boundary cast explicit`;
+- `c56cec9a2c846ee5b492242887051c8d2d74eb5a` — `test(ad5x): exercise shell through Vuex component getter`.
+
+Final accepted feature-head:
+
+`c56cec9a2c846ee5b492242887051c8d2d74eb5a`
+
+Реализованы и фактически пройдены specs для:
 
 - provisional backend component gate;
 - static `/ad5x` route;
-- local API adapter через существующий `$socket`;
+- local API adapter через существующий Fluidd socket transport;
 - lazy dynamic Vuex registration;
 - `ad5x/reset` для участия dynamic module в Fluidd root reset lifecycle;
 - backend absent → API/RPC не вызывается;
 - backend mocked/present → capability payload проходит API/state boundary и отображается shell.
 
-Dynamic Vuex implementation не потребовала изменений root Fluidd store registry. Однако hypothesis ещё не считается формально подтверждённой до реального `type-check/tests/build`.
+Dynamic Vuex implementation не потребовала изменений root Fluidd store registry. После успешных `type-check`, unit tests и production build hypothesis формально **CONFIRMED**.
 
-### 5.7. Текущий acceptance blocker и следующий узкий шаг
+### 5.7. Downstream CI и final automated acceptance
 
-Штатный `.github/workflows/build.yml` Fluidd не запускается на push в `ad5x-dev`; его triggers ограничены `develop/master`, тегами `v*` и PR в `develop/master`.
-
-Поэтому exact feature-head `c0810f5e...` пока не имеет выполненных обязательных проверок:
+Для `ad5x-dev` добавлен отдельный downstream-only workflow:
 
 ```text
-pnpm lint
-pnpm type-check
-pnpm test:unit
-pnpm circular-check
-pnpm build
+.github/workflows/ad5x-ci.yml
 ```
 
-Локальные AI execution environments, использованные при реализации и coordinator review, не смогли установить pnpm/dependencies из-за отсутствующего network/DNS access. Зелёные результаты не считаются и не выдумываются.
+Triggers:
 
-Следующий узкий этап в рамках issue #7:
+```text
+push → ad5x-dev
+workflow_dispatch
+```
 
-1. добавить отдельный downstream-only workflow для `ad5x-dev`;
-2. не менять upstream `.github/workflows/build.yml`;
-3. запускать workflow минимум на push в `ad5x-dev` и через `workflow_dispatch`;
-4. повторить релевантные штатные проверки Fluidd;
-5. получить фактический CI result на exact feature-head;
-6. при PASS подтвердить/отвергнуть dynamic Vuex hypothesis по фактическим checks;
-7. только затем отметить frontend shell PoC как прошедший Definition of Done.
+Upstream `.github/workflows/build.yml` не изменялся.
 
-Политика зафиксирована в D-021.
+Final GitHub Actions run:
+
+- run `31621932415`;
+- URL: `https://github.com/genrudko/fluidd/actions/runs/31621932415`;
+- exact head: `c56cec9a2c846ee5b492242887051c8d2d74eb5a`;
+- conclusion: `success`.
+
+Обязательная verification chain:
+
+```text
+pnpm i --frozen-lockfile   PASS
+pnpm run lint --no-fix     PASS
+pnpm run type-check        PASS
+pnpm run test:unit         PASS
+pnpm run circular-check    PASS
+pnpm run build             PASS
+```
+
+Unit result: `20 passed` test files, `415 passed` tests. `src/ad5x/views/__tests__/Ad5xShell.spec.ts` — `2 passed`.
+
+Acceptance outcomes:
+
+- Backend absent — **PASS**;
+- Backend mocked/present — **PASS**;
+- Dynamic Vuex hypothesis — **CONFIRMED**;
+- circular dependencies — **none found**;
+- production build — **PASS**.
+
+Final `develop → ad5x-dev` diff:
+
+Existing Fluidd product files modified:
+
+```text
+src/components/layout/AppNavDrawer.vue
+src/router/index.ts
+```
+
+AD5X files:
+
+```text
+src/ad5x/__tests__/integration.spec.ts
+src/ad5x/__tests__/router.spec.ts
+src/ad5x/api/__tests__/client.spec.ts
+src/ad5x/api/client.ts
+src/ad5x/api/types.ts
+src/ad5x/integration.ts
+src/ad5x/router.ts
+src/ad5x/store/__tests__/index.spec.ts
+src/ad5x/store/index.ts
+src/ad5x/store/types.ts
+src/ad5x/views/Ad5xShell.vue
+src/ad5x/views/__tests__/Ad5xShell.spec.ts
+```
+
+Infrastructure files:
+
+```text
+.github/workflows/ad5x-ci.yml
+```
+
+Compare:
+
+```text
+ahead_by: 11
+behind_by: 0
+```
+
+Upstream state после acceptance:
+
+```text
+ghzserg/fluidd:develop  7f024c08aac4093aa8aa2e26e329df5832ebe778
+genrudko/fluidd:develop 7f024c08aac4093aa8aa2e26e329df5832ebe778
+```
+
+Upstream unchanged; real conflict rehearsal not applicable.
+
+Frontend shell PoC имеет статус **accepted / Definition of Done complete**. Это не означает завершение всей Phase 0.
 
 ---
 
 ## 6. Что сейчас НЕ делать
 
-До закрытия acceptance frontend shell PoC:
+До решения координатора о следующем этапе Phase 0:
 
 - не писать полноценный Hardware Manager;
 - не реализовывать AUX/PLA Fan;
@@ -317,7 +401,7 @@ pnpm build
 
 ### 8.1. Plugins AD5X backend capability/API contract
 
-Frontend extension points изучены, но backend-контракт ещё не определён окончательно.
+Frontend extension points изучены и frontend seam принят, но backend-контракт ещё не определён окончательно.
 
 Нужно отдельно решить и проверить:
 
@@ -329,13 +413,13 @@ Frontend extension points изучены, но backend-контракт ещё �
 - поведение при несовместимой версии backend/frontend;
 - события/notifications для обновления state без тяжёлого polling.
 
-До этого нельзя считать capability API реализованным.
+До этого нельзя считать production capability API реализованным. Provisional `plugins_ad5x` / `plugins_ad5x.get_capabilities` остаются только frontend/mock seam по D-020.
 
 ### 8.2. AD5X-local store registration
 
 PoC реализует local/lazy dynamic Vuex registration внутри `src/ad5x/**` без изменения `src/store/index.ts` и `src/store/types.ts`.
 
-Code review показывает, что lifecycle requirement root reset учтён через локальный `ad5x/reset`. Но formal status остаётся **implementation hypothesis pending CI**, пока не пройдут реальный `type-check`, unit tests и build на exact feature-head.
+Formal status после downstream CI: **CONFIRMED**. Реальный `type-check`, `415` unit tests, circular-check и production build прошли на exact accepted feature-head `c56cec9a2c846ee5b492242887051c8d2d74eb5a`.
 
 ### 8.3. Moonraker update_manager override
 
@@ -367,7 +451,9 @@ Phase 0 можно считать завершённой, когда есть:
 - минимальный developer guide для следующего модуля;
 - тестовый dummy/module proof-of-concept, не требующий изменения железа.
 
-После этого первым реальным hardware-модулем становится Side/AUX/PLA Fan.
+Минимальный frontend shell теперь принят; остальные критерии Phase 0 остаются отдельной работой.
+
+После завершения Phase 0 первым реальным hardware-модулем становится Side/AUX/PLA Fan.
 
 ---
 
