@@ -4,7 +4,7 @@
 
 **Последнее обновление:** 2026-08-12  
 **Текущая фаза:** Phase 0 — Platform Foundation  
-**Статус:** Fluidd frontend shell PoC accepted / Definition of Done complete; активен backend capability/API contract discovery  
+**Статус:** Fluidd frontend shell PoC accepted; backend capability/API contract v1 accepted; следующий шаг — минимальный backend PoC  
 **Активный issue:** [#8 — PLATFORM-FOUNDATION-002: определить Plugins AD5X backend capability/API contract](https://github.com/genrudko/Plugins_AD5X/issues/8)  
 **Изменения на принтере для текущей фазы:** отсутствуют
 
@@ -45,6 +45,14 @@
 - compare: `ahead_by: 11`, `behind_by: 0`;
 - `ghzserg/fluidd:develop` и `genrudko/fluidd:develop` после acceptance остаются на том же base commit;
 - upstream unchanged; real conflict rehearsal not applicable.
+
+Backend contract discovery verified against:
+
+- `ghzserg/z_ad5x:1.7` — `2e32155d00e464094b8c7197e23783ec821a112c`;
+- configured Moonraker source `ghzserg/zmod_moonraker:main` — discovery head `a5ac2593f5937a0b5fea6d2aeb1fab8c241b0a8e`;
+- upstream `Arksine/moonraker:master` — discovery head `d5ee17128bb88434aacdab90c2e9e990e2b64e4a`.
+
+Критичные для backend contract source blobs (`server.py`, `application.py`, `common.py`, `websockets.py`) у исследованных `zmod_moonraker` и upstream heads совпадают по содержимому. Exact commit Moonraker, установленный на реальном AD5X, пока не подтверждён и должен быть проверен read-only перед printer deployment/acceptance.
 
 Z-Mod **не форкаем**.
 
@@ -95,7 +103,7 @@ Side / AUX Fan
 → появляется управление/тест
 ```
 
-Но реализация Side/AUX/PLA Fan **не входит** в frontend shell proof-of-concept и не начиналась в рамках его acceptance.
+Но реализация Side/AUX/PLA Fan **не входит** в frontend shell/backend foundation PoC.
 
 ---
 
@@ -105,11 +113,48 @@ Side / AUX Fan
 
 Issue #7 `PLATFORM-FOUNDATION-001` завершён и закрыт как `completed`: Fluidd integration discovery, минимальный frontend shell и его automated acceptance прошли Definition of Done.
 
-Текущий следующий шаг Phase 0 — определить минимальный, versioned и frontend-neutral Plugins AD5X backend capability/API contract для Moonraker. До реализации production backend сначала требуется source/docs discovery Moonraker component lifecycle, component/RPC naming, capability/state schema, compatibility model, event/notification model, fail-safe behavior и связь с существующим `ad5x_custom`.
+Discovery-часть issue #8 выполнена и contract proposal принят координатором с уточнениями; архитектурный результат зафиксирован в D-022.
 
-По issue #8 действует порядок: **сначала discovery и contract proposal → согласование координатором → затем только минимальный backend PoC без hardware module functionality**.
+Принятый backend foundation contract:
 
-Ниже сохранён фактический результат завершённого issue #7 как baseline для активного backend-contract этапа.
+```text
+optional Moonraker component:
+plugins_ad5x
+
+coarse presence:
+server.info.components
+
+health/readiness:
+backend-owned snapshot
+
+HTTP:
+GET /server/plugins_ad5x/snapshot
+
+JSON-RPC:
+server.plugins_ad5x.snapshot
+
+API version:
+MAJOR.MINOR
+
+state delivery:
+atomic snapshot + low-frequency invalidation notification
+
+notification:
+notify_plugins_ad5x_snapshot_changed
+
+auth:
+Moonraker-owned
+
+steady polling:
+NO
+
+separate daemon / own DB in Phase 0:
+NO
+```
+
+`server.info.components` не является health check: имя может одновременно присутствовать в `components` и `failed_components`, если object загрузился, но `component_init()` завершился ошибкой. Поэтому D-020 coarse presence остаётся первым уровнем, а readiness/health — вторым уровнем snapshot API.
+
+Следующий разрешённый этап по #8 — **минимальный backend PoC** без hardware module functionality. До установки/acceptance на реальном принтере требуется read-only подтверждение фактически установленной Moonraker version/Git HEAD и затем отдельная контролируемая printer-test последовательность.
 
 ### 5.1. Найденные integration points Fluidd
 
@@ -210,16 +255,40 @@ Capability detection двухступенчатый:
 ```text
 Moonraker server.info.components
         ↓
-есть Plugins AD5X backend?
+есть Plugins AD5X backend object?
         ↓ yes
-Plugins AD5X backend API
+server.plugins_ad5x.snapshot
         ↓
-API/backend version + detailed module capabilities/state
+API/backend version + health + detailed module capabilities/state
 ```
 
 Coarse detection использует существующий механизм Fluidd `server/componentSupport(...)`.
 
-В PoC используется provisional component identifier `plugins_ad5x` и provisional capability seam `plugins_ad5x.get_capabilities`. Они нужны для mockable frontend boundary, но **не являются окончательно утверждённым backend public contract**. Окончательные component/RPC names и payload schema должны быть определены отдельным решением Platform Foundation в соответствии с D-020 и активным issue #8.
+Production component identifier принят как `plugins_ad5x`. Provisional frontend seam `plugins_ad5x.get_capabilities` не является production API и должен быть заменён на `server.plugins_ad5x.snapshot` на этапе backend integration.
+
+Snapshot contract v1 различает platform metadata и module-owned state. Минимальный envelope:
+
+```text
+api_version
+backend_version
+revision
+backend.health
+modules{}
+```
+
+Common module lifecycle fields:
+
+```text
+support
+enabled
+presence
+available
+health
+capabilities[]
+state{}
+```
+
+`available` рассчитывается backend/provider; frontend не повторяет hardware/business logic. `unknown`/`not_applicable` допустимы, если состояние нельзя доказательно установить.
 
 ### 5.6. Реализация frontend shell PoC
 
@@ -359,20 +428,23 @@ Frontend shell PoC имеет статус **accepted / Definition of Done compl
 
 ## 6. Что сейчас НЕ делать
 
-В рамках активного backend capability/API contract discovery (#8):
+В рамках минимального backend PoC по #8:
 
-- не писать production backend-компонент до согласования contract proposal;
-- не писать полноценный Hardware Manager;
+- не реализовывать Hardware Manager;
 - не реализовывать AUX/PLA Fan;
 - не переносить IFS UI;
 - не начинать Calibration Center;
+- не начинать Print Preflight;
 - не рефакторить существующий `ad5x_custom` массово;
-- не менять Z-Mod;
-- не трогать принтер ради нового UI/backend discovery;
-- не создавать бизнес-логику внутри Fluidd;
+- не форкать и не править tracked Z-Mod/Moonraker source;
+- не создавать отдельный daemon/agent или собственную DB без доказанного нового требования;
+- не переносить hardware/business logic во Fluidd;
 - не начинать Mainsail/HelixScreen parity;
-- не закреплять окончательный формат module manifest без необходимости для минимального platform contract;
-- не считать provisional `plugins_ad5x` / `plugins_ad5x.get_capabilities` утверждённым production API до завершения #8 discovery.
+- не закреплять окончательный format module manifest;
+- не устанавливать backend на реальный принтер до отдельного контролируемого test step;
+- не трактовать `server.info.components` как health/readiness.
+
+Разрешён следующий narrow scope: минимальный optional Moonraker component, read-only snapshot endpoint, notification seam, tests/validation и подготовка безопасной deployment/rollback проверки.
 
 ---
 
@@ -391,38 +463,46 @@ Frontend shell PoC имеет статус **accepted / Definition of Done compl
 - IFS должен идентифицировать конкретную катушку, а не угадывать её только по RGB;
 - Calibration Center должен хранить контекст валидности Z-offset, а не только число;
 - Print Preflight — guard перед штатным стартом, а не новый print engine;
-- предпочтение: UI/macros/events → лёгкий daemon → никогда тяжёлый service на MIPS без крайней необходимости;
 - rollback и сохранение базовой печати через Z-Mod обязательны;
 - Fluidd integration использует ownership boundary `src/ad5x/**` и целевой two-seam upstream patch surface;
 - `/ad5x` статический, navigation item capability-gated;
 - capability detection двухступенчатый: backend presence → backend-owned detailed capabilities/state;
-- `ad5x-dev` проверяется отдельным downstream-only CI workflow, не меняющим upstream `build.yml`.
+- `ad5x-dev` проверяется отдельным downstream-only CI workflow, не меняющим upstream `build.yml`;
+- backend foundation реализуется как optional in-process Moonraker component `plugins_ad5x`, без отдельного daemon/DB на Phase 0;
+- production read-only API v1 — `GET /server/plugins_ad5x/snapshot` / `server.plugins_ad5x.snapshot`, Moonraker-authenticated;
+- state propagation — atomic snapshot + low-frequency invalidation notification, full resync после reconnect, без steady-state polling.
 
-Подробности: `ARCHITECTURE.md` и `DECISIONS.md`, особенно D-018, D-019, D-020 и D-021.
+Подробности: `ARCHITECTURE.md` и `DECISIONS.md`, особенно D-018–D-022.
 
 ---
 
 ## 8. Открытые вопросы
 
-### 8.1. Plugins AD5X backend capability/API contract
+### 8.1. Backend PoC implementation/deployment
 
-Это активный work item #8.
+Backend capability/API contract v1 принят в D-022. Implementation ещё не выполнена.
 
-Frontend extension points изучены и frontend seam принят, но backend-контракт ещё не определён окончательно.
+Следующий PoC должен доказать без hardware functionality:
 
-Нужно отдельно решить и проверить:
+- optional component `plugins_ad5x` загружается и не ломает Moonraker;
+- `server.info.components` coarse presence работает фактически;
+- read-only `server.plugins_ad5x.snapshot` возвращает v1 envelope с `modules: {}`;
+- endpoint явно ограничен HTTP + WEBSOCKET и наследует Moonraker auth;
+- notification `notify_plugins_ad5x_snapshot_changed` доставляется по WebSocket;
+- frontend provisional adapter можно перевести с `plugins_ad5x.get_capabilities` на production snapshot method без расширения D-018 patch surface;
+- component absence/init failure/restart/reconnect остаются fail-safe;
+- install/uninstall/update/rollback не загрязняют tracked Z-Mod/Moonraker source.
 
-- как Plugins AD5X регистрируется как Moonraker component;
-- точное имя component;
-- имя RPC endpoint/method;
-- API versioning;
-- минимальную capability/state payload schema;
-- поведение при несовместимой версии backend/frontend;
-- события/notifications для обновления state без тяжёлого polling;
-- lifecycle startup/shutdown/restart и fail-safe behavior;
-- связь нового backend component с существующим `ad5x_custom`.
+До printer deployment требуется read-only подтвердить:
 
-До этого нельзя считать production capability API реализованным. Provisional `plugins_ad5x` / `plugins_ad5x.get_capabilities` остаются только frontend/mock seam по D-020.
+```text
+server.info.moonraker_version
+git -C /opt/config/base/moonraker rev-parse HEAD
+```
+
+Exact runtime Moonraker commit пока **unresolved**, хотя исследованные current Z-Mod Moonraker source blobs для contract-critical mechanisms совпадают с upstream.
+
+Deployment detail `symlink vs copy` в Moonraker components не утверждён до реального Z-Mod test.
 
 ### 8.2. AD5X-local store registration
 
@@ -442,7 +522,7 @@ Formal status после downstream CI: **CONFIRMED**. Реальный `type-ch
 
 Нужные поля примерно определены, но конкретный формат (`json/yaml/toml/другое`) пока не выбран.
 
-Сначала нужно понять реальные потребности backend/frontend и существующий жизненный цикл `ad5x_custom`.
+Сначала нужно проверить минимальный backend provider/registry seam; production manifest format не нужен для foundation PoC.
 
 ---
 
@@ -460,7 +540,7 @@ Phase 0 можно считать завершённой, когда есть:
 - минимальный developer guide для следующего модуля;
 - тестовый dummy/module proof-of-concept, не требующий изменения железа.
 
-Минимальный frontend shell теперь принят; остальные критерии Phase 0 остаются отдельной работой.
+Минимальный frontend shell и backend capability/API contract теперь приняты; backend PoC, installation lifecycle и остальные критерии Phase 0 остаются отдельной работой.
 
 После завершения Phase 0 первым реальным hardware-модулем становится Side/AUX/PLA Fan.
 
