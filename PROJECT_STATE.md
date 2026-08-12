@@ -4,7 +4,7 @@
 
 **Последнее обновление:** 2026-08-12  
 **Текущая фаза:** Phase 0 — Platform Foundation  
-**Статус:** Fluidd integration discovery завершён и архитектурный план согласован; реализация frontend shell proof-of-concept ещё не начата  
+**Статус:** Fluidd frontend shell PoC архитектурно реализован и прошёл coordinator code review; Definition of Done не закрыт до обязательных проверок exact feature-head  
 **Активный issue:** [#7 — PLATFORM-FOUNDATION-001: исследовать точки интеграции Fluidd](https://github.com/genrudko/Plugins_AD5X/issues/7)  
 **Изменения на принтере для текущей фазы:** отсутствуют
 
@@ -38,7 +38,12 @@
 - `genrudko/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
 - `genrudko/fluidd:ad5x-dev` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`.
 
-Следовательно, `ad5x-dev` на старте discovery не содержал собственных AD5X-патчей и являлся чистым baseline для минимального downstream patch surface.
+Текущий frontend shell PoC:
+
+- base `genrudko/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
+- feature head `genrudko/fluidd:ad5x-dev` — `c0810f5ec3a2795b9743a48fbf00737ff0c43d0d`;
+- compare: `ahead_by: 4`, `behind_by: 0`;
+- `ghzserg/fluidd:develop` на момент coordinator review оставался на том же base commit.
 
 Z-Mod **не форкаем**.
 
@@ -99,6 +104,8 @@ Side / AUX Fan
 
 Discovery-часть issue завершена по фактическому коду `genrudko/fluidd:ad5x-dev` и согласована владельцем продукта.
 
+Frontend shell PoC реализован, но acceptance не закрыт до выполнения обязательных проверок exact feature-head.
+
 ### 5.1. Найденные integration points Fluidd
 
 Фактическая цепочка:
@@ -129,33 +136,43 @@ navigation
 
 ### 5.2. Согласованный frontend ownership boundary
 
-AD5X-специфичный frontend-код должен жить в собственной области:
+AD5X-специфичный frontend-код живёт в собственной области `src/ad5x/**`.
+
+В реализованном PoC созданы:
 
 ```text
 src/ad5x/
+├── integration.ts
 ├── router.ts
-├── views/
-│   └── Ad5xShell.vue
+├── __tests__/
+│   ├── integration.spec.ts
+│   └── router.spec.ts
 ├── api/
 │   ├── client.ts
-│   └── types.ts
-└── store/
-    ├── index.ts
-    └── types.ts
+│   ├── types.ts
+│   └── __tests__/
+│       └── client.spec.ts
+├── store/
+│   ├── index.ts
+│   ├── types.ts
+│   └── __tests__/
+│       └── index.spec.ts
+└── views/
+    ├── Ad5xShell.vue
+    └── __tests__/
+        └── Ad5xShell.spec.ts
 ```
 
-Структура может уточниться по результатам PoC, но ownership boundary `src/ad5x/**` считается принятым.
-
-Не следует заранее создавать полноценные `hardware/`, `ifs/`, `calibration/`, `manifest/` и другие продуктовые подсистемы до проверки базового shell.
+Не создаются заранее полноценные `hardware/`, `ifs/`, `calibration/`, `manifest/` и другие продуктовые подсистемы до завершения базового Platform Foundation acceptance.
 
 ### 5.3. Минимальный upstream patch surface
 
-Целевой нормальный patch surface ограничен двумя файлами:
+Фактический PoC изменяет только два существующих Fluidd-файла:
 
 1. `src/components/layout/AppNavDrawer.vue` — один пункт Plugins AD5X и coarse capability gate;
 2. `src/router/index.ts` — подключение AD5X route tree.
 
-Без доказанной необходимости **не менять**:
+Не изменены:
 
 - `src/App.vue`;
 - существующие `src/views/*`;
@@ -165,15 +182,19 @@ src/ad5x/
 - `src/api/socketActions.ts`;
 - `src/plugins/socketClient.ts`.
 
-Если proof-of-concept потребует дополнительных upstream-изменений, расширение patch surface сначала должно быть технически обосновано.
+Coordinator review подтвердил соответствие D-018.
 
 ### 5.4. Согласованная route/navigation policy
 
+Реализовано:
+
 - `/ad5x` регистрируется статически;
-- пункт Plugins AD5X в основной навигации показывается только при подтверждённом наличии backend;
-- прямой `/ad5x` при отсутствии backend показывает безопасное `backend unavailable` состояние;
-- при отсутствии backend не выполняются AD5X-specific RPC;
-- штатная работа Fluidd и базовая печать не должны зависеть от Plugins AD5X frontend/backend.
+- пункт Plugins AD5X в основной навигации capability-gated;
+- direct `/ad5x` при отсутствии backend показывает безопасное `Plugins AD5X backend unavailable`;
+- absent path возвращается до AD5X-specific API вызова;
+- обычная работа Fluidd не зависит от Plugins AD5X frontend/backend.
+
+Coordinator review дополнительно проверил bootstrap lifecycle Fluidd: `serverInfo()` выполняется до перехода socket state в `ready`, а `<router-view>` основного приложения монтируется при `socketReady`, поэтому первоначальный backend presence не должен вычисляться до bootstrap `server.info` в штатном lifecycle.
 
 ### 5.5. Capability boundary
 
@@ -191,29 +212,66 @@ API/backend version + detailed module capabilities/state
 
 Coarse detection использует существующий механизм Fluidd `server/componentSupport(...)`.
 
-Detailed capability/state принадлежит Plugins AD5X backend. Frontend **не должен** самостоятельно определять наличие модулей по Klipper config, GPIO, макросам, USB-устройствам или другим низкоуровневым признакам.
+В PoC используется provisional component identifier `plugins_ad5x` и provisional capability seam `plugins_ad5x.get_capabilities`. Они нужны для mockable frontend boundary, но **не являются окончательно утверждённым backend public contract**. Окончательные component/RPC names и payload schema должны быть определены отдельным решением Platform Foundation в соответствии с D-020.
 
-Важно: текущий `ad5x_custom` ещё не содержит подтверждённого Moonraker component/API с таким контрактом. Конкретное имя backend component/RPC method и окончательная payload schema пока не зафиксированы.
+### 5.6. Реализация frontend shell PoC
 
-### 5.6. Следующий этап issue #7 — frontend shell PoC
+Feature-head:
 
-После согласования discovery следующий узкий этап:
+`c0810f5ec3a2795b9743a48fbf00737ff0c43d0d`
 
-1. создать минимальную область `src/ad5x/**` в `genrudko/fluidd:ad5x-dev`;
-2. добавить один route и один capability-gated nav item;
-3. реализовать только диагностический shell, без Hardware Manager;
-4. проверить два режима: backend absent и mocked/present;
-5. прогнать штатные проверки Fluidd: `pnpm lint`, `pnpm type-check`, `pnpm test:unit`, `pnpm build`;
-6. проверить фактический diff и сохранить upstream patch surface минимальным;
-7. затем провести upstream-sync rehearsal и оценить реальные конфликты.
+Коммиты:
 
-Только после успешного PoC переходить к отдельному backend capability/API contract и последующим модулям.
+- `4e1cfe3534af5fc7eff3a1c18b616dec038ba911` — `feat(ad5x): add local frontend shell foundation`;
+- `aa9261eaa5c50aab9f43bc7a8abb0229a1f66918` — `feat(ad5x): register local route tree`;
+- `0919b70d4bf5751ffb9ae6192e4896ef3b1a499f` — `feat(ad5x): gate navigation on backend support`;
+- `c0810f5ec3a2795b9743a48fbf00737ff0c43d0d` — `fix(ad5x): reset dynamic store with Fluidd lifecycle`.
+
+Реализованы unit specs для:
+
+- provisional backend component gate;
+- static `/ad5x` route;
+- local API adapter через существующий `$socket`;
+- lazy dynamic Vuex registration;
+- `ad5x/reset` для участия dynamic module в Fluidd root reset lifecycle;
+- backend absent → API/RPC не вызывается;
+- backend mocked/present → capability payload проходит API/state boundary и отображается shell.
+
+Dynamic Vuex implementation не потребовала изменений root Fluidd store registry. Однако hypothesis ещё не считается формально подтверждённой до реального `type-check/tests/build`.
+
+### 5.7. Текущий acceptance blocker и следующий узкий шаг
+
+Штатный `.github/workflows/build.yml` Fluidd не запускается на push в `ad5x-dev`; его triggers ограничены `develop/master`, тегами `v*` и PR в `develop/master`.
+
+Поэтому exact feature-head `c0810f5e...` пока не имеет выполненных обязательных проверок:
+
+```text
+pnpm lint
+pnpm type-check
+pnpm test:unit
+pnpm circular-check
+pnpm build
+```
+
+Локальные AI execution environments, использованные при реализации и coordinator review, не смогли установить pnpm/dependencies из-за отсутствующего network/DNS access. Зелёные результаты не считаются и не выдумываются.
+
+Следующий узкий этап в рамках issue #7:
+
+1. добавить отдельный downstream-only workflow для `ad5x-dev`;
+2. не менять upstream `.github/workflows/build.yml`;
+3. запускать workflow минимум на push в `ad5x-dev` и через `workflow_dispatch`;
+4. повторить релевантные штатные проверки Fluidd;
+5. получить фактический CI result на exact feature-head;
+6. при PASS подтвердить/отвергнуть dynamic Vuex hypothesis по фактическим checks;
+7. только затем отметить frontend shell PoC как прошедший Definition of Done.
+
+Политика зафиксирована в D-021.
 
 ---
 
 ## 6. Что сейчас НЕ делать
 
-В рамках текущего frontend shell PoC:
+До закрытия acceptance frontend shell PoC:
 
 - не писать полноценный Hardware Manager;
 - не реализовывать AUX/PLA Fan;
@@ -248,9 +306,10 @@ Detailed capability/state принадлежит Plugins AD5X backend. Frontend 
 - rollback и сохранение базовой печати через Z-Mod обязательны;
 - Fluidd integration использует ownership boundary `src/ad5x/**` и целевой two-seam upstream patch surface;
 - `/ad5x` статический, navigation item capability-gated;
-- capability detection двухступенчатый: backend presence → backend-owned detailed capabilities/state.
+- capability detection двухступенчатый: backend presence → backend-owned detailed capabilities/state;
+- `ad5x-dev` проверяется отдельным downstream-only CI workflow, не меняющим upstream `build.yml`.
 
-Подробности: `ARCHITECTURE.md` и `DECISIONS.md`, особенно D-018, D-019 и D-020.
+Подробности: `ARCHITECTURE.md` и `DECISIONS.md`, особенно D-018, D-019, D-020 и D-021.
 
 ---
 
@@ -258,7 +317,7 @@ Detailed capability/state принадлежит Plugins AD5X backend. Frontend 
 
 ### 8.1. Plugins AD5X backend capability/API contract
 
-Frontend extension points теперь изучены, но backend-контракт ещё не определён окончательно.
+Frontend extension points изучены, но backend-контракт ещё не определён окончательно.
 
 Нужно отдельно решить и проверить:
 
@@ -274,9 +333,9 @@ Frontend extension points теперь изучены, но backend-контра
 
 ### 8.2. AD5X-local store registration
 
-Root Vuex registry Fluidd статически типизирован через `src/store/index.ts` и `src/store/types.ts`. Статическое добавление AD5X store увеличивает upstream patch surface.
+PoC реализует local/lazy dynamic Vuex registration внутри `src/ad5x/**` без изменения `src/store/index.ts` и `src/store/types.ts`.
 
-Предпочтительная гипотеза для PoC — локальная/lazy dynamic registration внутри `src/ad5x/**`, но она ещё должна быть подтверждена реальным `type-check`, unit tests и build. Это пока implementation hypothesis, а не отдельное архитектурное решение.
+Code review показывает, что lifecycle requirement root reset учтён через локальный `ad5x/reset`. Но formal status остаётся **implementation hypothesis pending CI**, пока не пройдут реальный `type-check`, unit tests и build на exact feature-head.
 
 ### 8.3. Moonraker update_manager override
 
