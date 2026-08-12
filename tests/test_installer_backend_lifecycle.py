@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -45,6 +46,85 @@ class BackendInstallerLifecycleTests(unittest.TestCase):
             capture_output=True,
             env=env,
             check=check,
+        )
+
+    def run_idle_check(self, tmp: Path, *, payload: str = "", wget_rc: int = 0) -> subprocess.CompletedProcess[str]:
+        if wget_rc:
+            body = f"wget(){{ return {wget_rc}; }}\ncheck_idle"
+        else:
+            body = f"wget(){{ printf '%s' {shlex.quote(payload)}; }}\ncheck_idle"
+        return self.run_shell(body, tmp, check=False)
+
+    @staticmethod
+    def print_stats_payload(state: str) -> str:
+        return '{"result":{"status":{"print_stats":{"state":"' + state + '"}}}}'
+
+    def test_idle_http_unavailable_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result = self.run_idle_check(Path(td), wget_rc=7)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_idle_empty_response_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result = self.run_idle_check(Path(td), payload="")
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_idle_invalid_json_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result = self.run_idle_check(Path(td), payload="not-json")
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_idle_missing_print_stats_state_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            payload = '{"result":{"status":{"print_stats":{}}}}'
+            result = self.run_idle_check(Path(td), payload=payload)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_idle_printing_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result = self.run_idle_check(Path(td), payload=self.print_stats_payload("printing"))
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_idle_paused_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result = self.run_idle_check(Path(td), payload=self.print_stats_payload("paused"))
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_idle_standby_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result = self.run_idle_check(Path(td), payload=self.print_stats_payload("standby"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_idle_confirmed_terminal_states_pass(self) -> None:
+        for state in ("complete", "error", "cancelled"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as td:
+                result = self.run_idle_check(Path(td), payload=self.print_stats_payload(state))
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_idle_unknown_state_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result = self.run_idle_check(Path(td), payload=self.print_stats_payload("mystery"))
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_idle_gate_precedes_mutations_and_service_transition(self) -> None:
+        text = INSTALLER.read_text(encoding="utf-8")
+
+        uninstall_start = text.index('if [ "$MODE" = --uninstall ]; then')
+        install_start = text.index('\ncheck_idle\nvalidate_backend_source', uninstall_start) + 1
+        uninstall = text[uninstall_start:install_start]
+        self.assertLess(uninstall.index("check_idle"), uninstall.index('remove_lines "$KLIPPER_INCLUDES"'))
+        self.assertLess(
+            uninstall.index("check_idle"),
+            uninstall.index("run_moonraker_transition backend_uninstall_transition"),
+        )
+
+        install = text[install_start:]
+        self.assertTrue(install.startswith("check_idle\n"))
+        self.assertLess(install.index("check_idle"), install.index('remove_lines "$KLIPPER_INCLUDES"'))
+        self.assertLess(install.index("check_idle"), install.index("install_power_on_hook"))
+        self.assertLess(
+            install.index("check_idle"),
+            install.index("run_moonraker_transition backend_install_transition"),
         )
 
     def test_backend_source_validation(self) -> None:

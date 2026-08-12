@@ -79,10 +79,33 @@ repo_status(){
     [ -z "$S" ] && printf '%-14s CLEAN\n' "$NAME" || printf '%-14s DIRTY\n' "$NAME"
 }
 check_idle(){
-    STATE_JSON="$(wget -qO- "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null || true)"
-    case "$STATE_JSON" in
-        *'"state":"printing"'*|*'"state": "printing"'*|*'"state":"paused"'*|*'"state": "paused"'*)
+    if ! STATE_JSON="$(wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null)"; then
+        fail 'не удалось подтвердить idle state: Moonraker print_stats недоступен'
+    fi
+    [ -n "$STATE_JSON" ] || fail 'не удалось подтвердить idle state: пустой ответ Moonraker print_stats'
+    PY="$(python_bin)" || fail 'не удалось подтвердить idle state: Python недоступен'
+    PRINT_STATE="$(printf '%s' "$STATE_JSON" | "$PY" -B -c '
+import json
+import sys
+try:
+    data = json.load(sys.stdin)
+    state = data["result"]["status"]["print_stats"]["state"]
+except (json.JSONDecodeError, KeyError, TypeError):
+    raise SystemExit(1)
+if not isinstance(state, str) or not state:
+    raise SystemExit(1)
+sys.stdout.write(state)
+')" || fail 'не удалось подтвердить idle state: невалидный Moonraker print_stats response'
+    # Klipper print_stats contract: standby, printing, paused, complete, error, cancelled.
+    case "$PRINT_STATE" in
+        standby|complete|error|cancelled)
+            return 0
+            ;;
+        printing|paused)
             fail 'принтер сейчас печатает или стоит на паузе'
+            ;;
+        *)
+            fail "не удалось подтвердить idle state: неизвестное print_stats.state=$PRINT_STATE"
             ;;
     esac
 }
