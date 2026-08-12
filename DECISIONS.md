@@ -333,3 +333,72 @@ AI/Codex используется для ускорения разработки
 ### Почему
 
 Предварительная реализация без знания фактической архитектуры Fluidd почти гарантированно создаст лишний patch surface и последующий рефакторинг.
+
+---
+
+## D-018 — Fluidd интегрируется через две минимальные upstream-точки
+
+**Дата:** 2026-08-12  
+**Статус:** accepted
+
+### Решение
+
+Основная область frontend-кода Plugins AD5X живёт в `src/ad5x/**`. В штатных файлах Fluidd нормальный целевой patch surface ограничивается двумя integration seams:
+
+- `src/components/layout/AppNavDrawer.vue` — одна точка входа в навигации;
+- `src/router/index.ts` — подключение AD5X route tree.
+
+`src/App.vue`, существующие `src/views/*`, глобальный Moonraker transport и корневой Vuex registry не следует менять без доказанной необходимости.
+
+### Почему
+
+Фактический Fluidd уже предоставляет общий layout через `<router-view>`, централизованный router, штатный WebSocket/Moonraker transport и capability precedent через `server/componentSupport`. Размазывание AD5X-кода по этим подсистемам не даёт функциональной выгоды, но увеличивает стоимость upstream sync.
+
+### Следствие
+
+Новые AD5X views, API adapters, state и capability helpers создаются внутри `src/ad5x/**`. Если proof-of-concept требует дополнительных upstream-правок, сначала нужно обосновать расширение patch surface.
+
+---
+
+## D-019 — AD5X route статический, навигация capability-gated
+
+**Дата:** 2026-08-12  
+**Статус:** accepted
+
+### Решение
+
+Маршрут `/ad5x` регистрируется статически вместе с Fluidd router, а пункт `Plugins AD5X` в основной навигации показывается только при подтверждённом наличии backend-компонента.
+
+При прямом переходе на `/ad5x` без backend страница должна безопасно показать состояние `backend unavailable` и не выполнять AD5X-specific RPC.
+
+### Почему
+
+Динамическая регистрация маршрута зависит от асинхронного lifecycle `server.info` и создаёт ненужную гонку между router initialization и capability detection. Статический route проще, предсказуемее и полезнее для диагностики.
+
+### Следствие
+
+Отсутствие Plugins AD5X backend не должно менять штатную работу Fluidd: навигационный пункт скрыт, базовые страницы и печать продолжают работать как обычно.
+
+---
+
+## D-020 — Capability detection двухступенчатый и принадлежит backend
+
+**Дата:** 2026-08-12  
+**Статус:** accepted
+
+### Решение
+
+Capability detection разделяется на два уровня:
+
+1. coarse detection — наличие самого Plugins AD5X backend через Moonraker `server.info.components` / существующий Fluidd getter `server/componentSupport(...)`;
+2. detailed capabilities/state — отдельный backend-owned Plugins AD5X API contract, возвращающий API/backend version и поддерживаемые module capabilities/state.
+
+Frontend не должен самостоятельно выводить наличие модулей из Klipper config, GPIO, макросов, USB-устройств или других низкоуровневых признаков.
+
+### Почему
+
+`server.info.components` отвечает только на вопрос «backend загружен», но не описывает установленное железо, совместимость, управляемость или текущее состояние. Самостоятельный detection во Fluidd превратит frontend в второй backend и нарушит принцип одного API для Fluidd/Mainsail/local screen.
+
+### Следствие
+
+Конкретное имя RPC method и окончательная схема capability payload пока не фиксируются. Они должны быть определены отдельным узким решением Platform Foundation после проверки backend-требований. Текущий `ad5x_custom` не считается уже имеющим такой API только на основании frontend discovery.
