@@ -2,18 +2,29 @@
 set -eu
 
 REPO_URL="https://github.com/genrudko/Plugins_AD5X.git"
-PLUGIN_DIR="/opt/config/mod_data/plugins/ad5x_custom"
-STATE_DIR="/opt/config/mod_data/ad5x_custom"
+PLUGIN_DIR="${AD5X_PLUGIN_DIR:-/opt/config/mod_data/plugins/ad5x_custom}"
+STATE_DIR="${AD5X_STATE_DIR:-/opt/config/mod_data/ad5x_custom}"
 GENERATED="$STATE_DIR/generated"
 STATE="$STATE_DIR/state"
 BACKUPS="$STATE_DIR/backups"
 LOG_DIR="$STATE_DIR/log"
-KLIPPER_INCLUDES="/opt/config/mod_data/plugins.cfg"
-MOONRAKER_INCLUDES="/opt/config/mod_data/plugins.moonraker.conf"
-USER_MOONRAKER="/opt/config/mod_data/user.moonraker.conf"
-POWER_ON="/opt/config/mod_data/power_on.sh"
+KLIPPER_INCLUDES="${AD5X_KLIPPER_INCLUDES:-/opt/config/mod_data/plugins.cfg}"
+MOONRAKER_INCLUDES="${AD5X_MOONRAKER_INCLUDES:-/opt/config/mod_data/plugins.moonraker.conf}"
+USER_MOONRAKER="${AD5X_USER_MOONRAKER:-/opt/config/mod_data/user.moonraker.conf}"
+POWER_ON="${AD5X_POWER_ON:-/opt/config/mod_data/power_on.sh}"
+BACKEND_SOURCE="$PLUGIN_DIR/moonraker/components/plugins_ad5x.py"
+BACKEND_DEST="${AD5X_BACKEND_DEST:-/opt/config/base/moonraker/components/plugins_ad5x.py}"
+BACKEND_CONFIG="$PLUGIN_DIR/plugins_ad5x.moonraker.conf"
+BACKEND_HASH_STATE="$STATE/backend-runtime.sha256"
+MOONRAKER_COMPONENTS_DIR="${AD5X_MOONRAKER_COMPONENTS_DIR:-${BACKEND_DEST%/*}}"
+MOONRAKER_HTTP_BASE="${AD5X_MOONRAKER_HTTP_BASE:-http://127.0.0.1:7125}"
+MOONRAKER_STOP_TIMEOUT="${AD5X_MOONRAKER_STOP_TIMEOUT:-30}"
+MOONRAKER_READY_TIMEOUT="${AD5X_MOONRAKER_READY_TIMEOUT:-90}"
 REF="${AD5X_CUSTOM_REF:-main}"
 MODE="${1:-}"
+MOONRAKER_WAS_RUNNING=0
+MOONRAKER_TRANSITION_STARTED=0
+ROOT=""
 
 if [ -z "${AD5X_CUSTOM_REF+x}" ] && [ -f "$PLUGIN_DIR/.git/HEAD" ]; then
     HEAD_LINE="$(cat "$PLUGIN_DIR/.git/HEAD" 2>/dev/null || true)"
@@ -35,7 +46,7 @@ append_line(){ F="$1"; L="$2"; [ -f "$F" ] || : >"$F"; grep -Fqx "$L" "$F" 2>/de
 backup(){ [ -f "$1" ] && cp -p "$1" "$2/${1##*/}" || true; }
 snapshot(){
     FILE="$1"; KEY="$2"
-    if [ -e "$FILE" ]; then
+    if [ -e "$FILE" ] || [ -L "$FILE" ]; then
         cp -p "$FILE" "$B/$KEY"
     else
         : >"$B/.absent-$KEY"
@@ -45,7 +56,7 @@ restore_snapshot(){
     FILE="$1"; KEY="$2"
     if [ -f "$B/.absent-$KEY" ]; then
         rm -f "$FILE"
-    elif [ -e "$B/$KEY" ]; then
+    elif [ -e "$B/$KEY" ] || [ -L "$B/$KEY" ]; then
         cp -p "$B/$KEY" "$FILE"
     fi
 }
@@ -62,13 +73,13 @@ strip_block(){
     mv "$F.tmp" "$F"
 }
 repo_status(){
-    ROOT="$1"; NAME="$2"; PATH_="$3"
-    if ! chroot "$ROOT" /usr/bin/git -C "$PATH_" rev-parse --git-dir >/dev/null 2>&1; then printf '%-14s N/A\n' "$NAME"; return; fi
-    S="$(chroot "$ROOT" /usr/bin/git -C "$PATH_" status --porcelain 2>/dev/null || true)"
+    ROOT_="$1"; NAME="$2"; PATH_="$3"
+    if ! chroot "$ROOT_" /usr/bin/git -C "$PATH_" rev-parse --git-dir >/dev/null 2>&1; then printf '%-14s N/A\n' "$NAME"; return; fi
+    S="$(chroot "$ROOT_" /usr/bin/git -C "$PATH_" status --porcelain 2>/dev/null || true)"
     [ -z "$S" ] && printf '%-14s CLEAN\n' "$NAME" || printf '%-14s DIRTY\n' "$NAME"
 }
 check_idle(){
-    STATE_JSON="$(wget -qO- 'http://127.0.0.1:7125/printer/objects/query?print_stats' 2>/dev/null || true)"
+    STATE_JSON="$(wget -qO- "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null || true)"
     case "$STATE_JSON" in
         *'"state":"printing"'*|*'"state": "printing"'*|*'"state":"paused"'*|*'"state": "paused"'*)
             fail 'принтер сейчас печатает или стоит на паузе'
@@ -84,6 +95,262 @@ install_generated(){
         GENERATED_CHANGED=1
     fi
 }
+
+python_bin(){
+    if [ -n "${AD5X_PYTHON_BIN:-}" ] && [ -x "$AD5X_PYTHON_BIN" ]; then
+        echo "$AD5X_PYTHON_BIN"
+    elif [ -x /root/moonraker-env/bin/python3 ]; then
+        echo /root/moonraker-env/bin/python3
+    elif command -v python3 >/dev/null 2>&1; then
+        command -v python3
+    else
+        return 1
+    fi
+}
+sha256_file(){ sha256sum "$1" | awk '{print $1}'; }
+backend_constant(){
+    NAME="$1"
+    sed -n "s/^$NAME = \"\([^\"]*\)\"/\\1/p" "$BACKEND_SOURCE" | head -n 1
+}
+backend_source_valid(){
+    [ -s "$BACKEND_SOURCE" ] || return 1
+    [ -f "$PLUGIN_DIR/VERSION" ] || return 1
+    [ -d "$MOONRAKER_COMPONENTS_DIR" ] || return 1
+    [ -s "$BACKEND_CONFIG" ] || return 1
+    [ "$(grep -c '^\[plugins_ad5x\]$' "$BACKEND_CONFIG" 2>/dev/null || true)" -eq 1 ] || return 1
+    [ "$(grep -Ec '^\[[^]]+\]$' "$BACKEND_CONFIG" 2>/dev/null || true)" -eq 1 ] || return 1
+    PY="$(python_bin)" || return 1
+    "$PY" -B - "$BACKEND_SOURCE" <<'PY' >/dev/null 2>&1 || return 1
+import ast
+import pathlib
+import sys
+ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])
+PY
+    API_VERSION_="$(backend_constant API_VERSION)"
+    BACKEND_VERSION_="$(backend_constant BACKEND_VERSION)"
+    ROOT_VERSION_="$(tr -d '\r\n' <"$PLUGIN_DIR/VERSION")"
+    [ "$API_VERSION_" = "1.0" ] || return 1
+    [ -n "$BACKEND_VERSION_" ] || return 1
+    [ "$BACKEND_VERSION_" = "$ROOT_VERSION_" ] || return 1
+}
+validate_backend_source(){ backend_source_valid || fail 'backend source/config validation failed'; }
+backend_destination_owned(){
+    [ -e "$BACKEND_DEST" ] || [ -L "$BACKEND_DEST" ] || return 0
+    [ -f "$BACKEND_DEST" ] || return 1
+    [ ! -L "$BACKEND_DEST" ] || return 1
+    DEST_HASH="$(sha256_file "$BACKEND_DEST" 2>/dev/null || true)"
+    [ -n "$DEST_HASH" ] || return 1
+    SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE" 2>/dev/null || true)"
+    if [ -f "$BACKEND_HASH_STATE" ] && [ "$(cat "$BACKEND_HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
+        return 0
+    fi
+    [ -n "$SOURCE_HASH" ] && [ "$DEST_HASH" = "$SOURCE_HASH" ]
+}
+validate_backend_destination_ownership(){
+    backend_destination_owned || fail "неизвестный файл в backend destination: $BACKEND_DEST"
+}
+remove_backend_bytecode(){
+    rm -f "$MOONRAKER_COMPONENTS_DIR/__pycache__/plugins_ad5x"*.pyc 2>/dev/null || true
+}
+deploy_backend_managed_copy(){
+    validate_backend_source
+    validate_backend_destination_ownership
+    SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE")"
+    TMP="$MOONRAKER_COMPONENTS_DIR/.plugins_ad5x.py.tmp.$$"
+    rm -f "$TMP"
+    cp "$BACKEND_SOURCE" "$TMP" || { rm -f "$TMP"; return 1; }
+    chmod 0644 "$TMP" || { rm -f "$TMP"; return 1; }
+    [ "$(sha256_file "$TMP")" = "$SOURCE_HASH" ] || { rm -f "$TMP"; return 1; }
+    mv -f "$TMP" "$BACKEND_DEST" || { rm -f "$TMP"; return 1; }
+    [ "$(sha256_file "$BACKEND_DEST")" = "$SOURCE_HASH" ] || return 1
+    remove_backend_bytecode
+    HASH_TMP="$BACKEND_HASH_STATE.tmp.$$"
+    printf '%s\n' "$SOURCE_HASH" >"$HASH_TMP"
+    mv -f "$HASH_TMP" "$BACKEND_HASH_STATE"
+}
+backend_runtime_matches_source(){
+    [ -f "$BACKEND_DEST" ] || return 1
+    [ ! -L "$BACKEND_DEST" ] || return 1
+    [ -f "$BACKEND_HASH_STATE" ] || return 1
+    SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE" 2>/dev/null || true)"
+    DEST_HASH="$(sha256_file "$BACKEND_DEST" 2>/dev/null || true)"
+    RECORDED_HASH="$(cat "$BACKEND_HASH_STATE" 2>/dev/null || true)"
+    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ]
+}
+backend_include_ok(){
+    [ -s "$BACKEND_CONFIG" ] || return 1
+    [ "$(grep -Fxc '[include plugins/ad5x_custom/plugins_ad5x.moonraker.conf]' "$MOONRAKER_INCLUDES" 2>/dev/null || true)" -eq 1 ]
+}
+configure_moonraker_includes(){
+    remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
+    append_line "$MOONRAKER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.moonraker.conf]'
+    append_line "$MOONRAKER_INCLUDES" '[include plugins/ad5x_custom/plugins_ad5x.moonraker.conf]'
+}
+moonraker_process_count(){
+    COUNT=0
+    for P in /proc/[0-9]*; do
+        [ -r "$P/cmdline" ] || continue
+        CMD="$(tr '\0' ' ' <"$P/cmdline" 2>/dev/null || true)"
+        case "$CMD" in *moonraker.py*) COUNT=$((COUNT + 1));; esac
+    done
+    echo "$COUNT"
+}
+stop_moonraker(){
+    [ -n "$ROOT" ] || ROOT="$(find_root)" || return 1
+    chroot "$ROOT" /etc/init.d/S65moonraker stop
+}
+wait_moonraker_stopped(){
+    LIMIT="${1:-$MOONRAKER_STOP_TIMEOUT}"
+    COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        [ "$(moonraker_process_count)" -eq 0 ] && return 0
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    return 1
+}
+start_moonraker(){
+    [ -n "$ROOT" ] || ROOT="$(find_root)" || return 1
+    [ "$(moonraker_process_count)" -eq 0 ] || return 1
+    chroot "$ROOT" /etc/init.d/S65moonraker start
+}
+moonraker_server_info(){ wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/server/info" 2>/dev/null; }
+wait_moonraker_http(){
+    LIMIT="${1:-$MOONRAKER_READY_TIMEOUT}"
+    COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        moonraker_server_info >/dev/null 2>&1 && return 0
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    return 1
+}
+klippy_ready_from_json(){
+    COMPACT="$(printf '%s' "$1" | tr -d '[:space:]')"
+    case "$COMPACT" in *'"klippy_connected":true'*) : ;; *) return 1 ;; esac
+    case "$COMPACT" in *'"klippy_state":"ready"'*) return 0 ;; *) return 1 ;; esac
+}
+wait_klippy_ready(){
+    LIMIT="${1:-$MOONRAKER_READY_TIMEOUT}"
+    COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        INFO="$(moonraker_server_info 2>/dev/null || true)"
+        [ -n "$INFO" ] && klippy_ready_from_json "$INFO" && return 0
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    return 1
+}
+backend_component_state(){
+    INFO="${1:-$(moonraker_server_info 2>/dev/null || true)}"
+    [ -n "$INFO" ] || return 2
+    PY="$(python_bin)" || return 2
+    printf '%s' "$INFO" | "$PY" -B -c '
+import json, sys
+try:
+    data=json.load(sys.stdin); data=data.get("result", data)
+    components=data.get("components") or []
+    failed=data.get("failed_components") or []
+    if "plugins_ad5x" in failed: print("failed")
+    elif "plugins_ad5x" in components: print("ok")
+    else: print("absent")
+except Exception:
+    print("invalid")
+'
+}
+backend_snapshot_valid(){
+    SNAPSHOT="$(wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/server/plugins_ad5x/snapshot" 2>/dev/null || true)"
+    [ -n "$SNAPSHOT" ] || return 1
+    PY="$(python_bin)" || return 1
+    EXPECTED_VERSION="$(tr -d '\r\n' <"$PLUGIN_DIR/VERSION")"
+    printf '%s' "$SNAPSHOT" | "$PY" -B -c '
+import json, sys
+expected=sys.argv[1]
+try:
+    data=json.load(sys.stdin); data=data.get("result", data)
+    ok=(data.get("api_version")=="1.0" and
+        data.get("backend_version")==expected and
+        (data.get("backend") or {}).get("health")=="ok" and
+        isinstance(data.get("modules"), dict))
+except Exception:
+    ok=False
+raise SystemExit(0 if ok else 1)
+' "$EXPECTED_VERSION"
+}
+verify_backend_runtime(){
+    [ "$(backend_component_state 2>/dev/null || true)" = ok ] || return 1
+    backend_snapshot_valid
+}
+verify_backend_absent(){ [ "$(backend_component_state 2>/dev/null || true)" = absent ]; }
+
+remove_update_manager_section(){
+    [ -f "$USER_MOONRAKER" ] || return 0
+    awk 'BEGIN{s=0} /^\[update_manager ad5x_custom\]/{s=1;next} /^\[/{if(s)s=0} !s{print}' \
+        "$USER_MOONRAKER" >"$USER_MOONRAKER.tmp"
+    mv "$USER_MOONRAKER.tmp" "$USER_MOONRAKER"
+}
+configure_update_manager(){
+    [ -f "$USER_MOONRAKER" ] || : >"$USER_MOONRAKER"
+    remove_update_manager_section
+    cat >>"$USER_MOONRAKER" <<CFG
+
+[update_manager ad5x_custom]
+type: git_repo
+channel: dev
+path: /root/printer_data/config/mod_data/plugins/ad5x_custom
+origin: $REPO_URL
+is_system_service: False
+primary_branch: $REF
+CFG
+}
+backend_install_transition(){
+    configure_moonraker_includes
+    configure_update_manager
+    deploy_backend_managed_copy
+}
+backend_uninstall_transition(){
+    remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
+    remove_update_manager_section
+    if [ -e "$BACKEND_DEST" ] || [ -L "$BACKEND_DEST" ]; then
+        backend_destination_owned || return 1
+        rm -f "$BACKEND_DEST"
+    fi
+    remove_backend_bytecode
+    rm -f "$BACKEND_HASH_STATE"
+}
+run_moonraker_transition(){
+    TRANSITION_FN="$1"
+    VERIFY_FN="$2"
+    if [ "$(moonraker_process_count)" -gt 0 ]; then
+        MOONRAKER_WAS_RUNNING=1
+        MOONRAKER_TRANSITION_STARTED=1
+        stop_moonraker || return 1
+    else
+        MOONRAKER_TRANSITION_STARTED=1
+    fi
+    wait_moonraker_stopped || return 1
+    "$TRANSITION_FN" || return 1
+    start_moonraker || return 1
+    wait_moonraker_http || return 1
+    wait_klippy_ready || return 1
+    "$VERIFY_FN"
+}
+restore_moonraker_after_rollback(){
+    [ "$MOONRAKER_TRANSITION_STARTED" -eq 1 ] || return 0
+    if [ "$(moonraker_process_count 2>/dev/null || echo 0)" -gt 0 ]; then
+        stop_moonraker >/dev/null 2>&1 || true
+        wait_moonraker_stopped "$MOONRAKER_STOP_TIMEOUT" >/dev/null 2>&1 || true
+    fi
+    [ "$MOONRAKER_WAS_RUNNING" -eq 1 ] || return 0
+    start_moonraker >/dev/null 2>&1 || return 1
+    wait_moonraker_http "$MOONRAKER_READY_TIMEOUT" >/dev/null 2>&1 || return 1
+    wait_klippy_ready "$MOONRAKER_READY_TIMEOUT" >/dev/null 2>&1
+}
+
+# Tests source helpers without executing installer main.
+if [ "${AD5X_INSTALLER_FUNCTIONS_ONLY:-0}" = 1 ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 generate_notify(){
     SOURCE="/opt/config/mod_data/plugins/notify/ru/notify.cfg"
@@ -198,13 +465,6 @@ HOOK
     sh -n "$POWER_ON" || fail 'ошибка синтаксиса power_on.sh'
 }
 
-remove_update_manager_section(){
-    [ -f "$USER_MOONRAKER" ] || return 0
-    awk 'BEGIN{s=0} /^\[update_manager ad5x_custom\]/{s=1;next} /^\[/{if(s)s=0} !s{print}' \
-        "$USER_MOONRAKER" >"$USER_MOONRAKER.tmp"
-    mv "$USER_MOONRAKER.tmp" "$USER_MOONRAKER"
-}
-
 # Bootstrap clone.
 if [ "$MODE" != --apply-only ] && [ "$MODE" != --refresh-only ] && [ "$MODE" != --status ] && [ "$MODE" != --uninstall ] && [ ! -d "$PLUGIN_DIR/.git" ]; then
     ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
@@ -242,7 +502,23 @@ if [ "$MODE" = --status ]; then
         [ -e "$X" ] && echo "[OK] $X" || echo "[FAIL] $X"
     done
     grep -q 'AD5X_CUSTOM_POWER_ON_BEGIN' "$POWER_ON" && echo '[OK] power_on hook' || echo '[FAIL] power_on hook'
-    wget -qO- http://127.0.0.1:7125/server/info >/dev/null 2>&1 && echo '[OK] Moonraker' || echo '[FAIL] Moonraker'
+    if backend_source_valid; then echo '[OK] backend source'; else echo '[FAIL] backend source'; fi
+    if backend_runtime_matches_source; then echo '[OK] backend runtime file'; else echo '[FAIL] backend runtime file'; fi
+    if backend_include_ok; then echo '[OK] backend config include'; else echo '[FAIL] backend config include'; fi
+    INFO="$(moonraker_server_info 2>/dev/null || true)"
+    if [ -n "$INFO" ]; then
+        case "$(backend_component_state "$INFO" 2>/dev/null || true)" in
+            ok) echo '[OK] Moonraker component presence' ;;
+            failed) echo '[FAIL] Moonraker component presence (failed component)' ;;
+            *) echo '[FAIL] Moonraker component presence' ;;
+        esac
+        if backend_snapshot_valid; then echo '[OK] backend snapshot'; else echo '[FAIL] backend snapshot'; fi
+        klippy_ready_from_json "$INFO" && echo '[OK] Moonraker / Klippy ready' || echo '[FAIL] Moonraker reachable, Klippy not ready'
+    else
+        echo '[UNAVAILABLE] Moonraker component presence (runtime service unavailable)'
+        echo '[UNAVAILABLE] backend snapshot (runtime service unavailable)'
+        echo '[FAIL] Moonraker'
+    fi
     wget -qO- 'http://127.0.0.1:8080/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 1' || echo '[FAIL] Camera 1'
     wget -qO- 'http://127.0.0.1:8081/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 2' || echo '[FAIL] Camera 2'
     wget -qO- http://127.0.0.1:7913/api/health >/dev/null 2>&1 && echo '[OK] IFS' || echo '[FAIL] IFS'
@@ -257,26 +533,71 @@ if [ "$MODE" = --status ]; then
 fi
 
 if [ "$MODE" = --uninstall ]; then
+    check_idle
+    validate_backend_destination_ownership
+    STAMP="$(date +%Y%m%d-%H%M%S)"; B="$BACKUPS/uninstall-$STAMP"; mkdir -p "$B"
+    snapshot "$KLIPPER_INCLUDES" plugins.cfg
+    snapshot "$MOONRAKER_INCLUDES" plugins.moonraker.conf
+    snapshot "$USER_MOONRAKER" user.moonraker.conf
+    snapshot "$POWER_ON" power_on.sh
+    snapshot "$BACKEND_DEST" backend-runtime.py
+    snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+    UNINSTALL_SUCCESS=0
+    rollback_uninstall(){
+        set +e
+        if [ "$MOONRAKER_TRANSITION_STARTED" -eq 1 ] && [ "$(moonraker_process_count 2>/dev/null || echo 0)" -gt 0 ]; then
+            stop_moonraker >/dev/null 2>&1 || true
+            wait_moonraker_stopped >/dev/null 2>&1 || true
+        fi
+        restore_snapshot "$KLIPPER_INCLUDES" plugins.cfg
+        restore_snapshot "$MOONRAKER_INCLUDES" plugins.moonraker.conf
+        restore_snapshot "$USER_MOONRAKER" user.moonraker.conf
+        restore_snapshot "$POWER_ON" power_on.sh
+        restore_snapshot "$BACKEND_DEST" backend-runtime.py
+        restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+        remove_backend_bytecode
+        restore_moonraker_after_rollback || true
+        echo "Uninstall rollback завершён. Backup: $B" >&2
+    }
+    finish_uninstall(){
+        RC=$?
+        trap - EXIT HUP INT TERM
+        if [ "$UNINSTALL_SUCCESS" -ne 1 ]; then
+            rollback_uninstall
+            [ "$RC" -ne 0 ] || RC=1
+        fi
+        exit "$RC"
+    }
+    trap finish_uninstall EXIT HUP INT TERM
+
     remove_lines "$KLIPPER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/'
-    remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
     restore_lines "$KLIPPER_INCLUDES" "$STATE/original-klipper-includes.lines"
-    remove_update_manager_section
     if [ -f "$STATE/original-power_on.sh" ]; then
         cp -p "$STATE/original-power_on.sh" "$POWER_ON"
     else
         strip_block "$POWER_ON" 'AD5X_CUSTOM_POWER_ON_BEGIN' 'AD5X_CUSTOM_POWER_ON_END'
     fi
-    echo 'Интеграция отключена. Исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
+    ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
+    run_moonraker_transition backend_uninstall_transition verify_backend_absent || fail 'backend uninstall lifecycle failed'
+    UNINSTALL_SUCCESS=1
+    trap - EXIT HUP INT TERM
+    echo 'Интеграция отключена. Backend удалён; исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
     exit 0
 fi
 
 check_idle
+validate_backend_source
+validate_backend_destination_ownership
 STAMP="$(date +%Y%m%d-%H%M%S)"; B="$BACKUPS/$STAMP"; mkdir -p "$B/upstream"
 SUCCESS=0
 
 rollback_install(){
     set +e
     echo "ОШИБКА: установка не завершена, выполняется автоматический rollback." >&2
+    if [ "$MOONRAKER_TRANSITION_STARTED" -eq 1 ] && [ "$(moonraker_process_count 2>/dev/null || echo 0)" -gt 0 ]; then
+        stop_moonraker >/dev/null 2>&1 || true
+        wait_moonraker_stopped >/dev/null 2>&1 || true
+    fi
     restore_snapshot "$KLIPPER_INCLUDES" plugins.cfg
     restore_snapshot "$MOONRAKER_INCLUDES" plugins.moonraker.conf
     restore_snapshot "$USER_MOONRAKER" user.moonraker.conf
@@ -284,9 +605,13 @@ rollback_install(){
     restore_snapshot /opt/config/mod_data/camera.conf camera.conf
     restore_snapshot "$GENERATED/notify.cfg" generated-notify.cfg
     restore_snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
+    restore_snapshot "$BACKEND_DEST" backend-runtime.py
+    restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+    remove_backend_bytecode
     [ -f "$B/upstream/notify.cfg" ] && cp -p "$B/upstream/notify.cfg" /opt/config/mod_data/plugins/notify/ru/notify.cfg
     [ -f "$B/upstream/notify.moonraker.cfg" ] && cp -p "$B/upstream/notify.moonraker.cfg" /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg
     [ -f "$B/upstream/timelapse.cfg" ] && cp -p "$B/upstream/timelapse.cfg" /opt/config/mod_data/plugins/timelapse/timelapse.cfg
+    restore_moonraker_after_rollback || echo 'WARN: Moonraker не удалось автоматически вернуть в исходное running-state' >&2
     echo "Rollback завершён. Диагностический backup: $B" >&2
 }
 finish_install(){
@@ -307,6 +632,8 @@ snapshot "$POWER_ON" power_on.sh
 snapshot /opt/config/mod_data/camera.conf camera.conf
 snapshot "$GENERATED/notify.cfg" generated-notify.cfg
 snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
+snapshot "$BACKEND_DEST" backend-runtime.py
+snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.cfg "$B/upstream/notify.cfg"
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg "$B/upstream/notify.moonraker.cfg"
 [ -f /opt/config/mod_data/plugins/timelapse/timelapse.cfg ] && cp -p /opt/config/mod_data/plugins/timelapse/timelapse.cfg "$B/upstream/timelapse.cfg"
@@ -342,25 +669,13 @@ append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.cfg]'
 append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/notify.cfg]'
 append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/timelapse.cfg]'
 
-remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
-append_line "$MOONRAKER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.moonraker.conf]'
-
-[ -f "$USER_MOONRAKER" ] || : >"$USER_MOONRAKER"
-remove_update_manager_section
-cat >>"$USER_MOONRAKER" <<CFG
-
-[update_manager ad5x_custom]
-type: git_repo
-channel: dev
-path: /root/printer_data/config/mod_data/plugins/ad5x_custom
-origin: $REPO_URL
-is_system_service: False
-primary_branch: $REF
-CFG
-
 install_power_on_hook
 rm -f /etc/init.d/S99zzcamera2 /etc/init.d/S59ad5x-custom-refresh /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S98ad5x-camera-select /etc/init.d/S99zzad5x-camera2 2>/dev/null || true
 
+run_moonraker_transition backend_install_transition verify_backend_runtime || fail 'backend deployment lifecycle failed'
+
 SUCCESS=1
+trap - EXIT HUP INT TERM
 echo "AD5X Custom применён. Backup: $B"
-echo 'Для активации требуется полное выключение и включение принтера.'
+echo 'Plugins AD5X backend применён через managed copy и controlled Moonraker lifecycle.'
+echo 'Для активации остальных camera/power-on изменений требуется полное выключение и включение принтера.'

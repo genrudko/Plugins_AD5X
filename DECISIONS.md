@@ -526,3 +526,75 @@ Steady-state polling не используется. `snapshot_changed` пред�
 - deployment способ (`symlink`/`copy`) в Moonraker components остаётся implementation detail до проверки на реальном Z-Mod на import, update, uninstall, rollback и clean-state;
 - exact установленный Moonraker runtime commit на реальном AD5X пока не доказан и должен быть проверен read-only перед printer deployment/acceptance;
 - Hardware Manager, AUX Fan и другие module implementations не входят в backend foundation PoC.
+
+---
+
+## D-023 — Backend runtime component deploys as managed copy with observed-stop lifecycle
+
+**Дата:** 2026-08-13  
+**Статус:** accepted  
+**Уточняет:** D-014, D-022
+
+### Решение
+
+Production runtime Plugins AD5X backend развёртывается как **managed copy** в Moonraker components:
+
+```text
+installed Plugins_AD5X checkout
+        ↓
+validate exact source artifact/version
+        ↓
+atomic managed copy
+        ↓
+/opt/config/base/moonraker/components/plugins_ad5x.py
+```
+
+Plugins AD5X checkout не является runtime import target и не связывается с Moonraker через symlink. Изменение Git checkout само по себе не должно немедленно менять исполняемый runtime-код.
+
+До replacement installer проверяет backend artifact, API/backend versions, runtime destination directory и ownership существующего destination. Неизвестный существующий destination не перезаписывается. Managed copy создаётся через temporary file в том же destination directory, permissions/hash verification и atomic rename.
+
+Для backend deployment/update/uninstall/rollback запрещено использовать:
+
+```sh
+/etc/init.d/S65moonraker restart
+```
+
+Production lifecycle:
+
+```text
+stop
+↓
+observe actual moonraker.py process count == 0
+↓
+filesystem/config transition
+↓
+start
+↓
+wait HTTP /server/info
+↓
+wait klippy_connected=true
+↓
+wait klippy_state=ready
+```
+
+HTTP reachability сама по себе не является readiness; `klippy_state=startup` также не является final ready. Bounded timeout приводит к failure/rollback. Автоматический `kill -9` не используется.
+
+Moonraker hard recovery / `git clean` может удалить untracked managed runtime component. Это ожидаемый destructive external event: Plugins AD5X apply/repair обязан восстановить runtime artifact из exact installed checkout. Untracked component в Moonraker tree является известным trade-off и **не маскируется** через `.git/info/exclude`.
+
+Uninstall удаляет только доказанно owned runtime component, backend activation и `plugins_ad5x*.pyc`; неизвестный destination оставляется нетронутым с fail-safe error. Rollback восстанавливает exact pre-operation backend/config state и исходное running-state Moonraker без рекурсивных restart loops.
+
+### Почему
+
+Controlled acceptance на физическом AD5X доказал managed-copy load/API compatibility и clean rollback. Одновременно был обнаружен lifecycle race штатного Z-Mod `S65moonraker restart`: SIGTERM наблюдался в `23:50:13.211`, shutdown завершился только в `23:50:15.565` (~2.35 s), тогда как init script ждёт фиксированные 2 секунды. `start` сработал до завершения старого Python и сообщил, что `/root/moonraker-env/bin/python3 is already running`; после завершения старого процесса Moonraker остался выключенным.
+
+Следовательно, fixed sleep не может быть критерием shutdown/readiness. Нужна наблюдаемая граница по фактическому процессу и фактическому Klippy state.
+
+### Следствие
+
+- deployment detail, оставленный открытым D-022, разрешён в пользу managed copy;
+- Git checkout update ≠ runtime update — это намеренное свойство;
+- `install.sh --apply-only` является явной apply/repair operation после update/hard recovery;
+- `--refresh-only` остаётся лёгким overlay-refresh и не запускает backend service transition;
+- backend runtime/config входят в существующий snapshot/rollback contour;
+- `--status` различает source/runtime/config/component/snapshot и service-unavailable state;
+- production installer не скрывает managed runtime artifact из Moonraker Git status.

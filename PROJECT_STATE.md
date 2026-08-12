@@ -1,359 +1,122 @@
 # Plugins AD5X — Project State
 
-> Оперативный снимок состояния проекта. Этот файл должен позволять новому координатору или разработчику быстро восстановить контекст без чтения длинной истории чата.
+> Оперативный снимок состояния проекта. Этот файл должен позволять новому координатору или разработчику быстро восстановить актуальный контекст без чтения длинной истории чата. История решений хранится в `DECISIONS.md`, история изменений — в Git.
 
-**Последнее обновление:** 2026-08-12  
+**Последнее обновление:** 2026-08-13  
 **Текущая фаза:** Phase 0 — Platform Foundation  
-**Статус:** Fluidd frontend shell PoC accepted; backend contract v1 accepted; backend repository PoC implemented / automated tests PASS; printer deployment acceptance pending  
+**Статус:** Fluidd frontend shell PoC accepted; backend contract v1 accepted; backend repository PoC accepted; real-printer backend/managed-copy/rollback acceptance PASS; production installer lifecycle integration implemented / repository tests PASS; coordinator review pending  
 **Активный issue:** [#8 — PLATFORM-FOUNDATION-002: определить Plugins AD5X backend capability/API contract](https://github.com/genrudko/Plugins_AD5X/issues/8)  
-**Изменения на принтере для текущей фазы:** отсутствуют
+**Состояние реального принтера после controlled acceptance:** исходный baseline восстановлен; backend/config удалены; Moonraker и `ad5x_custom` CLEAN; Camera 1/2 и IFS PASS
 
 ---
 
-## 1. Что уже существует
+## 1. Архитектурная цель и границы
 
-Репозиторий `genrudko/Plugins_AD5X` уже содержит рабочий/экспериментальный integration layer `ad5x_custom`, который решает ряд конкретных задач вокруг камер, IFS, Notify, Timelapse и сохранения upstream-репозиториев в clean-state.
+Plugins AD5X — UX/integration layer для Flashforge AD5X поверх Z-Mod/Klipper/Moonraker, а не новая прошивка и не форк Z-Mod.
 
-Текущая реализация важна как **рабочий baseline и источник практического опыта**, но её нельзя автоматически считать окончательной архитектурой будущей модульной системы.
+Основные инварианты:
 
-Ключевое правило на Phase 0:
+- GitHub и фактический код — источник истины;
+- Z-Mod не форкаем;
+- один backend/API обслуживает Fluidd, будущий Mainsail и local screen;
+- frontend не определяет hardware/business capabilities самостоятельно;
+- UI/existing API/macros предпочтительнее отдельного daemon;
+- steady-state polling и тяжёлые сервисы на AD5X не вводятся без доказанной необходимости;
+- ошибка Plugins AD5X не должна лишать пользователя базовой печати через Z-Mod;
+- install/update/uninstall должны иметь validation, backup и rollback.
 
-> **Не ломать существующий `ad5x_custom` ради красивого рефакторинга, пока новый каркас не имеет чётких границ и миграционного пути.**
-
----
-
-## 2. Репозитории и ветки
-
-| Репозиторий | Ветка | Роль |
-|---|---|---|
-| `genrudko/Plugins_AD5X` | `main` | стабильная публичная ветка существующей интеграции |
-| `genrudko/Plugins_AD5X` | `dev` | текущая архитектурная и экспериментальная разработка |
-| `ghzserg/fluidd` | `develop` | upstream Fluidd для Z-Mod |
-| `genrudko/fluidd` | `develop` | наш sync-слой, держать максимально близко к `ghzserg/fluidd:develop` |
-| `genrudko/fluidd` | `ad5x-dev` | рабочая ветка UI Plugins AD5X |
-
-На момент Fluidd integration discovery:
-
-- `ghzserg/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
-- `genrudko/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
-- `genrudko/fluidd:ad5x-dev` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`.
-
-Принятый frontend shell PoC после final acceptance:
-
-- base `genrudko/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
-- final head `genrudko/fluidd:ad5x-dev` — `c56cec9a2c846ee5b492242887051c8d2d74eb5a`;
-- compare: `ahead_by: 11`, `behind_by: 0`;
-- `ghzserg/fluidd:develop` и `genrudko/fluidd:develop` после acceptance остаются на том же base commit;
-- upstream unchanged; real conflict rehearsal not applicable.
-
-Backend contract discovery verified against:
-
-- `ghzserg/z_ad5x:1.7` — `2e32155d00e464094b8c7197e23783ec821a112c`;
-- configured Moonraker source `ghzserg/zmod_moonraker:main` — discovery head `a5ac2593f5937a0b5fea6d2aeb1fab8c241b0a8e`;
-- upstream `Arksine/moonraker:master` — discovery head `d5ee17128bb88434aacdab90c2e9e990e2b64e4a`.
-
-Критичные для backend contract source blobs (`server.py`, `application.py`, `common.py`, `websockets.py`) у исследованных `zmod_moonraker` и upstream heads совпадают по содержимому. Exact commit Moonraker, установленный на реальном AD5X, пока не подтверждён и должен быть проверен read-only перед printer deployment/acceptance.
-
-Z-Mod **не форкаем**.
-
----
-
-## 3. Зафиксированная цель
-
-Plugins AD5X должен стать **UX/integration layer для Flashforge AD5X поверх Z-Mod**, а не отдельной прошивкой.
-
-Главный пользовательский критерий:
+Главный UX-критерий остаётся прежним:
 
 > **90% повседневных действий должны выполняться без Wiki, SSH, консоли и знания названий макросов.**
 
-При этом Advanced-режим и ручная настройка должны сохраняться.
+---
+
+## 2. Репозитории, ветки и принятые baselines
+
+| Репозиторий | Ветка | Роль / актуальный факт |
+|---|---|---|
+| `genrudko/Plugins_AD5X` | `main` | стабильная публичная ветка |
+| `genrudko/Plugins_AD5X` | `dev` | текущая Platform Foundation / integration разработка |
+| `ghzserg/fluidd` | `develop` | Z-Mod Fluidd upstream |
+| `genrudko/fluidd` | `develop` | upstream-sync branch |
+| `genrudko/fluidd` | `ad5x-dev` | рабочая ветка UI Plugins AD5X |
+
+Fluidd foundation acceptance:
+
+```text
+ghzserg/fluidd:develop   7f024c08aac4093aa8aa2e26e329df5832ebe778
+genrudko/fluidd:develop  7f024c08aac4093aa8aa2e26e329df5832ebe778
+genrudko/fluidd:ad5x-dev c56cec9a2c846ee5b492242887051c8d2d74eb5a
+compare ad5x-dev vs develop: ahead_by 11 / behind_by 0
+```
+
+Backend contract discovery was verified against:
+
+```text
+ghzserg/z_ad5x:1.7                 2e32155d00e464094b8c7197e23783ec821a112c
+ghzserg/zmod_moonraker:main        a5ac2593f5937a0b5fea6d2aeb1fab8c241b0a8e
+Arksine/moonraker:master            d5ee17128bb88434aacdab90c2e9e990e2b64e4a
+```
+
+The physical AD5X runtime was subsequently confirmed directly:
+
+```text
+Moonraker Git HEAD: a5ac2593f5937a0b5fea6d2aeb1fab8c241b0a8e
+Moonraker branch:   main
+Moonraker path:     /opt/config/base/moonraker
+runtime symlink:    /root/moonraker-env/moonraker -> /opt/config/base/moonraker
+Python:             3.12.9
+origin:             ghzserg/zmod_moonraker.git
+```
+
+Installed `ad5x_custom` on the printer during acceptance remained on stable `main` at:
+
+```text
+735ef25a42cc6097500bd8177989e7f9656a4dda
+```
+
+and remained Git CLEAN. Controlled testing did **not** switch that installed checkout to `dev`.
 
 ---
 
-## 4. Текущий приоритет разработки
+## 3. Phase 0 frontend foundation — accepted
 
-Порядок работ на данный момент:
+Issue #7 is completed. Fluidd integration follows D-018–D-021.
 
-```text
-Phase 0  Platform Foundation
-    ↓
-Phase 1  Hardware / Mods Manager
-    ↓
-Phase 2  IFS Manager
-    ↓
-Phase 3  Calibration Center
-    ↓
-Phase 4  Print Preflight / Safe Start
-    ↓
-Phase 5+ Camera / Maintenance / Diagnostics / Health
-```
-
-Первый эталонный hardware use case после Platform Foundation — **Side/AUX/PLA Fan**.
-
-Причина выбора: это простой и очень показательный сценарий, где сегодня физически установленное штатно совместимое железо всё равно требует поиска чужих конфигов и ручного редактирования Klipper.
-
-Желаемый UX:
+Ownership boundary:
 
 ```text
-Side / AUX Fan
-[✓] Установлен
-
-→ config применяется автоматически
-→ система валидирует состояние
-→ появляется управление/тест
+src/ad5x/**
 ```
 
-Но реализация Side/AUX/PLA Fan **не входит** в frontend shell/backend foundation PoC.
-
----
-
-## 5. Активная задача
-
-### [#8 — Platform Foundation: backend capability/API contract](https://github.com/genrudko/Plugins_AD5X/issues/8)
-
-Issue #7 `PLATFORM-FOUNDATION-001` завершён и закрыт как `completed`: Fluidd integration discovery, минимальный frontend shell и его automated acceptance прошли Definition of Done.
-
-Discovery-часть issue #8 выполнена и contract proposal принят координатором с уточнениями; архитектурный результат зафиксирован в D-022.
-
-Принятый backend foundation contract:
+Normal upstream Fluidd patch surface is limited to:
 
 ```text
-optional Moonraker component:
-plugins_ad5x
-
-coarse presence:
-server.info.components
-
-health/readiness:
-backend-owned snapshot
-
-HTTP:
-GET /server/plugins_ad5x/snapshot
-
-JSON-RPC:
-server.plugins_ad5x.snapshot
-
-API version:
-MAJOR.MINOR
-
-state delivery:
-atomic snapshot + low-frequency invalidation notification
-
-notification:
-notify_plugins_ad5x_snapshot_changed
-
-auth:
-Moonraker-owned
-
-steady polling:
-NO
-
-separate daemon / own DB in Phase 0:
-NO
+src/components/layout/AppNavDrawer.vue
+src/router/index.ts
 ```
 
-`server.info.components` не является health check: имя может одновременно присутствовать в `components` и `failed_components`, если object загрузился, но `component_init()` завершился ошибкой. Поэтому D-020 coarse presence остаётся первым уровнем, а readiness/health — вторым уровнем snapshot API.
+The route `/ad5x` is static; the navigation entry is capability-gated. Direct navigation without backend fails safely as `backend unavailable` and does not issue AD5X-specific RPC.
 
-Repository-side backend PoC теперь реализован и покрыт isolation tests. Он ещё **не установлен и не принят на реальном AD5X**. Следующий разрешённый этап по #8 — read-only runtime verification, затем отдельно согласованный controlled printer backend acceptance и после него Fluidd integration с production snapshot API.
-
-### 5.1. Найденные integration points Fluidd
-
-Фактическая цепочка:
-
-```text
-navigation
-→ route
-→ page/shell
-→ AD5X-local store/API adapter
-→ capability/state
-→ штатный Fluidd WebSocket transport
-→ Moonraker
-→ Plugins AD5X backend
-```
-
-Ключевые upstream-файлы:
-
-- navigation — `src/components/layout/AppNavDrawer.vue`;
-- routing — `src/router/index.ts`;
-- общий page shell/layout — `src/App.vue` через штатный `<router-view>`;
-- обычные Fluidd pages — `src/views/*.vue`;
-- root Vuex registry — `src/store/index.ts`;
-- root typed store declarations — `src/store/types.ts`;
-- server component capability precedent — `src/store/server/getters.ts`, getter `server/componentSupport(component)`;
-- server info lifecycle — `src/store/server/actions.ts`;
-- Moonraker RPC façade — `src/api/socketActions.ts`;
-- низкоуровневый WebSocket/JSON-RPC transport — `src/plugins/socketClient.ts`.
-
-### 5.2. Согласованный frontend ownership boundary
-
-AD5X-специфичный frontend-код живёт в собственной области `src/ad5x/**`.
-
-В реализованном PoC созданы:
-
-```text
-src/ad5x/
-├── integration.ts
-├── router.ts
-├── __tests__/
-│   ├── integration.spec.ts
-│   └── router.spec.ts
-├── api/
-│   ├── client.ts
-│   ├── types.ts
-│   └── __tests__/
-│       └── client.spec.ts
-├── store/
-│   ├── index.ts
-│   ├── types.ts
-│   └── __tests__/
-│       └── index.spec.ts
-└── views/
-    ├── Ad5xShell.vue
-    └── __tests__/
-        └── Ad5xShell.spec.ts
-```
-
-Не создаются заранее полноценные `hardware/`, `ifs/`, `calibration/`, `manifest/` и другие продуктовые подсистемы до дальнейшего решения по Platform Foundation.
-
-### 5.3. Минимальный upstream patch surface
-
-Фактический PoC изменяет только два существующих Fluidd-файла:
-
-1. `src/components/layout/AppNavDrawer.vue` — один пункт Plugins AD5X и coarse capability gate;
-2. `src/router/index.ts` — подключение AD5X route tree.
-
-Не изменены:
-
-- `src/App.vue`;
-- существующие `src/views/*`;
-- `src/store/index.ts`;
-- `src/store/types.ts`;
-- `src/store/server/*`;
-- `src/api/socketActions.ts`;
-- `src/plugins/socketClient.ts`.
-
-Отдельно добавлен downstream infrastructure-файл `.github/workflows/ad5x-ci.yml`; upstream `.github/workflows/build.yml` не изменён.
-
-Final diff review подтвердил соответствие D-018 и D-021.
-
-### 5.4. Согласованная route/navigation policy
-
-Реализовано и подтверждено unit acceptance:
-
-- `/ad5x` регистрируется статически;
-- пункт Plugins AD5X в основной навигации capability-gated;
-- direct `/ad5x` при отсутствии backend показывает безопасное `Plugins AD5X backend unavailable`;
-- absent path возвращается до AD5X-specific API вызова;
-- обычная работа Fluidd не зависит от Plugins AD5X frontend/backend.
-
-Coordinator review дополнительно проверил bootstrap lifecycle Fluidd: `serverInfo()` выполняется до перехода socket state в `ready`, а `<router-view>` основного приложения монтируется при `socketReady`, поэтому первоначальный backend presence не должен вычисляться до bootstrap `server.info` в штатном lifecycle.
-
-### 5.5. Capability boundary
-
-Capability detection двухступенчатый:
+Capability detection is two-stage:
 
 ```text
 Moonraker server.info.components
-        ↓
-есть Plugins AD5X backend object?
+        ↓ coarse presence
+plugins_ad5x present?
         ↓ yes
 server.plugins_ad5x.snapshot
         ↓
-API/backend version + health + detailed module capabilities/state
+version / backend health / module capabilities and state
 ```
 
-Coarse detection использует существующий механизм Fluidd `server/componentSupport(...)`.
-
-Production component identifier принят как `plugins_ad5x`. Provisional frontend seam `plugins_ad5x.get_capabilities` не является production API и должен быть заменён на `server.plugins_ad5x.snapshot` на этапе backend integration.
-
-Snapshot contract v1 различает platform metadata и module-owned state. Минимальный envelope:
+Accepted Fluidd feature-head:
 
 ```text
-api_version
-backend_version
-revision
-backend.health
-modules{}
+c56cec9a2c846ee5b492242887051c8d2d74eb5a
 ```
 
-Common module lifecycle fields:
-
-```text
-support
-enabled
-presence
-available
-health
-capabilities[]
-state{}
-```
-
-`available` рассчитывается backend/provider; frontend не повторяет hardware/business logic. `unknown`/`not_applicable` допустимы, если состояние нельзя доказательно установить.
-
-### 5.6. Реализация frontend shell PoC
-
-Initial reviewed feature-head:
-
-`c0810f5ec3a2795b9743a48fbf00737ff0c43d0d`
-
-Исходные PoC-коммиты:
-
-- `4e1cfe3534af5fc7eff3a1c18b616dec038ba911` — `feat(ad5x): add local frontend shell foundation`;
-- `aa9261eaa5c50aab9f43bc7a8abb0229a1f66918` — `feat(ad5x): register local route tree`;
-- `0919b70d4bf5751ffb9ae6192e4896ef3b1a499f` — `feat(ad5x): gate navigation on backend support`;
-- `c0810f5ec3a2795b9743a48fbf00737ff0c43d0d` — `fix(ad5x): reset dynamic store with Fluidd lifecycle`.
-
-Downstream CI и acceptance-fix commits:
-
-- `97fa35e9987644142c5dd5d73756e443f84fd62a` — `ci(ad5x): add downstream verification workflow`;
-- `f0f590ba945b4bfba4d9bd44d089fc26c4d451a2` — `fix(ad5x): satisfy Fluidd lint rules`;
-- `c662cc04fbf993ad39fecb7f7629c03344e1109a` — `fix(ad5x): decouple dynamic store typing from Fluidd root`;
-- `69a9f349fc529da74af39963e27c8cdb77893a32` — `fix(ad5x): isolate store tests from Fluidd root types`;
-- `1cda7ffacab2d8e0b95e2839e789f0376d1edb98` — `fix(ad5x): type local socket boundary explicitly`;
-- `47cddb6c770501bcbd0a284dd6d414ffed4b9f0d` — `fix(ad5x): make socket boundary cast explicit`;
-- `c56cec9a2c846ee5b492242887051c8d2d74eb5a` — `test(ad5x): exercise shell through Vuex component getter`.
-
-Final accepted feature-head:
-
-`c56cec9a2c846ee5b492242887051c8d2d74eb5a`
-
-Реализованы и фактически пройдены specs для:
-
-- provisional backend component gate;
-- static `/ad5x` route;
-- local API adapter через существующий Fluidd socket transport;
-- lazy dynamic Vuex registration;
-- `ad5x/reset` для участия dynamic module в Fluidd root reset lifecycle;
-- backend absent → API/RPC не вызывается;
-- backend mocked/present → capability payload проходит API/state boundary и отображается shell.
-
-Dynamic Vuex implementation не потребовала изменений root Fluidd store registry. После успешных `type-check`, unit tests и production build hypothesis формально **CONFIRMED**.
-
-### 5.7. Downstream CI и final automated acceptance
-
-Для `ad5x-dev` добавлен отдельный downstream-only workflow:
-
-```text
-.github/workflows/ad5x-ci.yml
-```
-
-Triggers:
-
-```text
-push → ad5x-dev
-workflow_dispatch
-```
-
-Upstream `.github/workflows/build.yml` не изменялся.
-
-Final GitHub Actions run:
-
-- run `31621932415`;
-- URL: `https://github.com/genrudko/fluidd/actions/runs/31621932415`;
-- exact head: `c56cec9a2c846ee5b492242887051c8d2d74eb5a`;
-- conclusion: `success`.
-
-Обязательная verification chain:
+Final downstream CI run `31621932415` succeeded with:
 
 ```text
 pnpm i --frozen-lockfile   PASS
@@ -364,247 +127,359 @@ pnpm run circular-check    PASS
 pnpm run build             PASS
 ```
 
-Unit result: `20 passed` test files, `415 passed` tests. `src/ad5x/views/__tests__/Ad5xShell.spec.ts` — `2 passed`.
+Unit result at acceptance: 20 test files / 415 tests PASS. Dynamic Vuex registration without changes to the Fluidd root store was therefore confirmed.
 
-Acceptance outcomes:
+---
 
-- Backend absent — **PASS**;
-- Backend mocked/present — **PASS**;
-- Dynamic Vuex hypothesis — **CONFIRMED**;
-- circular dependencies — **none found**;
-- production build — **PASS**.
+## 4. Backend contract v1 — accepted
 
-Final `develop → ad5x-dev` diff:
-
-Existing Fluidd product files modified:
+D-022 defines an optional in-process Moonraker component:
 
 ```text
-src/components/layout/AppNavDrawer.vue
-src/router/index.ts
+component: plugins_ad5x
+config:    [plugins_ad5x]
 ```
 
-AD5X files:
+Production read-only snapshot contract:
 
 ```text
-src/ad5x/__tests__/integration.spec.ts
-src/ad5x/__tests__/router.spec.ts
-src/ad5x/api/__tests__/client.spec.ts
-src/ad5x/api/client.ts
-src/ad5x/api/types.ts
-src/ad5x/integration.ts
-src/ad5x/router.ts
-src/ad5x/store/__tests__/index.spec.ts
-src/ad5x/store/index.ts
-src/ad5x/store/types.ts
-src/ad5x/views/Ad5xShell.vue
-src/ad5x/views/__tests__/Ad5xShell.spec.ts
+HTTP:     GET /server/plugins_ad5x/snapshot
+JSON-RPC: server.plugins_ad5x.snapshot
+API:      1.0
+backend:  release version, currently 0.1.2
 ```
 
-Infrastructure files:
+Minimal snapshot envelope:
 
 ```text
-.github/workflows/ad5x-ci.yml
+api_version
+backend_version
+revision
+backend.health
+modules{}
 ```
 
-Compare:
+State invalidation contract:
 
 ```text
-ahead_by: 11
-behind_by: 0
+internal event:     plugins_ad5x:snapshot_changed
+wire notification:  notify_plugins_ad5x_snapshot_changed
 ```
 
-Upstream state после acceptance:
+`revision` is process-local and resets across Moonraker restart. Notification is low-frequency invalidation, not high-rate telemetry. After reconnect the frontend performs a full `server.info → snapshot` resync. No steady-state polling, separate daemon or own DB exists for Platform Foundation.
 
-```text
-ghzserg/fluidd:develop  7f024c08aac4093aa8aa2e26e329df5832ebe778
-genrudko/fluidd:develop 7f024c08aac4093aa8aa2e26e329df5832ebe778
-```
-
-Upstream unchanged; real conflict rehearsal not applicable.
-
-Frontend shell PoC имеет статус **accepted / Definition of Done complete**. Это не означает завершение всей Phase 0.
-
-### 5.8. Backend repository PoC
-
-Минимальный backend foundation PoC реализован в `genrudko/Plugins_AD5X:dev` без изменения Moonraker/Z-Mod/Fluidd upstream и без действий на принтере.
-
-Новые файлы:
+Repository-side component:
 
 ```text
 moonraker/components/plugins_ad5x.py
-tests/test_plugins_ad5x_component.py
 ```
 
-Коммиты:
+Repository PoC commit baseline used for the real printer acceptance:
 
 ```text
-5428339d996c8c9a1f0abc6e26b2ac3c3e817e21  feat(backend): add Moonraker foundation component
-72a9004430d2324b3ef0f79734691403e5bece6f  test(backend): cover snapshot contract
+2b02b7d8b1a8f7421173816cc5ddd93ffd578670
+artifact SHA256:
+8ae26bc4a9669147274a2b7d1caff86d28a69b70715504f6edd7c4cec1df6c3a
 ```
 
-Repository PoC подтверждает:
+The component PoC is deliberately minimal: no hardware providers, polling, daemon, DB or blocking I/O.
 
-- `load_component(config)` возвращает optional component object;
-- endpoint exact: `GET /server/plugins_ad5x/snapshot`;
-- JSON-RPC derivation current Moonraker: `server.plugins_ad5x.snapshot`;
-- transports exact: HTTP + WEBSOCKET, без MQTT/INTERNAL;
-- `auth_required=True`;
-- `api_version = "1.0"`;
-- `backend_version = "0.1.2"` и automated test сверяет его с root `VERSION`;
-- initial `revision = 1`, increment только in-process;
-- invalidation event: `plugins_ad5x:snapshot_changed`;
-- explicit notification name: `plugins_ad5x_snapshot_changed`;
-- wire method: `notify_plugins_ad5x_snapshot_changed`;
-- snapshot `modules == {}`;
-- нет hardware discovery, Klipper dependency, polling, daemon, DB, subprocess или blocking I/O.
+---
 
-Isolation verification:
+## 5. Real AD5X backend acceptance — ACCEPTED
+
+Controlled printer acceptance under issue #8 is complete.
+
+### 5.1 Active runtime PASS
+
+Managed-copy deployment was tested on the actual printer:
 
 ```text
-python -m compileall moonraker tests                      PASS
-python -m unittest -v tests/test_plugins_ad5x_component.py  PASS (8/8)
+source artifact
+→ validation
+→ atomic managed copy
+→ /opt/config/base/moonraker/components/plugins_ad5x.py
+→ [plugins_ad5x] activation
+→ Moonraker load
+→ API acceptance
 ```
 
-Git blob SHA протестированных локально файлов совпадает с GitHub blobs после commit, поэтому verification относится к exact repository content.
+Observed active state:
 
-`install.sh` и `ad5x_custom.moonraker.conf` на этом шаге намеренно не менялись: deployment mechanism (`symlink` vs `copy`) остаётся printer-test decision по D-022. Runtime Moonraker verification и controlled printer acceptance — pending.
+- `plugins_ad5x` present in `server.info.components`;
+- `plugins_ad5x` absent from `failed_components`;
+- `klippy_connected=true`;
+- `klippy_state=ready`;
+- `warnings=[]`;
+- HTTP snapshot returned exact v1 envelope:
 
----
+```json
+{
+  "api_version": "1.0",
+  "backend_version": "0.1.2",
+  "revision": 1,
+  "backend": {"health": "ok"},
+  "modules": {}
+}
+```
 
-## 6. Что сейчас НЕ делать
-
-После repository-side backend PoC по #8 без отдельного разрешения координатора:
-
-- не реализовывать Hardware Manager;
-- не реализовывать AUX/PLA Fan;
-- не переносить IFS UI;
-- не начинать Calibration Center;
-- не начинать Print Preflight;
-- не рефакторить существующий `ad5x_custom` массово;
-- не форкать и не править tracked Z-Mod/Moonraker source;
-- не создавать отдельный daemon/agent или собственную DB без доказанного нового требования;
-- не переносить hardware/business logic во Fluidd;
-- не начинать Mainsail/HelixScreen parity;
-- не закреплять окончательный format module manifest;
-- не устанавливать backend на реальный принтер без отдельного controlled test step;
-- не трактовать `server.info.components` как health/readiness.
-
-Следующий narrow scope требует coordinator review: read-only runtime verification, controlled printer backend acceptance и затем Fluidd replacement provisional RPC на production snapshot method.
-
----
-
-## 7. Известные архитектурные решения
-
-Уже принято:
-
-- GitHub — источник истины;
-- `main` — stable, `dev` — experiment/integration;
-- Z-Mod не форкаем;
-- Fluidd форкаем от `ghzserg/fluidd`, а не напрямую от `fluidd-core/fluidd`;
-- `genrudko/fluidd:develop` держим как upstream-sync branch;
-- наши UI-изменения идут в `genrudko/fluidd:ad5x-dev`;
-- один backend/API должен обслуживать разные frontend;
-- Hardware Manager — registry/UI отдельных модулей, а не монолит;
-- IFS должен идентифицировать конкретную катушку, а не угадывать её только по RGB;
-- Calibration Center должен хранить контекст валидности Z-offset, а не только число;
-- Print Preflight — guard перед штатным стартом, а не новый print engine;
-- rollback и сохранение базовой печати через Z-Mod обязательны;
-- Fluidd integration использует ownership boundary `src/ad5x/**` и целевой two-seam upstream patch surface;
-- `/ad5x` статический, navigation item capability-gated;
-- capability detection двухступенчатый: backend presence → backend-owned detailed capabilities/state;
-- `ad5x-dev` проверяется отдельным downstream-only CI workflow, не меняющим upstream `build.yml`;
-- backend foundation реализуется как optional in-process Moonraker component `plugins_ad5x`, без отдельного daemon/DB на Phase 0;
-- production read-only API v1 — `GET /server/plugins_ad5x/snapshot` / `server.plugins_ad5x.snapshot`, Moonraker-authenticated;
-- state propagation — atomic snapshot + low-frequency invalidation notification, full resync после reconnect, без steady-state polling.
-
-Подробности: `ARCHITECTURE.md` и `DECISIONS.md`, особенно D-018–D-022.
-
----
-
-## 8. Открытые вопросы
-
-### 8.1. Backend printer acceptance/deployment
-
-Backend capability/API contract v1 принят в D-022, а repository-side implementation выполнена и прошла automated isolation tests. Реальный runtime acceptance пока не выполнен.
-
-Перед controlled deployment остаётся доказать на физическом AD5X:
-
-- exact runtime Moonraker version/Git HEAD;
-- import/load component в фактической Z-Mod Moonraker installation;
-- `server.info.components` coarse presence;
-- real HTTP + WebSocket snapshot access через Moonraker auth;
-- real notification delivery по WebSocket;
-- optional component fail-safe behavior;
-- uninstall/rollback и clean-state semantics;
-- выбранный deployment mechanism не ломается при Moonraker/Z-Mod update.
-
-До printer deployment требуется read-only подтвердить:
+Baseline services while backend was active:
 
 ```text
-server.info.moonraker_version
-git -C /opt/config/base/moonraker rev-parse HEAD
-/root/moonraker-env/bin/python3 --version
-git -C /opt/config/base/moonraker status --short
-readlink -f /root/moonraker-env/moonraker
+Camera 1: PASS
+Camera 2: PASS
+IFS:      PASS
 ```
 
-Exact runtime Moonraker commit пока **unresolved**, хотя исследованные current Z-Mod Moonraker source blobs для contract-critical mechanisms совпадают с upstream.
+Expected Moonraker Git effect while installed was only the untracked managed runtime component. `ad5x_custom` remained CLEAN.
 
-Deployment detail `symlink vs copy` в Moonraker components не утверждён до реального Z-Mod test.
+### 5.2 Mandatory rollback PASS
 
-### 8.2. AD5X-local store registration
+Controlled rollback was also accepted:
 
-PoC реализует local/lazy dynamic Vuex registration внутри `src/ad5x/**` без изменения `src/store/index.ts` и `src/store/types.ts`.
+- printer idle precheck PASS;
+- actual Moonraker process disappearance observed before filesystem restoration;
+- original Moonraker include config restored;
+- managed component and `plugins_ad5x*.pyc` removed;
+- Moonraker and `ad5x_custom` Git status returned CLEAN;
+- Moonraker started once and Klippy reached `ready`;
+- `plugins_ad5x` absent after rollback;
+- Camera 1/2 and IFS remained PASS;
+- original Moonraker and `ad5x_custom` heads were preserved.
 
-Formal status после downstream CI: **CONFIRMED**. Реальный `type-check`, `415` unit tests, circular-check и production build прошли на exact accepted feature-head `c56cec9a2c846ee5b492242887051c8d2d74eb5a`.
-
-### 8.3. Moonraker update_manager override
-
-В Z-Mod Fluidd обновляется отдельным `[update_manager fluidd]`.
-
-Есть идея переопределить только источник `repo` через пользовательский Moonraker config и направить updater на наш fork, **но точное поведение merge/duplicate sections должно быть подтверждено по актуальной документации/коду Moonraker до реализации**.
-
-Пока это гипотеза, а не утверждённый механизм.
-
-### 8.4. Module manifest format
-
-Нужные поля примерно определены, но конкретный формат (`json/yaml/toml/другое`) пока не выбран.
-
-Сначала нужно проверить минимальный backend provider/registry seam; production manifest format не нужен для foundation PoC.
+Post-test printer state is therefore the original clean baseline; no persistent backend/config from the PoC remains installed.
 
 ---
 
-## 9. Критерий завершения Phase 0
+## 6. Lifecycle defect discovered on the real printer
 
-Phase 0 можно считать завершённой, когда есть:
+The physical acceptance proved that this is **not** a reliable production primitive:
 
-- согласованный module contract;
-- минимальный frontend shell во Fluidd;
-- capability/state API или чётко описанный контракт;
-- единый способ хранения module state;
-- install/update/uninstall/rollback policy;
-- понятная стратегия upstream sync Fluidd;
-- подтверждённый способ установки нашей Fluidd-сборки;
-- минимальный developer guide для следующего модуля;
-- тестовый dummy/module proof-of-concept, не требующий изменения железа.
+```sh
+/etc/init.d/S65moonraker restart
+```
 
-Минимальный frontend shell, backend capability/API contract и repository-side backend PoC теперь реализованы; printer backend acceptance, installation lifecycle и остальные критерии Phase 0 остаются отдельной работой.
+Observed timing:
 
-После завершения Phase 0 первым реальным hardware-модулем становится Side/AUX/PLA Fan.
+```text
+SIGTERM:         23:50:13.211
+Server Shutdown: 23:50:15.565
+actual shutdown: ~2.35 s
+```
+
+The Z-Mod init script uses a fixed `sleep 2` between stop and start. In the observed run the new start happened while the previous Python process was still alive and reported:
+
+```text
+/root/moonraker-env/bin/python3 is already running
+```
+
+After the old process then exited, Moonraker was left stopped.
+
+Production lifecycle is therefore fixed by D-023 as:
+
+```text
+stop
+↓
+observe actual moonraker.py process count == 0
+↓
+filesystem/config transition
+↓
+start
+↓
+wait /server/info
+↓
+wait klippy_connected=true
+↓
+wait klippy_state=ready
+```
+
+HTTP reachability alone is insufficient. `klippy_state=startup` is not final readiness. No automatic `kill -9` is used.
 
 ---
 
-## 10. Правила передачи контекста новому координатору
+## 7. Production backend deployment integration — implemented in repository
 
-Новый координатор перед любыми действиями должен:
+The current issue #8 repository-side productionization integrates the accepted runtime model into the existing `install.sh`, without rewriting the Camera 2 / Notify / Timelapse / IFS contour.
 
-1. прочитать `ROADMAP.md`;
-2. прочитать `ARCHITECTURE.md`;
-3. прочитать `PROJECT_STATE.md`;
-4. прочитать `DECISIONS.md`;
-5. открыть активный issue #8;
-6. проверить текущее состояние указанных GitHub-веток;
-7. не полагаться на старые чаты, если репозиторий говорит другое;
-8. при расхождении документации с кодом сначала зафиксировать расхождение, а не молча «исправлять» историю.
+Owned artifacts:
 
-`PROJECT_STATE.md` следует обновлять после завершения значимого этапа, изменения активной задачи или изменения архитектурного решения.
+```text
+source:
+/opt/config/mod_data/plugins/ad5x_custom/moonraker/components/plugins_ad5x.py
+
+runtime managed copy:
+/opt/config/base/moonraker/components/plugins_ad5x.py
+
+activation config:
+/opt/config/mod_data/plugins/ad5x_custom/plugins_ad5x.moonraker.conf
+```
+
+Activation is intentionally separate from notifier ownership:
+
+```ini
+[include plugins/ad5x_custom/ad5x_custom.moonraker.conf]
+[include plugins/ad5x_custom/plugins_ad5x.moonraker.conf]
+```
+
+The new backend config contains only:
+
+```ini
+[plugins_ad5x]
+```
+
+### 7.1 Validation and ownership
+
+Before destination mutation the installer verifies:
+
+- backend source exists and is non-empty;
+- Python syntax via `python -B`/AST without `.pyc` generation;
+- `API_VERSION == 1.0`;
+- `BACKEND_VERSION` matches root `VERSION`;
+- runtime Moonraker components directory exists;
+- activation config is minimal and valid;
+- an existing destination is demonstrably managed by Plugins AD5X.
+
+Unknown existing destination fails safe and is not overwritten.
+
+Runtime ownership is recorded by SHA-256. The managed copy is written to a temporary file **inside the destination directory**, permissions and hash are verified, and only then atomically renamed over the final destination.
+
+### 7.2 Backup and rollback
+
+Existing `snapshot()`, `restore_snapshot()` and installer rollback are extended rather than replaced. Snapshot now covers:
+
+- backend runtime destination, including absent marker;
+- backend ownership hash state;
+- Moonraker include state;
+- user Moonraker config and existing installer-owned state.
+
+Rollback distinguishes service state and avoids recursive restart loops:
+
+- failure before any stop attempt does not interrupt Moonraker unnecessarily;
+- failure after stop restores files/config and returns Moonraker to its original running state;
+- failure after start but before Klippy readiness performs a controlled stop/wait, restores snapshots, then one controlled start/readiness sequence if Moonraker was originally running.
+
+### 7.3 Update / repair semantics
+
+Managed copy intentionally means:
+
+```text
+Git checkout update ≠ runtime code immediately changed
+```
+
+The existing explicit apply operation is the deployment/repair primitive:
+
+```sh
+install.sh --apply-only
+```
+
+It validates the newly checked-out backend artifact, replaces the managed runtime copy atomically and activates it through the observed-stop lifecycle.
+
+`--refresh-only` remains lightweight and only refreshes generated overlays; it does **not** restart/deploy Moonraker during the existing power-on path.
+
+Moonraker hard recovery or `git clean` may delete the untracked runtime component. That is an expected external destructive event. `--apply-only` repairs/reinstalls the component. The Moonraker repo is **not** made artificially CLEAN with `.git/info/exclude` for this runtime file.
+
+### 7.4 Status and uninstall
+
+`install.sh --status` now distinguishes:
+
+```text
+backend source
+backend runtime file
+backend config include
+Moonraker component presence / failed component
+backend snapshot
+Moonraker reachable but Klippy not ready
+runtime service unavailable
+```
+
+A mere existing file cannot produce a healthy backend status.
+
+`--uninstall` removes backend activation, the owned managed runtime copy, ownership state and `plugins_ad5x*.pyc`; unknown destination ownership fails safe. Existing user camera/IFS/timelapse/log/backup preservation semantics remain intact.
+
+The existing full power-cycle message is retained for the older camera/power-on contour. Backend activation itself uses only the controlled Moonraker lifecycle and does not introduce an extra printer reboot requirement.
+
+### 7.5 Repository verification
+
+Current repository-side verification for this productionization step:
+
+```text
+sh -n install.sh                                      PASS
+python3 -m unittest discover -s tests -v             PASS (24/24)
+```
+
+Breakdown:
+
+```text
+existing backend component contract tests: 8/8 PASS
+new installer/backend lifecycle tests:      16/16 PASS
+```
+
+Coverage includes source validation, managed/unknown destination ownership, atomic path, absent/previous snapshot restoration, exact-once config activation, uninstall cleanup, lifecycle ordering, HTTP-vs-Klippy readiness, `startup` rejection, `ready` acceptance, timeout, explicit apply semantics and prohibition of `S65moonraker restart` in backend deployment lifecycle.
+
+No real-printer write/restart operation is part of this repository-side productionization step.
+
+---
+
+## 8. What is explicitly out of scope now
+
+Until coordinator review of issue #8 completes, do **not** expand this work into:
+
+- another printer installation/SSH write/restart test;
+- Fluidd production RPC replacement/deployment;
+- Hardware / Mods Manager implementation;
+- Side/AUX/PLA Fan implementation;
+- IFS Manager UI;
+- Calibration Center;
+- Print Preflight;
+- Camera Manager productization;
+- Mainsail/HelixScreen parity;
+- module manifest format finalization;
+- separate daemon/DB;
+- Z-Mod fork or tracked Moonraker/Z-Mod source modifications.
+
+Issue #8 remains OPEN for coordinator review; it is not to be closed by the implementation executor.
+
+---
+
+## 9. Accepted decisions relevant to the current gate
+
+See `DECISIONS.md`. Most important here:
+
+- D-014 — fail-safe is more important than convenience;
+- D-018 — Fluidd two-seam integration boundary;
+- D-019 — static `/ad5x`, capability-gated navigation;
+- D-020 — two-stage backend-owned capability detection;
+- D-021 — downstream-only Fluidd CI;
+- D-022 — optional Moonraker backend contract v1;
+- **D-023 — backend runtime is a managed copy with observed-stop lifecycle.**
+
+D-023 resolves the deployment implementation detail left open by D-022.
+
+---
+
+## 10. Remaining Platform Foundation work after this review
+
+This step does not by itself complete all of Phase 0. Remaining work must be selected by the coordinator after issue #8 review. Candidate unresolved Phase 0 items include:
+
+- replacing the provisional Fluidd RPC seam with the accepted production snapshot API;
+- production Fluidd deployment/update strategy;
+- minimal module/provider/state contract needed by the first real module;
+- storage/state ownership policy where persistent module state is actually required;
+- minimal developer guidance for subsequent modules.
+
+The first real hardware use case after Platform Foundation remains Side/AUX/PLA Fan, but it must not be pulled into issue #8.
+
+---
+
+## 11. Context recovery rule
+
+A new coordinator should, before changing anything:
+
+1. read `ROADMAP.md`;
+2. read `ARCHITECTURE.md`;
+3. read `PROJECT_STATE.md`;
+4. read `DECISIONS.md`;
+5. open issue #8 including the latest printer-acceptance and implementation comments;
+6. verify the current `genrudko/Plugins_AD5X:dev` head and any commits after the state recorded here;
+7. treat GitHub/code as authoritative over old chat history;
+8. never infer printer state from repository state — physical-runtime claims require observed evidence.
