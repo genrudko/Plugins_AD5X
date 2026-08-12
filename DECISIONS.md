@@ -402,3 +402,30 @@ Frontend не должен самостоятельно выводить нал�
 ### Следствие
 
 Конкретное имя RPC method и окончательная схема capability payload пока не фиксируются. Они должны быть определены отдельным узким решением Platform Foundation после проверки backend-требований. Текущий `ad5x_custom` не считается уже имеющим такой API только на основании frontend discovery.
+
+---
+
+## D-021 — `ad5x-dev` получает отдельный downstream CI workflow
+
+**Дата:** 2026-08-12  
+**Статус:** accepted
+
+### Решение
+
+Для `genrudko/fluidd:ad5x-dev` создаётся отдельный downstream-only GitHub Actions workflow, который проверяет feature-head напрямую и не изменяет штатный upstream `.github/workflows/build.yml`.
+
+Workflow должен запускаться минимум на push в `ad5x-dev` и вручную через `workflow_dispatch`, повторяя релевантные штатные проверки Fluidd: dependency install с lockfile, lint, type-check, unit tests, circular references check и production build.
+
+### Почему
+
+Штатный Fluidd `BUILD` запускается только для `develop/master`, тегов `v*` и PR в `develop/master`. Поэтому feature-head `ad5x-dev` сейчас может содержать непроверенные изменения, а запуск проверки через временный PR, тег или перенос feature-кода в `develop` нарушает принятую веточную модель.
+
+Отдельный downstream workflow даёт постоянную проверку нашей рабочей ветки без расширения product patch surface и без изменения upstream CI semantics.
+
+### Следствие
+
+- upstream `build.yml` не менять ради Plugins AD5X;
+- CI-файл является downstream infrastructure и может жить отдельно в `ad5x-dev`;
+- frontend shell PoC не считается полностью прошедшим Definition of Done, пока exact feature-head не получил успешные обязательные проверки;
+- после успешного CI dynamic Vuex hypothesis можно подтвердить или отвергнуть по фактическому `type-check/tests/build`;
+- результаты acceptance фиксируются в `PROJECT_STATE.md` только после реального выполнения workflow.
