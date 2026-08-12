@@ -4,8 +4,8 @@
 
 **Последнее обновление:** 2026-08-12  
 **Текущая фаза:** Phase 0 — Platform Foundation  
-**Статус:** Fluidd frontend shell PoC accepted / Definition of Done complete; Phase 0 продолжается  
-**Активный issue:** [#7 — PLATFORM-FOUNDATION-001: исследовать точки интеграции Fluidd](https://github.com/genrudko/Plugins_AD5X/issues/7)  
+**Статус:** Fluidd frontend shell PoC accepted / Definition of Done complete; активен backend capability/API contract discovery  
+**Активный issue:** [#8 — PLATFORM-FOUNDATION-002: определить Plugins AD5X backend capability/API contract](https://github.com/genrudko/Plugins_AD5X/issues/8)  
 **Изменения на принтере для текущей фазы:** отсутствуют
 
 ---
@@ -101,11 +101,15 @@ Side / AUX Fan
 
 ## 5. Активная задача
 
-### [#7 — Platform Foundation: Fluidd integration discovery](https://github.com/genrudko/Plugins_AD5X/issues/7)
+### [#8 — Platform Foundation: backend capability/API contract](https://github.com/genrudko/Plugins_AD5X/issues/8)
 
-Discovery-часть issue завершена по фактическому коду `genrudko/fluidd:ad5x-dev` и согласована владельцем продукта.
+Issue #7 `PLATFORM-FOUNDATION-001` завершён и закрыт как `completed`: Fluidd integration discovery, минимальный frontend shell и его automated acceptance прошли Definition of Done.
 
-Frontend shell PoC прошёл downstream CI и final automated acceptance. Его Definition of Done закрыт, но issue #7 и вся Phase 0 этим не закрываются; решение о следующем этапе принимает координатор.
+Текущий следующий шаг Phase 0 — определить минимальный, versioned и frontend-neutral Plugins AD5X backend capability/API contract для Moonraker. До реализации production backend сначала требуется source/docs discovery Moonraker component lifecycle, component/RPC naming, capability/state schema, compatibility model, event/notification model, fail-safe behavior и связь с существующим `ad5x_custom`.
+
+По issue #8 действует порядок: **сначала discovery и contract proposal → согласование координатором → затем только минимальный backend PoC без hardware module functionality**.
+
+Ниже сохранён фактический результат завершённого issue #7 как baseline для активного backend-contract этапа.
 
 ### 5.1. Найденные integration points Fluidd
 
@@ -215,7 +219,7 @@ API/backend version + detailed module capabilities/state
 
 Coarse detection использует существующий механизм Fluidd `server/componentSupport(...)`.
 
-В PoC используется provisional component identifier `plugins_ad5x` и provisional capability seam `plugins_ad5x.get_capabilities`. Они нужны для mockable frontend boundary, но **не являются окончательно утверждённым backend public contract**. Окончательные component/RPC names и payload schema должны быть определены отдельным решением Platform Foundation в соответствии с D-020.
+В PoC используется provisional component identifier `plugins_ad5x` и provisional capability seam `plugins_ad5x.get_capabilities`. Они нужны для mockable frontend boundary, но **не являются окончательно утверждённым backend public contract**. Окончательные component/RPC names и payload schema должны быть определены отдельным решением Platform Foundation в соответствии с D-020 и активным issue #8.
 
 ### 5.6. Реализация frontend shell PoC
 
@@ -355,19 +359,20 @@ Frontend shell PoC имеет статус **accepted / Definition of Done compl
 
 ## 6. Что сейчас НЕ делать
 
-До решения координатора о следующем этапе Phase 0:
+В рамках активного backend capability/API contract discovery (#8):
 
+- не писать production backend-компонент до согласования contract proposal;
 - не писать полноценный Hardware Manager;
 - не реализовывать AUX/PLA Fan;
 - не переносить IFS UI;
 - не начинать Calibration Center;
 - не рефакторить существующий `ad5x_custom` массово;
 - не менять Z-Mod;
-- не трогать принтер ради нового UI;
+- не трогать принтер ради нового UI/backend discovery;
 - не создавать бизнес-логику внутри Fluidd;
 - не начинать Mainsail/HelixScreen parity;
-- не закреплять окончательный формат module manifest;
-- не фиксировать окончательный backend RPC/payload contract без отдельного анализа.
+- не закреплять окончательный формат module manifest без необходимости для минимального platform contract;
+- не считать provisional `plugins_ad5x` / `plugins_ad5x.get_capabilities` утверждённым production API до завершения #8 discovery.
 
 ---
 
@@ -401,6 +406,8 @@ Frontend shell PoC имеет статус **accepted / Definition of Done compl
 
 ### 8.1. Plugins AD5X backend capability/API contract
 
+Это активный work item #8.
+
 Frontend extension points изучены и frontend seam принят, но backend-контракт ещё не определён окончательно.
 
 Нужно отдельно решить и проверить:
@@ -411,7 +418,9 @@ Frontend extension points изучены и frontend seam принят, но bac
 - API versioning;
 - минимальную capability/state payload schema;
 - поведение при несовместимой версии backend/frontend;
-- события/notifications для обновления state без тяжёлого polling.
+- события/notifications для обновления state без тяжёлого polling;
+- lifecycle startup/shutdown/restart и fail-safe behavior;
+- связь нового backend component с существующим `ad5x_custom`.
 
 До этого нельзя считать production capability API реализованным. Provisional `plugins_ad5x` / `plugins_ad5x.get_capabilities` остаются только frontend/mock seam по D-020.
 
@@ -465,7 +474,7 @@ Phase 0 можно считать завершённой, когда есть:
 2. прочитать `ARCHITECTURE.md`;
 3. прочитать `PROJECT_STATE.md`;
 4. прочитать `DECISIONS.md`;
-5. открыть активный issue #7;
+5. открыть активный issue #8;
 6. проверить текущее состояние указанных GitHub-веток;
 7. не полагаться на старые чаты, если репозиторий говорит другое;
 8. при расхождении документации с кодом сначала зафиксировать расхождение, а не молча «исправлять» историю.
