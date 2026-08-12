@@ -429,3 +429,100 @@ Workflow должен запускаться минимум на push в `ad5x-d
 - frontend shell PoC не считается полностью прошедшим Definition of Done, пока exact feature-head не получил успешные обязательные проверки;
 - после успешного CI dynamic Vuex hypothesis можно подтвердить или отвергнуть по фактическому `type-check/tests/build`;
 - результаты acceptance фиксируются в `PROJECT_STATE.md` только после реального выполнения workflow.
+
+---
+
+## D-022 — Backend contract v1 строится как optional Moonraker component
+
+**Дата:** 2026-08-12  
+**Статус:** accepted  
+**Уточняет:** D-013, D-014, D-020
+
+### Решение
+
+Plugins AD5X backend для Platform Foundation реализуется как **optional in-process Moonraker component** с production component name:
+
+```text
+plugins_ad5x
+```
+
+Связь имён:
+
+```text
+Moonraker component file: components/plugins_ad5x.py
+Moonraker config section: [plugins_ad5x]
+server.info.components: "plugins_ad5x"
+```
+
+Отдельный daemon/agent и собственная база данных для Platform Foundation не создаются без нового доказанного требования.
+
+`server.info.components` используется только как coarse presence signal. Наличие `plugins_ad5x` в `components` **не означает health/readiness**: Moonraker может одновременно держать имя в `components` и `failed_components`, если object был создан, но `component_init()` завершился ошибкой. Detailed readiness/health принадлежит Plugins AD5X snapshot API.
+
+### API v1
+
+Минимальный read-only snapshot endpoint:
+
+```text
+HTTP:      GET /server/plugins_ad5x/snapshot
+JSON-RPC:  server.plugins_ad5x.snapshot
+```
+
+Endpoint использует Moonraker authentication (`auth_required=true`) и при реализации должен **явно ограничить transports до HTTP + WEBSOCKET**, а не использовать default `TransportType.all()`, который также включает MQTT/INTERNAL.
+
+Минимальный platform envelope snapshot:
+
+```text
+api_version
+backend_version
+revision
+backend.health
+modules{}
+```
+
+Общий module envelope различает как разные смыслы:
+
+```text
+support
+enabled
+presence
+available
+health
+capabilities[]
+state{}
+```
+
+Допустимы `unknown` / `not_applicable`, когда backend не может доказательно установить конкретное состояние. `available` вычисляется backend/module provider, а не frontend.
+
+`api_version` имеет формат `MAJOR.MINOR`: major меняется при breaking semantics/schema/endpoint change, minor — при backward-compatible additions. `backend_version` остаётся release version Plugins AD5X и не заменяет API version.
+
+### State propagation
+
+После initial snapshot используется одна низкочастотная invalidation-схема:
+
+```text
+internal event: plugins_ad5x:snapshot_changed
+wire notification: notify_plugins_ad5x_snapshot_changed
+```
+
+Notification сообщает, что snapshot устарел; source of truth остаётся snapshot endpoint. `revision` — монотонный номер **только в пределах одного процесса Moonraker** и не является persistent counter.
+
+После WebSocket reconnect frontend выполняет полный resync:
+
+```text
+server.info → coarse presence → fresh snapshot
+```
+
+Steady-state polling не используется. `snapshot_changed` предназначен для смысловых lifecycle/capability/control-state изменений, а не для будущей высокочастотной telemetry; при появлении high-rate data для неё должен быть отдельный доказанно необходимый механизм.
+
+### Почему
+
+Фактический `ghzserg/zmod_moonraker` использует тот же исследованный component/API lifecycle, что и текущий upstream Moonraker: optional component может не загрузиться без остановки всего Moonraker, endpoints регистрируются через штатный API definition, notification bridge уже существует, а authentication обслуживается Moonraker. Это позволяет получить единый frontend-neutral backend без второго процесса, второго auth contour и постоянного polling.
+
+### Следствие
+
+- provisional frontend method `plugins_ad5x.get_capabilities` не становится production contract и должен быть заменён на `server.plugins_ad5x.snapshot` при backend PoC integration;
+- ожидаемые module/hardware failures выражаются через snapshot health/state, а не должны валить весь Moonraker;
+- constructor/load path компонента должен оставаться минимальным, а blocking I/O на Moonraker event loop запрещён;
+- deployment способ (`symlink`/`copy`) в Moonraker components остаётся implementation detail до проверки на реальном Z-Mod на import, update, uninstall, rollback и clean-state;
+- exact установленный Moonraker runtime commit на реальном AD5X пока не доказан и должен быть проверен read-only перед printer deployment/acceptance;
+- Hardware Manager, AUX Fan и другие module implementations не входят в backend foundation PoC.
