@@ -4,7 +4,7 @@
 
 **Последнее обновление:** 2026-08-12  
 **Текущая фаза:** Phase 0 — Platform Foundation  
-**Статус:** Fluidd frontend shell PoC accepted; backend capability/API contract v1 accepted; следующий шаг — минимальный backend PoC  
+**Статус:** Fluidd frontend shell PoC accepted; backend contract v1 accepted; backend repository PoC implemented / automated tests PASS; printer deployment acceptance pending  
 **Активный issue:** [#8 — PLATFORM-FOUNDATION-002: определить Plugins AD5X backend capability/API contract](https://github.com/genrudko/Plugins_AD5X/issues/8)  
 **Изменения на принтере для текущей фазы:** отсутствуют
 
@@ -154,7 +154,7 @@ NO
 
 `server.info.components` не является health check: имя может одновременно присутствовать в `components` и `failed_components`, если object загрузился, но `component_init()` завершился ошибкой. Поэтому D-020 coarse presence остаётся первым уровнем, а readiness/health — вторым уровнем snapshot API.
 
-Следующий разрешённый этап по #8 — **минимальный backend PoC** без hardware module functionality. До установки/acceptance на реальном принтере требуется read-only подтверждение фактически установленной Moonraker version/Git HEAD и затем отдельная контролируемая printer-test последовательность.
+Repository-side backend PoC теперь реализован и покрыт isolation tests. Он ещё **не установлен и не принят на реальном AD5X**. Следующий разрешённый этап по #8 — read-only runtime verification, затем отдельно согласованный controlled printer backend acceptance и после него Fluidd integration с production snapshot API.
 
 ### 5.1. Найденные integration points Fluidd
 
@@ -424,11 +424,56 @@ Upstream unchanged; real conflict rehearsal not applicable.
 
 Frontend shell PoC имеет статус **accepted / Definition of Done complete**. Это не означает завершение всей Phase 0.
 
+### 5.8. Backend repository PoC
+
+Минимальный backend foundation PoC реализован в `genrudko/Plugins_AD5X:dev` без изменения Moonraker/Z-Mod/Fluidd upstream и без действий на принтере.
+
+Новые файлы:
+
+```text
+moonraker/components/plugins_ad5x.py
+tests/test_plugins_ad5x_component.py
+```
+
+Коммиты:
+
+```text
+5428339d996c8c9a1f0abc6e26b2ac3c3e817e21  feat(backend): add Moonraker foundation component
+72a9004430d2324b3ef0f79734691403e5bece6f  test(backend): cover snapshot contract
+```
+
+Repository PoC подтверждает:
+
+- `load_component(config)` возвращает optional component object;
+- endpoint exact: `GET /server/plugins_ad5x/snapshot`;
+- JSON-RPC derivation current Moonraker: `server.plugins_ad5x.snapshot`;
+- transports exact: HTTP + WEBSOCKET, без MQTT/INTERNAL;
+- `auth_required=True`;
+- `api_version = "1.0"`;
+- `backend_version = "0.1.2"` и automated test сверяет его с root `VERSION`;
+- initial `revision = 1`, increment только in-process;
+- invalidation event: `plugins_ad5x:snapshot_changed`;
+- explicit notification name: `plugins_ad5x_snapshot_changed`;
+- wire method: `notify_plugins_ad5x_snapshot_changed`;
+- snapshot `modules == {}`;
+- нет hardware discovery, Klipper dependency, polling, daemon, DB, subprocess или blocking I/O.
+
+Isolation verification:
+
+```text
+python -m compileall moonraker tests                      PASS
+python -m unittest -v tests/test_plugins_ad5x_component.py  PASS (8/8)
+```
+
+Git blob SHA протестированных локально файлов совпадает с GitHub blobs после commit, поэтому verification относится к exact repository content.
+
+`install.sh` и `ad5x_custom.moonraker.conf` на этом шаге намеренно не менялись: deployment mechanism (`symlink` vs `copy`) остаётся printer-test decision по D-022. Runtime Moonraker verification и controlled printer acceptance — pending.
+
 ---
 
 ## 6. Что сейчас НЕ делать
 
-В рамках минимального backend PoC по #8:
+После repository-side backend PoC по #8 без отдельного разрешения координатора:
 
 - не реализовывать Hardware Manager;
 - не реализовывать AUX/PLA Fan;
@@ -441,10 +486,10 @@ Frontend shell PoC имеет статус **accepted / Definition of Done compl
 - не переносить hardware/business logic во Fluidd;
 - не начинать Mainsail/HelixScreen parity;
 - не закреплять окончательный format module manifest;
-- не устанавливать backend на реальный принтер до отдельного контролируемого test step;
+- не устанавливать backend на реальный принтер без отдельного controlled test step;
 - не трактовать `server.info.components` как health/readiness.
 
-Разрешён следующий narrow scope: минимальный optional Moonraker component, read-only snapshot endpoint, notification seam, tests/validation и подготовка безопасной deployment/rollback проверки.
+Следующий narrow scope требует coordinator review: read-only runtime verification, controlled printer backend acceptance и затем Fluidd replacement provisional RPC на production snapshot method.
 
 ---
 
@@ -478,26 +523,29 @@ Frontend shell PoC имеет статус **accepted / Definition of Done compl
 
 ## 8. Открытые вопросы
 
-### 8.1. Backend PoC implementation/deployment
+### 8.1. Backend printer acceptance/deployment
 
-Backend capability/API contract v1 принят в D-022. Implementation ещё не выполнена.
+Backend capability/API contract v1 принят в D-022, а repository-side implementation выполнена и прошла automated isolation tests. Реальный runtime acceptance пока не выполнен.
 
-Следующий PoC должен доказать без hardware functionality:
+Перед controlled deployment остаётся доказать на физическом AD5X:
 
-- optional component `plugins_ad5x` загружается и не ломает Moonraker;
-- `server.info.components` coarse presence работает фактически;
-- read-only `server.plugins_ad5x.snapshot` возвращает v1 envelope с `modules: {}`;
-- endpoint явно ограничен HTTP + WEBSOCKET и наследует Moonraker auth;
-- notification `notify_plugins_ad5x_snapshot_changed` доставляется по WebSocket;
-- frontend provisional adapter можно перевести с `plugins_ad5x.get_capabilities` на production snapshot method без расширения D-018 patch surface;
-- component absence/init failure/restart/reconnect остаются fail-safe;
-- install/uninstall/update/rollback не загрязняют tracked Z-Mod/Moonraker source.
+- exact runtime Moonraker version/Git HEAD;
+- import/load component в фактической Z-Mod Moonraker installation;
+- `server.info.components` coarse presence;
+- real HTTP + WebSocket snapshot access через Moonraker auth;
+- real notification delivery по WebSocket;
+- optional component fail-safe behavior;
+- uninstall/rollback и clean-state semantics;
+- выбранный deployment mechanism не ломается при Moonraker/Z-Mod update.
 
 До printer deployment требуется read-only подтвердить:
 
 ```text
 server.info.moonraker_version
 git -C /opt/config/base/moonraker rev-parse HEAD
+/root/moonraker-env/bin/python3 --version
+git -C /opt/config/base/moonraker status --short
+readlink -f /root/moonraker-env/moonraker
 ```
 
 Exact runtime Moonraker commit пока **unresolved**, хотя исследованные current Z-Mod Moonraker source blobs для contract-critical mechanisms совпадают с upstream.
@@ -540,7 +588,7 @@ Phase 0 можно считать завершённой, когда есть:
 - минимальный developer guide для следующего модуля;
 - тестовый dummy/module proof-of-concept, не требующий изменения железа.
 
-Минимальный frontend shell и backend capability/API contract теперь приняты; backend PoC, installation lifecycle и остальные критерии Phase 0 остаются отдельной работой.
+Минимальный frontend shell, backend capability/API contract и repository-side backend PoC теперь реализованы; printer backend acceptance, installation lifecycle и остальные критерии Phase 0 остаются отдельной работой.
 
 После завершения Phase 0 первым реальным hardware-модулем становится Side/AUX/PLA Fan.
 
