@@ -4,7 +4,7 @@
 
 **Последнее обновление:** 2026-08-12  
 **Текущая фаза:** Phase 0 — Platform Foundation  
-**Статус:** архитектура зафиксирована; создан активный discovery work item; код нового каркаса ещё не начат  
+**Статус:** Fluidd integration discovery завершён и архитектурный план согласован; реализация frontend shell proof-of-concept ещё не начата  
 **Активный issue:** [#7 — PLATFORM-FOUNDATION-001: исследовать точки интеграции Fluidd](https://github.com/genrudko/Plugins_AD5X/issues/7)  
 **Изменения на принтере для текущей фазы:** отсутствуют
 
@@ -31,6 +31,14 @@
 | `ghzserg/fluidd` | `develop` | upstream Fluidd для Z-Mod |
 | `genrudko/fluidd` | `develop` | наш sync-слой, держать максимально близко к `ghzserg/fluidd:develop` |
 | `genrudko/fluidd` | `ad5x-dev` | рабочая ветка UI Plugins AD5X |
+
+На момент Fluidd integration discovery:
+
+- `ghzserg/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
+- `genrudko/fluidd:develop` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`;
+- `genrudko/fluidd:ad5x-dev` — `7f024c08aac4093aa8aa2e26e329df5832ebe778`.
+
+Следовательно, `ad5x-dev` на старте discovery не содержал собственных AD5X-патчей и являлся чистым baseline для минимального downstream patch surface.
 
 Z-Mod **не форкаем**.
 
@@ -81,50 +89,143 @@ Side / AUX Fan
 → появляется управление/тест
 ```
 
+Но реализация Side/AUX/PLA Fan **не входит** в текущий frontend shell proof-of-concept.
+
 ---
 
 ## 5. Активная задача
 
 ### [#7 — Platform Foundation: Fluidd integration discovery](https://github.com/genrudko/Plugins_AD5X/issues/7)
 
-**Цель:** изучить `genrudko/fluidd:ad5x-dev` и определить минимальный patch surface для Plugins AD5X.
+Discovery-часть issue завершена по фактическому коду `genrudko/fluidd:ad5x-dev` и согласована владельцем продукта.
 
-Нужно найти и документировать фактические точки интеграции:
+### 5.1. Найденные integration points Fluidd
+
+Фактическая цепочка:
 
 ```text
 navigation
 → route
 → page/shell
-→ store/API adapter
+→ AD5X-local store/API adapter
 → capability/state
+→ штатный Fluidd WebSocket transport
+→ Moonraker
+→ Plugins AD5X backend
 ```
 
-### Что должно получиться
+Ключевые upstream-файлы:
 
-Не готовый Hardware Manager и не полноценный плагин, а **архитектурный shell**, который подтверждает, что мы можем:
+- navigation — `src/components/layout/AppNavDrawer.vue`;
+- routing — `src/router/index.ts`;
+- общий page shell/layout — `src/App.vue` через штатный `<router-view>`;
+- обычные Fluidd pages — `src/views/*.vue`;
+- root Vuex registry — `src/store/index.ts`;
+- root typed store declarations — `src/store/types.ts`;
+- server component capability precedent — `src/store/server/getters.ts`, getter `server/componentSupport(component)`;
+- server info lifecycle — `src/store/server/actions.ts`;
+- Moonraker RPC façade — `src/api/socketActions.ts`;
+- низкоуровневый WebSocket/JSON-RPC transport — `src/plugins/socketClient.ts`.
 
-1. добавить отдельный раздел Plugins AD5X в UI;
-2. локализовать почти весь наш код в собственной области;
-3. получить данные через Moonraker/API без дублирования backend-логики во frontend;
-4. скрывать модуль, если capability отсутствует;
-5. переживать upstream sync с минимальными конфликтами.
+### 5.2. Согласованный frontend ownership boundary
 
-Порядок выполнения issue: **сначала discovery и план с конкретными путями файлов, затем код proof-of-concept после согласования**.
+AD5X-специфичный frontend-код должен жить в собственной области:
+
+```text
+src/ad5x/
+├── router.ts
+├── views/
+│   └── Ad5xShell.vue
+├── api/
+│   ├── client.ts
+│   └── types.ts
+└── store/
+    ├── index.ts
+    └── types.ts
+```
+
+Структура может уточниться по результатам PoC, но ownership boundary `src/ad5x/**` считается принятым.
+
+Не следует заранее создавать полноценные `hardware/`, `ifs/`, `calibration/`, `manifest/` и другие продуктовые подсистемы до проверки базового shell.
+
+### 5.3. Минимальный upstream patch surface
+
+Целевой нормальный patch surface ограничен двумя файлами:
+
+1. `src/components/layout/AppNavDrawer.vue` — один пункт Plugins AD5X и coarse capability gate;
+2. `src/router/index.ts` — подключение AD5X route tree.
+
+Без доказанной необходимости **не менять**:
+
+- `src/App.vue`;
+- существующие `src/views/*`;
+- `src/store/index.ts`;
+- `src/store/types.ts`;
+- `src/store/server/*`;
+- `src/api/socketActions.ts`;
+- `src/plugins/socketClient.ts`.
+
+Если proof-of-concept потребует дополнительных upstream-изменений, расширение patch surface сначала должно быть технически обосновано.
+
+### 5.4. Согласованная route/navigation policy
+
+- `/ad5x` регистрируется статически;
+- пункт Plugins AD5X в основной навигации показывается только при подтверждённом наличии backend;
+- прямой `/ad5x` при отсутствии backend показывает безопасное `backend unavailable` состояние;
+- при отсутствии backend не выполняются AD5X-specific RPC;
+- штатная работа Fluidd и базовая печать не должны зависеть от Plugins AD5X frontend/backend.
+
+### 5.5. Capability boundary
+
+Capability detection двухступенчатый:
+
+```text
+Moonraker server.info.components
+        ↓
+есть Plugins AD5X backend?
+        ↓ yes
+Plugins AD5X backend API
+        ↓
+API/backend version + detailed module capabilities/state
+```
+
+Coarse detection использует существующий механизм Fluidd `server/componentSupport(...)`.
+
+Detailed capability/state принадлежит Plugins AD5X backend. Frontend **не должен** самостоятельно определять наличие модулей по Klipper config, GPIO, макросам, USB-устройствам или другим низкоуровневым признакам.
+
+Важно: текущий `ad5x_custom` ещё не содержит подтверждённого Moonraker component/API с таким контрактом. Конкретное имя backend component/RPC method и окончательная payload schema пока не зафиксированы.
+
+### 5.6. Следующий этап issue #7 — frontend shell PoC
+
+После согласования discovery следующий узкий этап:
+
+1. создать минимальную область `src/ad5x/**` в `genrudko/fluidd:ad5x-dev`;
+2. добавить один route и один capability-gated nav item;
+3. реализовать только диагностический shell, без Hardware Manager;
+4. проверить два режима: backend absent и mocked/present;
+5. прогнать штатные проверки Fluidd: `pnpm lint`, `pnpm type-check`, `pnpm test:unit`, `pnpm build`;
+6. проверить фактический diff и сохранить upstream patch surface минимальным;
+7. затем провести upstream-sync rehearsal и оценить реальные конфликты.
+
+Только после успешного PoC переходить к отдельному backend capability/API contract и последующим модулям.
 
 ---
 
 ## 6. Что сейчас НЕ делать
 
-До завершения Fluidd integration discovery:
+В рамках текущего frontend shell PoC:
 
 - не писать полноценный Hardware Manager;
+- не реализовывать AUX/PLA Fan;
 - не переносить IFS UI;
+- не начинать Calibration Center;
 - не рефакторить существующий `ad5x_custom` массово;
 - не менять Z-Mod;
 - не трогать принтер ради нового UI;
-- не создавать отдельную backend-логику внутри Fluidd;
+- не создавать бизнес-логику внутри Fluidd;
 - не начинать Mainsail/HelixScreen parity;
-- не закреплять формат module manifest без анализа требований.
+- не закреплять окончательный формат module manifest;
+- не фиксировать окончательный backend RPC/payload contract без отдельного анализа.
 
 ---
 
@@ -144,27 +245,40 @@ navigation
 - Calibration Center должен хранить контекст валидности Z-offset, а не только число;
 - Print Preflight — guard перед штатным стартом, а не новый print engine;
 - предпочтение: UI/macros/events → лёгкий daemon → никогда тяжёлый service на MIPS без крайней необходимости;
-- rollback и сохранение базовой печати через Z-Mod обязательны.
+- rollback и сохранение базовой печати через Z-Mod обязательны;
+- Fluidd integration использует ownership boundary `src/ad5x/**` и целевой two-seam upstream patch surface;
+- `/ad5x` статический, navigation item capability-gated;
+- capability detection двухступенчатый: backend presence → backend-owned detailed capabilities/state.
 
-Подробности: `ARCHITECTURE.md` и `DECISIONS.md`.
+Подробности: `ARCHITECTURE.md` и `DECISIONS.md`, особенно D-018, D-019 и D-020.
 
 ---
 
 ## 8. Открытые вопросы
 
-### 8.1. Fluidd extension points
+### 8.1. Plugins AD5X backend capability/API contract
 
-Пока не изучены фактические файлы/компоненты `ghzserg/fluidd`, поэтому нельзя заранее утверждать, где именно должны жить:
+Frontend extension points теперь изучены, но backend-контракт ещё не определён окончательно.
 
-- route;
-- nav item;
-- AD5X module registry;
-- store/API adapter;
-- feature/capability detection.
+Нужно отдельно решить и проверить:
 
-Это и есть активная задача #7.
+- как Plugins AD5X регистрируется как Moonraker component;
+- точное имя component;
+- имя RPC endpoint/method;
+- API versioning;
+- минимальную capability/state payload schema;
+- поведение при несовместимой версии backend/frontend;
+- события/notifications для обновления state без тяжёлого polling.
 
-### 8.2. Moonraker update_manager override
+До этого нельзя считать capability API реализованным.
+
+### 8.2. AD5X-local store registration
+
+Root Vuex registry Fluidd статически типизирован через `src/store/index.ts` и `src/store/types.ts`. Статическое добавление AD5X store увеличивает upstream patch surface.
+
+Предпочтительная гипотеза для PoC — локальная/lazy dynamic registration внутри `src/ad5x/**`, но она ещё должна быть подтверждена реальным `type-check`, unit tests и build. Это пока implementation hypothesis, а не отдельное архитектурное решение.
+
+### 8.3. Moonraker update_manager override
 
 В Z-Mod Fluidd обновляется отдельным `[update_manager fluidd]`.
 
@@ -172,7 +286,7 @@ navigation
 
 Пока это гипотеза, а не утверждённый механизм.
 
-### 8.3. Module manifest format
+### 8.4. Module manifest format
 
 Нужные поля примерно определены, но конкретный формат (`json/yaml/toml/другое`) пока не выбран.
 
