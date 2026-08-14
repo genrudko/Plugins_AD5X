@@ -1,0 +1,98 @@
+name: AD5X display spike
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - ".github/workflows/ad5x-display-spike.yml"
+      - "tools/ad5x-display-spike/**"
+  push:
+    branches:
+      - dev
+    paths:
+      - ".github/workflows/ad5x-display-spike.yml"
+      - "tools/ad5x-display-spike/**"
+
+permissions:
+  contents: read
+
+env:
+  HELIXSCREEN_REF: 708e992618d57814055346ae827c0479e7843fc6
+  TOOLCHAIN_IMAGE: plugins-ad5x/ad5x-toolchain:ci
+
+jobs:
+  toolchain-smoke:
+    name: Toolchain ABI smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Plugins_AD5X
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned HelixScreen toolchain source
+        uses: actions/checkout@v4
+        with:
+          repository: prestonbrown/helixscreen
+          ref: ${{ env.HELIXSCREEN_REF }}
+          path: .ci/helixscreen
+
+      - name: Build AD5X toolchain image
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "$TOOLCHAIN_IMAGE" \
+            -f .ci/helixscreen/docker/Dockerfile.ad5x \
+            .ci/helixscreen/docker
+
+      - name: Compile and inspect MIPS ABI smoke binary
+        run: |
+          set -euo pipefail
+          rm -rf out dist
+          mkdir -p out dist
+
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            "$TOOLCHAIN_IMAGE" \
+            sh -euxc '
+              mipsel-buildroot-linux-gnu-gcc --version > out/compiler.txt
+              cat out/compiler.txt
+
+              mipsel-buildroot-linux-gnu-gcc \
+                -O2 -pipe -Wall -Wextra \
+                -march=mips32r5 -mtune=mips32r5 \
+                -mabi=32 -mnan=2008 \
+                tools/ad5x-display-spike/ad5x_abi_smoke.c \
+                -o out/ad5x-abi-smoke
+
+              mipsel-buildroot-linux-gnu-readelf -h out/ad5x-abi-smoke > out/elf-header.txt
+              mipsel-buildroot-linux-gnu-readelf -l out/ad5x-abi-smoke > out/elf-program-headers.txt
+              mipsel-buildroot-linux-gnu-readelf -A out/ad5x-abi-smoke > out/elf-attributes.txt
+            '
+
+          file out/ad5x-abi-smoke | tee out/file.txt
+          grep -Eq '^[[:space:]]*Class:[[:space:]]+ELF32[[:space:]]*$' out/elf-header.txt
+          grep -Eq '^[[:space:]]*Data:.*little endian' out/elf-header.txt
+          grep -Eq 'Flags:.*nan2008.*o32' out/elf-header.txt
+          grep -Fq '/lib/ld-linux-mipsn8.so.1' out/elf-program-headers.txt
+          grep -Eq '^[[:space:]]*ISA:[[:space:]]+MIPS32r5[[:space:]]*$' out/elf-attributes.txt
+
+          {
+            echo "helixscreen_ref=$HELIXSCREEN_REF"
+            echo "plugins_ad5x_sha=$GITHUB_SHA"
+            echo "runner=$RUNNER_OS"
+            sha256sum out/ad5x-abi-smoke
+          } | tee out/BUILDINFO.txt
+
+          tar -C out -czf dist/ad5x-toolchain-smoke.tar.gz .
+
+      - name: Upload smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-toolchain-smoke-${{ github.sha }}
+          path: dist/ad5x-toolchain-smoke.tar.gz
+          if-no-files-found: error
+          retention-days: 14
