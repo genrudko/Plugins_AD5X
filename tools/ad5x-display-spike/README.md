@@ -23,11 +23,12 @@ The workflow `.github/workflows/ad5x-display-spike.yml`:
 
 1. checks out a pinned HelixScreen revision;
 2. builds HelixScreen's AD5X Docker toolchain image;
-3. compiles `ad5x_abi_smoke.c` with the MIPS32r5/O32/NAN2008 target flags used for the AD5X port;
-4. records ELF headers, attributes, interpreter/program headers and compiler metadata;
-5. publishes `ad5x-toolchain-smoke.tar.gz` as a GitHub Actions artifact.
+3. compiles `ad5x_abi_smoke.c` twice: MIPS32r2 and MIPS32r5, both O32/NAN2008;
+4. verifies ELF32 little-endian output and the expected `/lib/ld-linux-mipsn8.so.1` interpreter;
+5. records ELF headers, attributes, program headers and compiler metadata;
+6. publishes `ad5x-toolchain-smoke.tar.gz` as a GitHub Actions artifact.
 
-The smoke binary is dynamically linked on purpose. Running it later inside the Z-Mod chroot will verify that the produced ELF and loader/libc ABI actually match the live printer instead of merely proving that the cross-compiler can emit a MIPS file.
+Both smoke binaries are dynamically linked on purpose. Running them later inside the Z-Mod chroot will answer a useful hardware question directly: whether the live AD5X accepts the MIPS32r5 target used by HelixScreen, while keeping an r2 baseline that matches the ABI flags observed on the current Z-Mod Python binary.
 
 ## Stage 2 — minimal X11 display bundle
 
