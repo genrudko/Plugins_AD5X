@@ -47,7 +47,7 @@ jobs:
             -f .ci/helixscreen/docker/Dockerfile.ad5x \
             .ci/helixscreen/docker
 
-      - name: Compile and inspect MIPS ABI smoke binaries
+      - name: Compile and inspect MIPS ABI smoke binary
         run: |
           set -euo pipefail
           rm -rf out dist
@@ -61,34 +61,30 @@ jobs:
               mipsel-buildroot-linux-gnu-gcc --version > out/compiler.txt
               cat out/compiler.txt
 
-              for ISA in mips32r2 mips32r5; do
-                BIN="out/ad5x-abi-smoke-${ISA}"
-                mipsel-buildroot-linux-gnu-gcc \
-                  -O2 -pipe -Wall -Wextra \
-                  -march="${ISA}" -mtune="${ISA}" \
-                  -mabi=32 -mnan=2008 \
-                  tools/ad5x-display-spike/ad5x_abi_smoke.c \
-                  -o "${BIN}"
+              mipsel-buildroot-linux-gnu-gcc \
+                -O2 -pipe -Wall -Wextra \
+                -march=mips32r5 -mtune=mips32r5 \
+                -mabi=32 -mnan=2008 \
+                tools/ad5x-display-spike/ad5x_abi_smoke.c \
+                -o out/ad5x-abi-smoke
 
-                mipsel-buildroot-linux-gnu-readelf -h "${BIN}" > "out/elf-header-${ISA}.txt"
-                mipsel-buildroot-linux-gnu-readelf -l "${BIN}" > "out/elf-program-headers-${ISA}.txt"
-                mipsel-buildroot-linux-gnu-readelf -A "${BIN}" > "out/elf-attributes-${ISA}.txt" || true
-              done
+              mipsel-buildroot-linux-gnu-readelf -h out/ad5x-abi-smoke > out/elf-header.txt
+              mipsel-buildroot-linux-gnu-readelf -l out/ad5x-abi-smoke > out/elf-program-headers.txt
+              mipsel-buildroot-linux-gnu-readelf -A out/ad5x-abi-smoke > out/elf-attributes.txt
             '
 
-          for ISA in mips32r2 mips32r5; do
-            BIN="out/ad5x-abi-smoke-${ISA}"
-            file "$BIN" | tee "out/file-${ISA}.txt"
-            grep -Eq '^[[:space:]]*Class:[[:space:]]+ELF32[[:space:]]*$' "out/elf-header-${ISA}.txt"
-            grep -Eq '^[[:space:]]*Data:.*little endian' "out/elf-header-${ISA}.txt"
-            grep -Fq '/lib/ld-linux-mipsn8.so.1' "out/elf-program-headers-${ISA}.txt"
-          done
+          file out/ad5x-abi-smoke | tee out/file.txt
+          grep -Eq '^[[:space:]]*Class:[[:space:]]+ELF32[[:space:]]*$' out/elf-header.txt
+          grep -Eq '^[[:space:]]*Data:.*little endian' out/elf-header.txt
+          grep -Eq 'Flags:.*nan2008.*o32' out/elf-header.txt
+          grep -Fq '/lib/ld-linux-mipsn8.so.1' out/elf-program-headers.txt
+          grep -Eq '^[[:space:]]*ISA:[[:space:]]+MIPS32r5[[:space:]]*$' out/elf-attributes.txt
 
           {
             echo "helixscreen_ref=$HELIXSCREEN_REF"
             echo "plugins_ad5x_sha=$GITHUB_SHA"
             echo "runner=$RUNNER_OS"
-            sha256sum out/ad5x-abi-smoke-mips32r2 out/ad5x-abi-smoke-mips32r5
+            sha256sum out/ad5x-abi-smoke
           } | tee out/BUILDINFO.txt
 
           tar -C out -czf dist/ad5x-toolchain-smoke.tar.gz .
