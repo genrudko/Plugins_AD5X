@@ -68,6 +68,10 @@ jobs:
             -w /work \
             "$TOOLCHAIN_IMAGE" \
             sh -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends cpio unzip rsync bc
+              rm -rf /var/lib/apt/lists/*
+
               make -C .ci/buildroot \
                 BR2_DEFCONFIG=/work/tools/ad5x-display-spike/buildroot/ad5x_x11_defconfig \
                 defconfig
