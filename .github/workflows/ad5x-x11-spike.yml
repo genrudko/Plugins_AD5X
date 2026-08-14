@@ -67,18 +67,23 @@ jobs:
             -v "$PWD:/work" \
             -w /work \
             "$TOOLCHAIN_IMAGE" \
-            sh -euxc '
+            bash -euxo pipefail -c '
               apt-get update
               apt-get install -y --no-install-recommends cpio unzip rsync bc
               rm -rf /var/lib/apt/lists/*
 
               make -C .ci/buildroot \
                 BR2_DEFCONFIG=/work/tools/ad5x-display-spike/buildroot/ad5x_x11_defconfig \
-                defconfig
-
-              make -C .ci/buildroot -j2
+                defconfig 2>&1 | tee out/x11/defconfig.log
 
               cp .ci/buildroot/.config out/x11/buildroot.config
+
+              if ! make -C .ci/buildroot -j1 >out/x11/build.log 2>&1; then
+                echo "=== Buildroot failure: last 300 lines ==="
+                tail -n 300 out/x11/build.log
+                exit 1
+              fi
+
               cp .ci/buildroot/output/images/rootfs.tar.gz out/x11/ad5x-x11-rootfs.tar.gz
 
               find .ci/buildroot/output/target/usr -type f \
@@ -118,9 +123,22 @@ jobs:
           } | tee out/x11/BUILDINFO.txt
 
       - name: Upload X11 rootfs artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ad5x-x11-rootfs-${{ github.sha }}
           path: out/x11/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload Buildroot diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-x11-diagnostics-${{ github.sha }}
+          path: |
+            out/x11/defconfig.log
+            out/x11/build.log
+            out/x11/buildroot.config
+          if-no-files-found: warn
+          retention-days: 7
