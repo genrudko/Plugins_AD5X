@@ -79,9 +79,9 @@ jobs:
           for ISA in mips32r2 mips32r5; do
             BIN="out/ad5x-abi-smoke-${ISA}"
             file "$BIN" | tee "out/file-${ISA}.txt"
-            grep -F 'Class:                             ELF32' "out/elf-header-${ISA}.txt"
-            grep -F 'Data:                              2s complement, little endian' "out/elf-header-${ISA}.txt"
-            grep -F '[Requesting program interpreter: /lib/ld-linux-mipsn8.so.1]' "out/elf-program-headers-${ISA}.txt"
+            grep -Eq '^[[:space:]]*Class:[[:space:]]+ELF32[[:space:]]*$' "out/elf-header-${ISA}.txt"
+            grep -Eq '^[[:space:]]*Data:.*little endian' "out/elf-header-${ISA}.txt"
+            grep -Fq '/lib/ld-linux-mipsn8.so.1' "out/elf-program-headers-${ISA}.txt"
           done
 
           {
