@@ -1,0 +1,39 @@
+Section "ServerFlags"
+    Option "AutoAddDevices" "false"
+    Option "AutoEnableDevices" "false"
+    Option "AllowMouseOpenFail" "true"
+EndSection
+
+Section "Device"
+    Identifier "AD5X-FBDEV"
+    Driver "fbdev"
+    Option "fbdev" "/dev/fb0"
+EndSection
+
+Section "Monitor"
+    Identifier "AD5X-LCD"
+EndSection
+
+Section "Screen"
+    Identifier "AD5X-Screen"
+    Device "AD5X-FBDEV"
+    Monitor "AD5X-LCD"
+    DefaultDepth 24
+    SubSection "Display"
+        Depth 24
+        Modes "800x480"
+    EndSubSection
+EndSection
+
+Section "InputDevice"
+    Identifier "AD5X-Touch"
+    Driver "evdev"
+    Option "Device" "@TOUCH_EVENT@"
+    Option "GrabDevice" "true"
+EndSection
+
+Section "ServerLayout"
+    Identifier "AD5X-Layout"
+    Screen "AD5X-Screen"
+    InputDevice "AD5X-Touch" "CorePointer"
+EndSection
