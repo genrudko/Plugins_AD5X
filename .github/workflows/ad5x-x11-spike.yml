@@ -72,8 +72,46 @@ jobs:
               apt-get install -y --no-install-recommends cpio unzip rsync bc
               rm -rf /var/lib/apt/lists/*
 
+              DEFCONFIG=/work/out/x11/ad5x_x11_generated_defconfig
+              cp tools/ad5x-display-spike/buildroot/ad5x_x11_defconfig "$DEFCONFIG"
+
+              # Buildroot requires a custom external-toolchain config to declare
+              # every language/runtime feature that the compiler actually exposes.
+              # Probe the pinned toolchain rather than guessing from its GCC build.
+              if printf "program hello\nend program hello\n" | \
+                   mipsel-buildroot-linux-gnu-gfortran -x f95 -ffree-form \
+                   -o /tmp/br-fortran-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_FORTRAN=y >> "$DEFCONFIG"
+                echo "toolchain feature: Fortran=yes" | tee -a out/x11/toolchain-features.txt
+              else
+                echo "toolchain feature: Fortran=no" | tee -a out/x11/toolchain-features.txt
+              fi
+              rm -f /tmp/br-fortran-test
+
+              if printf "import std.stdio;\nvoid main() {}\n" | \
+                   mipsel-buildroot-linux-gnu-gdc -x d \
+                   -o /tmp/br-dlang-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_DLANG=y >> "$DEFCONFIG"
+                echo "toolchain feature: D=yes" | tee -a out/x11/toolchain-features.txt
+              else
+                echo "toolchain feature: D=no" | tee -a out/x11/toolchain-features.txt
+              fi
+              rm -f /tmp/br-dlang-test
+
+              if printf "#include <omp.h>\nint main(void) { return omp_get_thread_num(); }\n" | \
+                   mipsel-buildroot-linux-gnu-gcc -fopenmp -x c \
+                   -o /tmp/br-openmp-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_OPENMP=y >> "$DEFCONFIG"
+                echo "toolchain feature: OpenMP=yes" | tee -a out/x11/toolchain-features.txt
+              else
+                echo "toolchain feature: OpenMP=no" | tee -a out/x11/toolchain-features.txt
+              fi
+              rm -f /tmp/br-openmp-test
+
+              cp "$DEFCONFIG" out/x11/generated-defconfig.txt
+
               make -C .ci/buildroot \
-                BR2_DEFCONFIG=/work/tools/ad5x-display-spike/buildroot/ad5x_x11_defconfig \
+                BR2_DEFCONFIG="$DEFCONFIG" \
                 defconfig 2>&1 | tee out/x11/defconfig.log
 
               cp .ci/buildroot/.config out/x11/buildroot.config
@@ -140,5 +178,7 @@ jobs:
             out/x11/defconfig.log
             out/x11/build.log
             out/x11/buildroot.config
+            out/x11/generated-defconfig.txt
+            out/x11/toolchain-features.txt
           if-no-files-found: warn
           retention-days: 7
