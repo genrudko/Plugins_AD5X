@@ -126,6 +126,7 @@ jobs:
 
               find .ci/buildroot/output/target/usr -type f \
                 \( -name Xorg -o -name fbdev_drv.so -o -name evdev_drv.so \
+                   -o -name libfbdevhw.so -o -name libshadow.so -o -name xkbcomp \
                    -o -name xev -o -name xinput -o -name xsetroot \) \
                 -print | sort > out/x11/payload-files.txt
 
@@ -141,8 +142,11 @@ jobs:
 
           test -s out/x11/ad5x-x11-rootfs.tar.gz
           test -x .ci/buildroot/output/target/usr/bin/Xorg
+          test -f .ci/buildroot/output/target/usr/lib/xorg/modules/libfbdevhw.so
+          test -f .ci/buildroot/output/target/usr/lib/xorg/modules/libshadow.so
           test -f .ci/buildroot/output/target/usr/lib/xorg/modules/drivers/fbdev_drv.so
           test -f .ci/buildroot/output/target/usr/lib/xorg/modules/input/evdev_drv.so
+          test -x .ci/buildroot/output/target/usr/bin/xkbcomp
           test -x .ci/buildroot/output/target/usr/bin/xev
           test -x .ci/buildroot/output/target/usr/bin/xinput
           test -x .ci/buildroot/output/target/usr/bin/xsetroot
