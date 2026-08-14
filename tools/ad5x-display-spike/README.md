@@ -17,18 +17,20 @@ It is intentionally separated from the stable installer/runtime. Nothing in this
 
 ## Stage 1 — toolchain ABI smoke
 
-Current CI only proves the build path.
+Current CI only proves the build path and produces a payload for a later live compatibility check.
 
 The workflow `.github/workflows/ad5x-display-spike.yml`:
 
 1. checks out a pinned HelixScreen revision;
 2. builds HelixScreen's AD5X Docker toolchain image;
-3. compiles `ad5x_abi_smoke.c` twice: MIPS32r2 and MIPS32r5, both O32/NAN2008;
-4. verifies ELF32 little-endian output and the expected `/lib/ld-linux-mipsn8.so.1` interpreter;
+3. compiles `ad5x_abi_smoke.c` with the current AD5X target flags: MIPS32r5, O32 and NAN2008;
+4. verifies ELF32 little-endian output, O32/NAN2008 flags, the expected `/lib/ld-linux-mipsn8.so.1` interpreter, and `MIPS32r5` in the MIPS ABI attributes;
 5. records ELF headers, attributes, program headers and compiler metadata;
 6. publishes `ad5x-toolchain-smoke.tar.gz` as a GitHub Actions artifact.
 
-Both smoke binaries are dynamically linked on purpose. Running them later inside the Z-Mod chroot will answer a useful hardware question directly: whether the live AD5X accepts the MIPS32r5 target used by HelixScreen, while keeping an r2 baseline that matches the ABI flags observed on the current Z-Mod Python binary.
+The smoke binary is dynamically linked on purpose. Running it later inside the Z-Mod chroot verifies the practical loader/libc compatibility of the exact cross-toolchain we intend to use for the display bundle.
+
+A subtle MIPS detail discovered during the spike: GNU `file` and the ELF `e_flags` field may report the produced executable as `MIPS32 rel2` / `mips32r2` even when compiling with `-march=mips32r5`. The authoritative revision for this toolchain output is carried in `.MIPS.abiflags`; `readelf -A` reports `ISA: MIPS32r5`. Therefore the workflow validates the ABI attributes instead of treating the generic `file` label as an ISA-revision test.
 
 ## Stage 2 — minimal X11 display bundle
 
