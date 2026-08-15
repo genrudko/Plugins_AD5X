@@ -1,0 +1,14 @@
+--- a/package/x11r7/xserver_xorg-server/xserver_xorg-server.mk
++++ b/package/x11r7/xserver_xorg-server/xserver_xorg-server.mk
+@@ -211,4 +211,12 @@ XSERVER_XORG_SERVER_CONF_OPTS += \
+ 	--with-xkb-path=/opt/ad5x-x11/share/X11/xkb \
+ 	--with-xkb-output=/tmp/ad5x-xkb
+ 
++# GTK3 needs a libGL/libEGL provider in Buildroot, but the stock AD5X LCD proof
++# does not. Keep the already accepted Xorg/fbdev path unchanged even when Mesa
++# swrast is present for GTK/libepoxy linkage. These options are intentionally
++# appended last so they win over Buildroot's BR2_PACKAGE_HAS_LIBGL defaults.
++XSERVER_XORG_SERVER_CONF_OPTS += \
++	--disable-dri --disable-glx --disable-dri2 --disable-dri3 --disable-glamor
++
+ $(eval $(autotools-package))
