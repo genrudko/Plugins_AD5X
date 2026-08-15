@@ -78,6 +78,12 @@ jobs:
               apt-get install -y --no-install-recommends cpio unzip rsync bc file python3
               rm -rf /var/lib/apt/lists/*
 
+              # The pinned AD5X toolchain image exports MIPS target tools globally.
+              # Buildroot supplies target tools itself; leaking these variables into
+              # host Meson packages makes native x86_64 artifacts use MIPS strip/CC.
+              # Keep the cross-toolchain directory on PATH, but clear its global env.
+              unset CROSS_COMPILE CC CXX AR STRIP RANLIB LD TARGET_CFLAGS TARGET_LDFLAGS
+
               patch -d .ci/buildroot -p1 < \
                 tools/ad5x-display-spike/buildroot/xserver-isolated-xkb.patch
               patch -d .ci/buildroot -p1 < \
