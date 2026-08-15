@@ -1,0 +1,64 @@
+--- a/package/python-pycairo/python-pycairo.mk
++++ b/package/python-pycairo/python-pycairo.mk
+@@ -4,9 +4,9 @@
+ #
+ ################################################################################
+ 
+-PYTHON_PYCAIRO_VERSION = 1.27.0
++PYTHON_PYCAIRO_VERSION = 1.29.0
+ PYTHON_PYCAIRO_SOURCE = pycairo-$(PYTHON_PYCAIRO_VERSION).tar.gz
+-PYTHON_PYCAIRO_SITE = https://files.pythonhosted.org/packages/07/4a/42b26390181a7517718600fa7d98b951da20be982a50cd4afb3d46c2e603
++PYTHON_PYCAIRO_SITE = https://files.pythonhosted.org/packages/22/d9/1728840a22a4ef8a8f479b9156aa2943cd98c3907accd3849fb0d5f82bfd
+ PYTHON_PYCAIRO_DEPENDENCIES = cairo
+ PYTHON_PYCAIRO_LICENSE = LGPL-2.1 or MPL-1.1
+ PYTHON_PYCAIRO_LICENSE_FILES = COPYING COPYING-LGPL-2.1 COPYING-MPL-1.1
+--- a/package/python-pycairo/python-pycairo.hash
++++ b/package/python-pycairo/python-pycairo.hash
+@@ -1,6 +1,6 @@
+ # md5, sha256 from https://pypi.org/pypi/pycairo/json
+-md5  12097575a1bb683cab7dc425d9769a68  pycairo-1.27.0.tar.gz
+-sha256  5cb21e7a00a2afcafea7f14390235be33497a2cce53a98a19389492a60628430  pycairo-1.27.0.tar.gz
++md5  8202d252ea754e2a17852b9031e01b32  pycairo-1.29.0.tar.gz
++sha256  f3f7fde97325cae80224c09f12564ef58d0d0f655da0e3b040f5807bd5bd3142  pycairo-1.29.0.tar.gz
+ # Locally computed sha256 checksums
+ sha256  360b9a526d47c51a7cab7f1ec49ca5893050562d639b742d588934ff84823a72  COPYING
+ sha256  d80c9d084ebfb50ea1ed91bfbc2410d6ce542097a32c43b00781b83adcb8c77f  COPYING-LGPL-2.1
+
+--- /dev/null
++++ b/package/qemu/0004-linux-user-do-not-define-struct-sched-attr-if-libc-does.patch
+@@ -0,0 +1,35 @@
++From b4b23b11af796c5e3740d34a17e94eeca4ca9a75 Mon Sep 17 00:00:00 2001
++From: Khem Raj <raj.khem@gmail.com>
++Date: Fri, 7 Feb 2025 16:09:20 +0000
++Subject: [PATCH] linux-user: Do not define struct sched_attr if libc headers do
++
++glibc 2.41+ defines struct sched_attr. Guard QEMU's fallback definition
++with SCHED_ATTR_SIZE_VER0 to avoid a duplicate definition.
++
++Upstream: 27a8d899c7a100fd5aa040a8b993bb257687c393
++Backport: b4b23b11af796c5e3740d34a17e94eeca4ca9a75
++---
++ linux-user/syscall.c | 4 +++-
++ 1 file changed, 3 insertions(+), 1 deletion(-)
++
++diff --git a/linux-user/syscall.c b/linux-user/syscall.c
++--- a/linux-user/syscall.c
+++++ b/linux-user/syscall.c
++@@ -358,7 +358,8 @@ _syscall3(int, sys_sched_getaffinity, pid_t, pid, unsigned int, len,
++ #define __NR_sys_sched_setaffinity __NR_sched_setaffinity
++ _syscall3(int, sys_sched_setaffinity, pid_t, pid, unsigned int, len,
++           unsigned long *, user_mask_ptr);
++-/* sched_attr is not defined in glibc */
+++/* sched_attr is not defined in glibc < 2.41 */
+++#ifndef SCHED_ATTR_SIZE_VER0
++ struct sched_attr {
++     uint32_t size;
++     uint32_t sched_policy;
++@@ -371,6 +372,7 @@ struct sched_attr {
++     uint32_t sched_util_min;
++     uint32_t sched_util_max;
++ };
+++#endif
++ #define __NR_sys_sched_getattr __NR_sched_getattr
++ _syscall4(int, sys_sched_getattr, pid_t, pid, struct sched_attr *, attr,
++           unsigned int, size, unsigned int, flags);

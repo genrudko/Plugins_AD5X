@@ -1,0 +1,69 @@
+BR2_mipsel=y
+BR2_mips_32r5=y
+# BR2_MIPS_SOFT_FLOAT is not set
+BR2_MIPS_FP32_MODE_64=y
+BR2_MIPS_ENABLE_NAN_2008=y
+
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
+BR2_TOOLCHAIN_EXTERNAL_PREINSTALLED=y
+BR2_TOOLCHAIN_EXTERNAL_PATH="/opt/mipsel-zmod-ad5x"
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="mipsel-buildroot-linux-gnu"
+BR2_TOOLCHAIN_EXTERNAL_GCC_13=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_5_10=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_GLIBC=y
+BR2_TOOLCHAIN_EXTERNAL_CXX=y
+# BR2_TOOLCHAIN_EXTERNAL_INET_RPC is not set
+
+# Keep the same proven evdev plumbing as the Stage 2 X11 bundle.
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+BR2_PACKAGE_EUDEV=y
+# BR2_PACKAGE_EUDEV_MODULE_LOADING is not set
+# BR2_PACKAGE_EUDEV_ENABLE_HWDB is not set
+
+# Apply the accepted X11 overlay first, then only the Stage 3 GTK additions.
+BR2_ROOTFS_OVERLAY="../../tools/ad5x-display-spike/rootfs-overlay ../../tools/ad5x-display-spike/gtk-overlay"
+
+# Stage 2 display/input baseline.
+BR2_PACKAGE_XORG7=y
+BR2_PACKAGE_XSERVER_XORG_SERVER=y
+BR2_PACKAGE_XSERVER_XORG_SERVER_MODULAR=y
+BR2_PACKAGE_XDRIVER_XF86_INPUT_EVDEV=y
+BR2_PACKAGE_XDRIVER_XF86_VIDEO_FBDEV=y
+BR2_PACKAGE_XAPP_XEV=y
+BR2_PACKAGE_XAPP_XINPUT=y
+BR2_PACKAGE_XAPP_XSETROOT=y
+BR2_PACKAGE_XAPP_XKBCOMP=y
+
+# GTK3 in Buildroot requires a libGL/libEGL provider even when ordinary X11
+# widgets render through Cairo. Use software Mesa only as that provider; the
+# AD5X Xorg server is patched separately to keep the hardware-proven fbdev
+# path free of DRI/GLX/glamor.
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_SWRAST=y
+BR2_PACKAGE_MESA3D_OPENGL_GLX=y
+
+# Stage 3 GUI/runtime proof. Buildroot 2024.11.2 itself uses Python 3.12.9,
+# matching the Z-Mod chroot interpreter exactly. The final isolated bundle
+# deliberately does not replace the chroot Python executable/runtime.
+BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_GOBJECT_INTROSPECTION=y
+BR2_PACKAGE_PYTHON_GOBJECT=y
+BR2_PACKAGE_PYTHON_PYCAIRO=y
+BR2_PACKAGE_LIBGTK3=y
+BR2_PACKAGE_LIBGTK3_X11=y
+# BR2_PACKAGE_LIBGTK3_WAYLAND is not set
+# BR2_PACKAGE_LIBGTK3_BROADWAY is not set
+# BR2_PACKAGE_LIBGTK3_DEMO is not set
+# BR2_PACKAGE_LIBGTK3_TESTS is not set
+
+# Give Pango/fontconfig a deterministic small font set for the real-LCD proof.
+BR2_PACKAGE_DEJAVU=y
+BR2_PACKAGE_DEJAVU_MONO=y
+BR2_PACKAGE_DEJAVU_SANS=y
+# BR2_PACKAGE_DEJAVU_SERIF is not set
+# BR2_PACKAGE_DEJAVU_SANS_CONDENSED is not set
+# BR2_PACKAGE_DEJAVU_SERIF_CONDENSED is not set
+
+BR2_TARGET_ROOTFS_TAR=y
+BR2_TARGET_ROOTFS_TAR_GZIP=y

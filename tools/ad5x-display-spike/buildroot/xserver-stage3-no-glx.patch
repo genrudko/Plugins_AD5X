@@ -1,0 +1,10 @@
+--- a/package/x11r7/xserver_xorg-server/xserver_xorg-server.mk
++++ b/package/x11r7/xserver_xorg-server/xserver_xorg-server.mk
+@@ -211,4 +211,7 @@ XSERVER_XORG_SERVER_CONF_OPTS += \
+ 	--with-xkb-path=/opt/ad5x-x11/share/X11/xkb \
+ 	--with-xkb-output=/tmp/ad5x-xkb
+ 
++XSERVER_XORG_SERVER_CONF_OPTS += \
++	--disable-dri --disable-glx --disable-dri2 --disable-dri3 --disable-glamor
++
+ $(eval $(autotools-package))
