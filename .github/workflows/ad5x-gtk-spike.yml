@@ -202,7 +202,7 @@ jobs:
                 PYTHONPATH="$TARGET/usr/lib/python3.12/site-packages" \
                 GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
                 "$QEMU" "$TARGET/usr/bin/python3" -c \
-                "import cairo,gi; gi.require_version(\"Gtk\",\"3.0\"); from gi.repository import Gtk,Pango; print(\"QEMU_GI_OK\", Gtk.get_major_version(), Gtk.get_minor_version(), cairo.version, Pango.version_string())" \
+                "import cairo,gi,sys; gi.require_version(\"Gtk\",\"3.0\"); from gi.repository import Gtk,Pango; print(\"QEMU_GI_OK\", sys.version.split()[0], Gtk.get_major_version(), Gtk.get_minor_version(), cairo.version, Pango.version_string())" \
                 | tee out/gtk/qemu-gi-smoke.txt
 
               grep -q "QEMU_GI_OK" out/gtk/qemu-gi-smoke.txt
@@ -270,6 +270,7 @@ jobs:
                 "$BUNDLE/lib/libresolv.so.2" \
                 "$BUNDLE/lib/librt.so.1" \
                 "$BUNDLE/lib/libutil.so.1" \
+                "$BUNDLE/lib/libpython3.so" \
                 "$BUNDLE/lib/libpython3.12.so" \
                 "$BUNDLE/lib/libpython3.12.so.1.0"
 
@@ -337,9 +338,10 @@ jobs:
 
           test ! -e "$BUNDLE/lib/libc.so.6"
           test ! -e "$BUNDLE/lib/ld-linux-mipsn8.so.1"
+          test ! -e "$BUNDLE/lib/libpython3.so"
           test ! -e "$BUNDLE/lib/libpython3.12.so.1.0"
 
-          grep -q "PYTHON3_VERSION = 3.12.9" out/gtk/runtime-versions.txt
+          grep -q "QEMU_GI_OK 3.12.9 3 24 1.29.0" out/gtk/qemu-gi-smoke.txt
           grep -q "PYTHON_PYCAIRO_VERSION = 1.29.0" out/gtk/runtime-versions.txt
           grep -q "QEMU_GI_OK" out/gtk/qemu-gi-smoke.txt
           grep -q -- "--disable-glx" out/gtk/xorg-configure-args.txt
