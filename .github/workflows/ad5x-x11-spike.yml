@@ -57,7 +57,7 @@ jobs:
             -f .ci/helixscreen/docker/Dockerfile.ad5x \
             .ci/helixscreen/docker
 
-      - name: Build minimal Xorg rootfs
+      - name: Build minimal Xorg rootfs and isolated bundle
         run: |
           set -euo pipefail
           rm -rf out/x11
@@ -71,6 +71,11 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends cpio unzip rsync bc
               rm -rf /var/lib/apt/lists/*
+
+              # Buildroot 2024.11.2 defaults Xorg to /usr/bin/xkbcomp and
+              # /usr/share/X11/xkb. The AD5X spike must remain isolated in /opt.
+              patch -d .ci/buildroot -p1 < \
+                tools/ad5x-display-spike/buildroot/xserver-isolated-xkb.patch
 
               DEFCONFIG=/work/out/x11/ad5x_x11_generated_defconfig
               cp tools/ad5x-display-spike/buildroot/ad5x_x11_defconfig "$DEFCONFIG"
@@ -122,39 +127,103 @@ jobs:
                 exit 1
               fi
 
+              TARGET=.ci/buildroot/output/target
               cp .ci/buildroot/output/images/rootfs.tar.gz out/x11/ad5x-x11-rootfs.tar.gz
 
-              find .ci/buildroot/output/target/usr -type f \
+              find "$TARGET/usr" -type f \
                 \( -name Xorg -o -name fbdev_drv.so -o -name evdev_drv.so \
                    -o -name libfbdevhw.so -o -name libshadow.so -o -name xkbcomp \
                    -o -name xev -o -name xinput -o -name xsetroot \) \
                 -print | sort > out/x11/payload-files.txt
 
               mipsel-buildroot-linux-gnu-readelf -h \
-                .ci/buildroot/output/target/usr/bin/Xorg > out/x11/Xorg-elf-header.txt
+                "$TARGET/usr/bin/Xorg" > out/x11/Xorg-elf-header.txt
               mipsel-buildroot-linux-gnu-readelf -d \
-                .ci/buildroot/output/target/usr/bin/Xorg > out/x11/Xorg-dynamic.txt
+                "$TARGET/usr/bin/Xorg" > out/x11/Xorg-dynamic.txt
+              mipsel-buildroot-linux-gnu-readelf -h \
+                "$TARGET/usr/bin/xkbcomp" > out/x11/xkbcomp-elf-header.txt
+              mipsel-buildroot-linux-gnu-readelf -d \
+                "$TARGET/usr/bin/xkbcomp" > out/x11/xkbcomp-dynamic.txt
+
+              BUNDLE_ROOT=out/x11/bundle-root
+              BUNDLE="$BUNDLE_ROOT/opt/ad5x-x11"
+              rm -rf "$BUNDLE_ROOT"
+              mkdir -p "$BUNDLE/bin" "$BUNDLE/lib" "$BUNDLE/share/X11"
+
+              cp -a "$TARGET/opt/ad5x-x11/." "$BUNDLE/"
+              cp -a \
+                "$TARGET/usr/bin/Xorg" \
+                "$TARGET/usr/bin/xev" \
+                "$TARGET/usr/bin/xinput" \
+                "$TARGET/usr/bin/xkbcomp" \
+                "$TARGET/usr/bin/xsetroot" \
+                "$BUNDLE/bin/"
+              cp -a "$TARGET/usr/lib/xorg" "$BUNDLE/lib/"
+              cp -a "$TARGET/usr/lib/"*.so* "$BUNDLE/lib/"
+              cp -a "$TARGET/usr/share/X11/xkb" "$BUNDLE/share/X11/"
+
+              # The Z-Mod chroot already owns the ABI/runtime libc. Do not shadow
+              # its loader or glibc with copies from the Buildroot test rootfs.
+              rm -f \
+                "$BUNDLE/lib/ld-linux-mipsn8.so.1" \
+                "$BUNDLE/lib/libanl.so.1" \
+                "$BUNDLE/lib/libc.so.6" \
+                "$BUNDLE/lib/libdl.so.2" \
+                "$BUNDLE/lib/libm.so.6" \
+                "$BUNDLE/lib/libnsl.so.1" \
+                "$BUNDLE/lib/libnss_dns.so.2" \
+                "$BUNDLE/lib/libnss_files.so.2" \
+                "$BUNDLE/lib/libpthread.so.0" \
+                "$BUNDLE/lib/libresolv.so.2" \
+                "$BUNDLE/lib/librt.so.1" \
+                "$BUNDLE/lib/libutil.so.1"
+
+              chmod +x "$BUNDLE/run-xorg-test.sh"
+              tar -C "$BUNDLE_ROOT" -czf out/x11/ad5x-x11-bundle.tar.gz opt/ad5x-x11
             '
 
-      - name: Validate X11 payload
+      - name: Validate X11 payload and isolated bundle
         run: |
           set -euo pipefail
 
-          test -s out/x11/ad5x-x11-rootfs.tar.gz
-          test -x .ci/buildroot/output/target/usr/bin/Xorg
-          test -f .ci/buildroot/output/target/usr/lib/xorg/modules/libfbdevhw.so
-          test -f .ci/buildroot/output/target/usr/lib/xorg/modules/libshadow.so
-          test -f .ci/buildroot/output/target/usr/lib/xorg/modules/drivers/fbdev_drv.so
-          test -f .ci/buildroot/output/target/usr/lib/xorg/modules/input/evdev_drv.so
-          test -x .ci/buildroot/output/target/usr/bin/xkbcomp
-          test -x .ci/buildroot/output/target/usr/bin/xev
-          test -x .ci/buildroot/output/target/usr/bin/xinput
-          test -x .ci/buildroot/output/target/usr/bin/xsetroot
+          TARGET=.ci/buildroot/output/target
+          BUNDLE=out/x11/bundle-root/opt/ad5x-x11
 
-          file .ci/buildroot/output/target/usr/bin/Xorg | tee out/x11/Xorg-file.txt
+          test -s out/x11/ad5x-x11-rootfs.tar.gz
+          test -s out/x11/ad5x-x11-bundle.tar.gz
+          test -x "$TARGET/usr/bin/Xorg"
+          test -f "$TARGET/usr/lib/xorg/modules/libfbdevhw.so"
+          test -f "$TARGET/usr/lib/xorg/modules/libshadow.so"
+          test -f "$TARGET/usr/lib/xorg/modules/drivers/fbdev_drv.so"
+          test -f "$TARGET/usr/lib/xorg/modules/input/evdev_drv.so"
+          test -x "$TARGET/usr/bin/xkbcomp"
+          test -x "$TARGET/usr/bin/xev"
+          test -x "$TARGET/usr/bin/xinput"
+          test -x "$TARGET/usr/bin/xsetroot"
+
+          test -x "$BUNDLE/bin/Xorg"
+          test -x "$BUNDLE/bin/xkbcomp"
+          test -x "$BUNDLE/run-xorg-test.sh"
+          test -f "$BUNDLE/lib/xorg/modules/libfbdevhw.so"
+          test -f "$BUNDLE/lib/xorg/modules/libshadow.so"
+          test -d "$BUNDLE/share/X11/xkb"
+          test ! -e "$BUNDLE/lib/libc.so.6"
+          test ! -e "$BUNDLE/lib/ld-linux-mipsn8.so.1"
+
+          file "$TARGET/usr/bin/Xorg" | tee out/x11/Xorg-file.txt
           grep -Eq '^[[:space:]]*Class:[[:space:]]+ELF32[[:space:]]*$' out/x11/Xorg-elf-header.txt
           grep -Eq '^[[:space:]]*Data:.*little endian' out/x11/Xorg-elf-header.txt
           grep -Eq 'Flags:.*nan2008.*o32' out/x11/Xorg-elf-header.txt
+          grep -Eq 'Flags:.*nan2008.*o32' out/x11/xkbcomp-elf-header.txt
+
+          # Prove the rebuilt server no longer hard-codes the Z-Mod chroot /usr
+          # for the helper/data paths needed during virtual keyboard init.
+          strings "$BUNDLE/bin/Xorg" | grep -F '/opt/ad5x-x11/bin'
+          strings "$BUNDLE/bin/Xorg" | grep -F '/opt/ad5x-x11/share/X11/xkb'
+
+          tar -tzf out/x11/ad5x-x11-bundle.tar.gz > out/x11/bundle-files.txt
+          grep -Fx 'opt/ad5x-x11/bin/xkbcomp' out/x11/bundle-files.txt
+          grep -Fx 'opt/ad5x-x11/run-xorg-test.sh' out/x11/bundle-files.txt
 
           {
             echo "helixscreen_ref=$HELIXSCREEN_REF"
@@ -162,7 +231,27 @@ jobs:
             echo "plugins_ad5x_sha=$GITHUB_SHA"
             du -h out/x11/ad5x-x11-rootfs.tar.gz
             sha256sum out/x11/ad5x-x11-rootfs.tar.gz
+            du -h out/x11/ad5x-x11-bundle.tar.gz
+            sha256sum out/x11/ad5x-x11-bundle.tar.gz
           } | tee out/x11/BUILDINFO.txt
+
+          rm -rf out/x11/bundle-root
+
+      - name: Upload isolated X11 bundle artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-x11-bundle-${{ github.sha }}
+          path: |
+            out/x11/ad5x-x11-bundle.tar.gz
+            out/x11/bundle-files.txt
+            out/x11/Xorg-elf-header.txt
+            out/x11/Xorg-dynamic.txt
+            out/x11/xkbcomp-elf-header.txt
+            out/x11/xkbcomp-dynamic.txt
+            out/x11/BUILDINFO.txt
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload X11 rootfs artifact
         if: success()

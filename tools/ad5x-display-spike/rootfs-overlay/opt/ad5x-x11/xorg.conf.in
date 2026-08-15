@@ -1,3 +1,8 @@
+Section "Module"
+    Load "fbdevhw"
+    Load "shadow"
+EndSection
+
 Section "ServerFlags"
     Option "AutoAddDevices" "false"
     Option "AutoEnableDevices" "false"
