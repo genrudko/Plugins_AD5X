@@ -1,6 +1,6 @@
 --- a/package/x11r7/xserver_xorg-server/xserver_xorg-server.mk
 +++ b/package/x11r7/xserver_xorg-server/xserver_xorg-server.mk
-@@ -204,4 +204,12 @@ define XSERVER_XORG_SERVER_INSTALL_INIT_SYSV
+@@ -204,4 +204,11 @@ define XSERVER_XORG_SERVER_INSTALL_INIT_SYSV
  endef
  endif
  
