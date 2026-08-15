@@ -1,0 +1,14 @@
+--- a/package/x11r7/xserver_xorg-server/xserver_xorg-server.mk
++++ b/package/x11r7/xserver_xorg-server/xserver_xorg-server.mk
+@@ -204,4 +204,11 @@ define XSERVER_XORG_SERVER_INSTALL_INIT_SYSV
+ endef
+ endif
+ 
++# The AD5X display spike is deployed as an isolated bundle in the Z-Mod chroot.
++# Keep Xorg's helper and XKB data lookups inside that bundle instead of /usr.
++XSERVER_XORG_SERVER_CONF_OPTS += \
++	--with-xkb-bin-directory=/opt/ad5x-x11/bin \
++	--with-xkb-path=/opt/ad5x-x11/share/X11/xkb \
++	--with-xkb-output=/tmp/ad5x-xkb
++
+ $(eval $(autotools-package))

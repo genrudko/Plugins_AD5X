@@ -1,0 +1,279 @@
+name: AD5X X11 spike
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - ".github/workflows/ad5x-x11-spike.yml"
+      - "tools/ad5x-display-spike/buildroot/**"
+      - "tools/ad5x-display-spike/rootfs-overlay/**"
+  push:
+    branches:
+      - dev
+    paths:
+      - ".github/workflows/ad5x-x11-spike.yml"
+      - "tools/ad5x-display-spike/buildroot/**"
+      - "tools/ad5x-display-spike/rootfs-overlay/**"
+
+permissions:
+  contents: read
+
+env:
+  HELIXSCREEN_REF: 708e992618d57814055346ae827c0479e7843fc6
+  BUILDROOT_REF: 2024.11.2
+  TOOLCHAIN_IMAGE: plugins-ad5x/ad5x-toolchain:ci
+
+jobs:
+  build-x11-rootfs:
+    name: Build minimal AD5X X11 rootfs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout Plugins_AD5X
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned HelixScreen toolchain source
+        uses: actions/checkout@v4
+        with:
+          repository: prestonbrown/helixscreen
+          ref: ${{ env.HELIXSCREEN_REF }}
+          path: .ci/helixscreen
+
+      - name: Checkout Buildroot
+        uses: actions/checkout@v4
+        with:
+          repository: buildroot/buildroot
+          ref: ${{ env.BUILDROOT_REF }}
+          path: .ci/buildroot
+
+      - name: Build AD5X toolchain image
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "$TOOLCHAIN_IMAGE" \
+            -f .ci/helixscreen/docker/Dockerfile.ad5x \
+            .ci/helixscreen/docker
+
+      - name: Build minimal Xorg rootfs and isolated bundle
+        run: |
+          set -euo pipefail
+          rm -rf out/x11
+          mkdir -p out/x11
+
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            "$TOOLCHAIN_IMAGE" \
+            bash -euxo pipefail -c '
+              apt-get update
+              apt-get install -y --no-install-recommends cpio unzip rsync bc
+              rm -rf /var/lib/apt/lists/*
+
+              # Buildroot 2024.11.2 defaults Xorg to /usr/bin/xkbcomp and
+              # /usr/share/X11/xkb. The AD5X spike must remain isolated in /opt.
+              patch -d .ci/buildroot -p1 < \
+                tools/ad5x-display-spike/buildroot/xserver-isolated-xkb.patch
+
+              DEFCONFIG=/work/out/x11/ad5x_x11_generated_defconfig
+              cp tools/ad5x-display-spike/buildroot/ad5x_x11_defconfig "$DEFCONFIG"
+
+              # Buildroot requires a custom external-toolchain config to declare
+              # every language/runtime feature that the compiler actually exposes.
+              # Probe the pinned toolchain rather than guessing from its GCC build.
+              if printf "program hello\nend program hello\n" | \
+                   mipsel-buildroot-linux-gnu-gfortran -x f95 -ffree-form \
+                   -o /tmp/br-fortran-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_FORTRAN=y >> "$DEFCONFIG"
+                echo "toolchain feature: Fortran=yes" | tee -a out/x11/toolchain-features.txt
+              else
+                echo "toolchain feature: Fortran=no" | tee -a out/x11/toolchain-features.txt
+              fi
+              rm -f /tmp/br-fortran-test
+
+              if printf "import std.stdio;\nvoid main() {}\n" | \
+                   mipsel-buildroot-linux-gnu-gdc -x d \
+                   -o /tmp/br-dlang-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_DLANG=y >> "$DEFCONFIG"
+                echo "toolchain feature: D=yes" | tee -a out/x11/toolchain-features.txt
+              else
+                echo "toolchain feature: D=no" | tee -a out/x11/toolchain-features.txt
+              fi
+              rm -f /tmp/br-dlang-test
+
+              if printf "#include <omp.h>\nint main(void) { return omp_get_thread_num(); }\n" | \
+                   mipsel-buildroot-linux-gnu-gcc -fopenmp -x c \
+                   -o /tmp/br-openmp-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_OPENMP=y >> "$DEFCONFIG"
+                echo "toolchain feature: OpenMP=yes" | tee -a out/x11/toolchain-features.txt
+              else
+                echo "toolchain feature: OpenMP=no" | tee -a out/x11/toolchain-features.txt
+              fi
+              rm -f /tmp/br-openmp-test
+
+              cp "$DEFCONFIG" out/x11/generated-defconfig.txt
+
+              make -C .ci/buildroot \
+                BR2_DEFCONFIG="$DEFCONFIG" \
+                defconfig 2>&1 | tee out/x11/defconfig.log
+
+              cp .ci/buildroot/.config out/x11/buildroot.config
+
+              if ! make -C .ci/buildroot -j1 >out/x11/build.log 2>&1; then
+                echo "=== Buildroot failure: last 300 lines ==="
+                tail -n 300 out/x11/build.log
+                exit 1
+              fi
+
+              TARGET=.ci/buildroot/output/target
+              cp .ci/buildroot/output/images/rootfs.tar.gz out/x11/ad5x-x11-rootfs.tar.gz
+
+              find "$TARGET/usr" -type f \
+                \( -name Xorg -o -name fbdev_drv.so -o -name evdev_drv.so \
+                   -o -name libfbdevhw.so -o -name libshadow.so -o -name xkbcomp \
+                   -o -name xev -o -name xinput -o -name xsetroot \) \
+                -print | sort > out/x11/payload-files.txt
+
+              mipsel-buildroot-linux-gnu-readelf -h \
+                "$TARGET/usr/bin/Xorg" > out/x11/Xorg-elf-header.txt
+              mipsel-buildroot-linux-gnu-readelf -d \
+                "$TARGET/usr/bin/Xorg" > out/x11/Xorg-dynamic.txt
+              mipsel-buildroot-linux-gnu-readelf -h \
+                "$TARGET/usr/bin/xkbcomp" > out/x11/xkbcomp-elf-header.txt
+              mipsel-buildroot-linux-gnu-readelf -d \
+                "$TARGET/usr/bin/xkbcomp" > out/x11/xkbcomp-dynamic.txt
+
+              BUNDLE_ROOT=out/x11/bundle-root
+              BUNDLE="$BUNDLE_ROOT/opt/ad5x-x11"
+              rm -rf "$BUNDLE_ROOT"
+              mkdir -p "$BUNDLE/bin" "$BUNDLE/lib" "$BUNDLE/share/X11"
+
+              cp -a "$TARGET/opt/ad5x-x11/." "$BUNDLE/"
+              cp -a \
+                "$TARGET/usr/bin/Xorg" \
+                "$TARGET/usr/bin/xev" \
+                "$TARGET/usr/bin/xinput" \
+                "$TARGET/usr/bin/xkbcomp" \
+                "$TARGET/usr/bin/xsetroot" \
+                "$BUNDLE/bin/"
+              cp -a "$TARGET/usr/lib/xorg" "$BUNDLE/lib/"
+              cp -a "$TARGET/usr/lib/"*.so* "$BUNDLE/lib/"
+              cp -a "$TARGET/lib/"*.so* "$BUNDLE/lib/"
+              cp -a "$TARGET/usr/share/X11/xkb" "$BUNDLE/share/X11/"
+
+              # The Z-Mod chroot already owns the ABI/runtime libc. Do not shadow
+              # its loader or glibc with copies from the Buildroot test rootfs.
+              rm -f \
+                "$BUNDLE/lib/ld-linux-mipsn8.so.1" \
+                "$BUNDLE/lib/libanl.so.1" \
+                "$BUNDLE/lib/libc.so.6" \
+                "$BUNDLE/lib/libdl.so.2" \
+                "$BUNDLE/lib/libm.so.6" \
+                "$BUNDLE/lib/libnsl.so.1" \
+                "$BUNDLE/lib/libnss_dns.so.2" \
+                "$BUNDLE/lib/libnss_files.so.2" \
+                "$BUNDLE/lib/libpthread.so.0" \
+                "$BUNDLE/lib/libresolv.so.2" \
+                "$BUNDLE/lib/librt.so.1" \
+                "$BUNDLE/lib/libutil.so.1"
+
+              chmod +x "$BUNDLE/run-xorg-test.sh"
+              tar -C "$BUNDLE_ROOT" -czf out/x11/ad5x-x11-bundle.tar.gz opt/ad5x-x11
+            '
+
+      - name: Validate X11 payload and isolated bundle
+        run: |
+          set -euo pipefail
+
+          TARGET=.ci/buildroot/output/target
+          BUNDLE=out/x11/bundle-root/opt/ad5x-x11
+
+          test -s out/x11/ad5x-x11-rootfs.tar.gz
+          test -s out/x11/ad5x-x11-bundle.tar.gz
+          test -x "$TARGET/usr/bin/Xorg"
+          test -f "$TARGET/usr/lib/xorg/modules/libfbdevhw.so"
+          test -f "$TARGET/usr/lib/xorg/modules/libshadow.so"
+          test -f "$TARGET/usr/lib/xorg/modules/drivers/fbdev_drv.so"
+          test -f "$TARGET/usr/lib/xorg/modules/input/evdev_drv.so"
+          test -x "$TARGET/usr/bin/xkbcomp"
+          test -x "$TARGET/usr/bin/xev"
+          test -x "$TARGET/usr/bin/xinput"
+          test -x "$TARGET/usr/bin/xsetroot"
+
+          test -x "$BUNDLE/bin/Xorg"
+          test -x "$BUNDLE/bin/xkbcomp"
+          test -x "$BUNDLE/run-xorg-test.sh"
+          test -f "$BUNDLE/lib/xorg/modules/libfbdevhw.so"
+          test -f "$BUNDLE/lib/xorg/modules/libshadow.so"
+          test -e "$BUNDLE/lib/libudev.so.1"
+          test -d "$BUNDLE/share/X11/xkb"
+          test ! -e "$BUNDLE/lib/libc.so.6"
+          test ! -e "$BUNDLE/lib/ld-linux-mipsn8.so.1"
+
+          file "$TARGET/usr/bin/Xorg" | tee out/x11/Xorg-file.txt
+          grep -Eq '^[[:space:]]*Class:[[:space:]]+ELF32[[:space:]]*$' out/x11/Xorg-elf-header.txt
+          grep -Eq '^[[:space:]]*Data:.*little endian' out/x11/Xorg-elf-header.txt
+          grep -Eq 'Flags:.*nan2008.*o32' out/x11/Xorg-elf-header.txt
+          grep -Eq 'Flags:.*nan2008.*o32' out/x11/xkbcomp-elf-header.txt
+
+          # Prove the rebuilt server no longer hard-codes the Z-Mod chroot /usr
+          # for the helper/data paths needed during virtual keyboard init.
+          strings "$BUNDLE/bin/Xorg" | grep -F '/opt/ad5x-x11/bin'
+          strings "$BUNDLE/bin/Xorg" | grep -F '/opt/ad5x-x11/share/X11/xkb'
+
+          tar -tzf out/x11/ad5x-x11-bundle.tar.gz > out/x11/bundle-files.txt
+          grep -Fx 'opt/ad5x-x11/bin/xkbcomp' out/x11/bundle-files.txt
+          grep -Fx 'opt/ad5x-x11/run-xorg-test.sh' out/x11/bundle-files.txt
+
+          {
+            echo "helixscreen_ref=$HELIXSCREEN_REF"
+            echo "buildroot_ref=$BUILDROOT_REF"
+            echo "plugins_ad5x_sha=$GITHUB_SHA"
+            du -h out/x11/ad5x-x11-rootfs.tar.gz
+            sha256sum out/x11/ad5x-x11-rootfs.tar.gz
+            du -h out/x11/ad5x-x11-bundle.tar.gz
+            sha256sum out/x11/ad5x-x11-bundle.tar.gz
+          } | tee out/x11/BUILDINFO.txt
+
+          sudo rm -rf out/x11/bundle-root
+
+      - name: Upload isolated X11 bundle artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-x11-bundle-${{ github.sha }}
+          path: |
+            out/x11/ad5x-x11-bundle.tar.gz
+            out/x11/bundle-files.txt
+            out/x11/Xorg-elf-header.txt
+            out/x11/Xorg-dynamic.txt
+            out/x11/xkbcomp-elf-header.txt
+            out/x11/xkbcomp-dynamic.txt
+            out/x11/BUILDINFO.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload X11 rootfs artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-x11-rootfs-${{ github.sha }}
+          path: out/x11/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Buildroot diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-x11-diagnostics-${{ github.sha }}
+          path: |
+            out/x11/defconfig.log
+            out/x11/build.log
+            out/x11/buildroot.config
+            out/x11/generated-defconfig.txt
+            out/x11/toolchain-features.txt
+          if-no-files-found: warn
+          retention-days: 7
