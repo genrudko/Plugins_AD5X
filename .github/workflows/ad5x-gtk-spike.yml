@@ -1,0 +1,413 @@
+name: AD5X GTK3 spike
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - ".github/workflows/ad5x-gtk-spike.yml"
+      - "tools/ad5x-display-spike/buildroot/ad5x_gtk_defconfig"
+      - "tools/ad5x-display-spike/buildroot/xserver-isolated-xkb.patch"
+      - "tools/ad5x-display-spike/buildroot/xserver-stage3-no-glx.patch"
+      - "tools/ad5x-display-spike/buildroot/pycairo-1.29.0.patch"
+      - "tools/ad5x-display-spike/gtk-overlay/**"
+  push:
+    branches:
+      - dev
+    paths:
+      - ".github/workflows/ad5x-gtk-spike.yml"
+      - "tools/ad5x-display-spike/buildroot/ad5x_gtk_defconfig"
+      - "tools/ad5x-display-spike/buildroot/xserver-isolated-xkb.patch"
+      - "tools/ad5x-display-spike/buildroot/xserver-stage3-no-glx.patch"
+      - "tools/ad5x-display-spike/buildroot/pycairo-1.29.0.patch"
+      - "tools/ad5x-display-spike/gtk-overlay/**"
+
+permissions:
+  contents: read
+
+env:
+  HELIXSCREEN_REF: 708e992618d57814055346ae827c0479e7843fc6
+  BUILDROOT_REF: 2024.11.2
+  TOOLCHAIN_IMAGE: plugins-ad5x/ad5x-toolchain:ci
+
+jobs:
+  build-gtk-rootfs:
+    name: Build isolated AD5X GTK3 runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout Plugins_AD5X
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned HelixScreen toolchain source
+        uses: actions/checkout@v4
+        with:
+          repository: prestonbrown/helixscreen
+          ref: ${{ env.HELIXSCREEN_REF }}
+          path: .ci/helixscreen
+
+      - name: Checkout Buildroot
+        uses: actions/checkout@v4
+        with:
+          repository: buildroot/buildroot
+          ref: ${{ env.BUILDROOT_REF }}
+          path: .ci/buildroot
+
+      - name: Build AD5X toolchain image
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "$TOOLCHAIN_IMAGE" \
+            -f .ci/helixscreen/docker/Dockerfile.ad5x \
+            .ci/helixscreen/docker
+
+      - name: Build GTK3 rootfs and isolated bundle
+        run: |
+          set -euo pipefail
+          rm -rf out/gtk
+          mkdir -p out/gtk
+
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            "$TOOLCHAIN_IMAGE" \
+            bash -euxo pipefail -c '
+              apt-get update
+              apt-get install -y --no-install-recommends cpio unzip rsync bc file
+              rm -rf /var/lib/apt/lists/*
+
+              # Preserve the Stage 2 XKB isolation, then keep Xorg on the
+              # hardware-proven fbdev path even though GTK requires a libGL
+              # provider in Buildroot. Finally backport the pycairo floor used
+              # by current KlipperScreen on Python >= 3.10.
+              patch -d .ci/buildroot -p1 < \
+                tools/ad5x-display-spike/buildroot/xserver-isolated-xkb.patch
+              patch -d .ci/buildroot -p1 < \
+                tools/ad5x-display-spike/buildroot/xserver-stage3-no-glx.patch
+              patch -d .ci/buildroot -p1 < \
+                tools/ad5x-display-spike/buildroot/pycairo-1.29.0.patch
+
+              DEFCONFIG=/work/out/gtk/ad5x_gtk_generated_defconfig
+              cp tools/ad5x-display-spike/buildroot/ad5x_gtk_defconfig "$DEFCONFIG"
+
+              # Keep the same external-toolchain feature detection used by the
+              # accepted X11 workflow. Buildroot validates the remaining libc,
+              # wchar and thread capabilities of the custom glibc toolchain.
+              if printf "program hello\nend program hello\n" | \
+                   mipsel-buildroot-linux-gnu-gfortran -x f95 -ffree-form \
+                   -o /tmp/br-fortran-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_FORTRAN=y >> "$DEFCONFIG"
+                echo "toolchain feature: Fortran=yes" | tee -a out/gtk/toolchain-features.txt
+              else
+                echo "toolchain feature: Fortran=no" | tee -a out/gtk/toolchain-features.txt
+              fi
+              rm -f /tmp/br-fortran-test
+
+              if printf "import std.stdio;\nvoid main() {}\n" | \
+                   mipsel-buildroot-linux-gnu-gdc -x d \
+                   -o /tmp/br-dlang-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_DLANG=y >> "$DEFCONFIG"
+                echo "toolchain feature: D=yes" | tee -a out/gtk/toolchain-features.txt
+              else
+                echo "toolchain feature: D=no" | tee -a out/gtk/toolchain-features.txt
+              fi
+              rm -f /tmp/br-dlang-test
+
+              if printf "#include <omp.h>\nint main(void) { return omp_get_thread_num(); }\n" | \
+                   mipsel-buildroot-linux-gnu-gcc -fopenmp -x c \
+                   -o /tmp/br-openmp-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_OPENMP=y >> "$DEFCONFIG"
+                echo "toolchain feature: OpenMP=yes" | tee -a out/gtk/toolchain-features.txt
+              else
+                echo "toolchain feature: OpenMP=no" | tee -a out/gtk/toolchain-features.txt
+              fi
+              rm -f /tmp/br-openmp-test
+
+              cp "$DEFCONFIG" out/gtk/generated-defconfig.txt
+
+              make -C .ci/buildroot \
+                BR2_DEFCONFIG="$DEFCONFIG" \
+                defconfig 2>&1 | tee out/gtk/defconfig.log
+              cp .ci/buildroot/.config out/gtk/buildroot.config
+
+              for symbol in \
+                BR2_PACKAGE_MESA3D \
+                BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_SWRAST \
+                BR2_PACKAGE_MESA3D_OPENGL_GLX \
+                BR2_PACKAGE_PYTHON3 \
+                BR2_PACKAGE_GOBJECT_INTROSPECTION \
+                BR2_PACKAGE_PYTHON_GOBJECT \
+                BR2_PACKAGE_PYTHON_PYCAIRO \
+                BR2_PACKAGE_LIBGTK3 \
+                BR2_PACKAGE_LIBGTK3_X11; do
+                if ! grep -qx "$symbol=y" .ci/buildroot/.config; then
+                  echo "ERROR: Buildroot dropped required symbol $symbol" >&2
+                  grep -E "^(BR2_PACKAGE_(MESA3D|PYTHON|GOBJECT|LIBGTK3)|BR2_TOOLCHAIN|BR2_USE_WCHAR)" \
+                    .ci/buildroot/.config | sort || true
+                  exit 1
+                fi
+              done
+
+              if ! make -C .ci/buildroot -j1 >out/gtk/build.log 2>&1; then
+                echo "=== Buildroot failure: last 400 lines ==="
+                tail -n 400 out/gtk/build.log
+                exit 1
+              fi
+
+              TARGET=.ci/buildroot/output/target
+              HOST=.ci/buildroot/output/host
+              XORG_BUILD="$(find .ci/buildroot/output/build -maxdepth 1 -type d -name "xserver_xorg-server-*" | head -n1)"
+
+              cp .ci/buildroot/output/images/rootfs.tar.gz out/gtk/ad5x-gtk-rootfs.tar.gz
+
+              # Confirm Stage 3 did not silently switch the accepted Xorg
+              # display path to DRI/GLX just because Mesa is now present.
+              grep "ac_cs_config=" "$XORG_BUILD/config.status" > out/gtk/xorg-configure-args.txt
+              python3 - <<PY
+from pathlib import Path
+s = Path("out/gtk/xorg-configure-args.txt").read_text()
+for enabled, disabled in (("--enable-glx", "--disable-glx"), ("--enable-dri", "--disable-dri")):
+    if s.rfind(disabled) <= s.rfind(enabled):
+        raise SystemExit(f"{disabled} is not the final winning configure option")
+print("XORG_FBDEV_NO_GLX_OK")
+PY
+
+              # Buildroot gobject-introspection already uses host QEMU while
+              # cross-building. Run an explicit target-Python import smoke too.
+              QEMU="$HOST/bin/qemu-mipsel"
+              test -x "$QEMU"
+              env \
+                QEMU_LD_PREFIX="$TARGET" \
+                PYTHONHOME="$TARGET/usr" \
+                PYTHONPATH="$TARGET/usr/lib/python3.12/site-packages" \
+                GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
+                "$QEMU" "$TARGET/usr/bin/python3" -c \
+                "import cairo,gi; gi.require_version(\"Gtk\",\"3.0\"); from gi.repository import Gtk,Pango; print(\"QEMU_GI_OK\", Gtk.get_major_version(), Gtk.get_minor_version(), cairo.version, Pango.version_string())" \
+                | tee out/gtk/qemu-gi-smoke.txt
+
+              grep -q "QEMU_GI_OK" out/gtk/qemu-gi-smoke.txt
+
+              # Record the exact versions entering the bundle.
+              {
+                grep "^PYTHON3_VERSION =" .ci/buildroot/package/python3/python3.mk
+                grep "^PYTHON_GOBJECT_VERSION =" .ci/buildroot/package/python-gobject/python-gobject.mk
+                grep "^PYTHON_PYCAIRO_VERSION =" .ci/buildroot/package/python-pycairo/python-pycairo.mk
+                grep "^LIBGTK3_VERSION =" .ci/buildroot/package/libgtk3/libgtk3.mk
+              } | tee out/gtk/runtime-versions.txt
+
+              BUNDLE_ROOT=out/gtk/bundle-root
+              BUNDLE="$BUNDLE_ROOT/opt/ad5x-x11"
+              rm -rf "$BUNDLE_ROOT"
+              mkdir -p "$BUNDLE/bin" "$BUNDLE/lib" "$BUNDLE/share"
+
+              # Overlay contains only scripts/config owned by the spike.
+              cp -a "$TARGET/opt/ad5x-x11/." "$BUNDLE/"
+              chmod +x "$BUNDLE/run-xorg-test.sh" "$BUNDLE/run-gtk-test.sh"
+
+              # Reuse the hardware-accepted Xorg executable/modules and tools.
+              cp -a \
+                "$TARGET/usr/bin/Xorg" \
+                "$TARGET/usr/bin/xinput" \
+                "$TARGET/usr/bin/xkbcomp" \
+                "$TARGET/usr/bin/xsetroot" \
+                "$TARGET/usr/bin/xev" \
+                "$BUNDLE/bin/"
+              cp -a "$TARGET/usr/lib/xorg" "$BUNDLE/lib/"
+
+              # Shared libraries for Xorg + GTK/Pango/GI/PyGObject/pycairo.
+              cp -a "$TARGET/usr/lib/"*.so* "$BUNDLE/lib/"
+              cp -a "$TARGET/lib/"*.so* "$BUNDLE/lib/"
+
+              for dir in \
+                girepository-1.0 \
+                gdk-pixbuf-2.0 \
+                gtk-3.0 \
+                dri; do
+                if [ -d "$TARGET/usr/lib/$dir" ]; then
+                  cp -a "$TARGET/usr/lib/$dir" "$BUNDLE/lib/"
+                fi
+              done
+
+              mkdir -p "$BUNDLE/lib/python3.12"
+              cp -a "$TARGET/usr/lib/python3.12/site-packages" \
+                "$BUNDLE/lib/python3.12/"
+
+              mkdir -p "$BUNDLE/share/X11"
+              cp -a "$TARGET/usr/share/X11/xkb" "$BUNDLE/share/X11/"
+              if [ -d "$TARGET/usr/share/glib-2.0" ]; then
+                cp -a "$TARGET/usr/share/glib-2.0" "$BUNDLE/share/"
+              fi
+              if [ -d "$TARGET/usr/share/fonts" ]; then
+                cp -a "$TARGET/usr/share/fonts" "$BUNDLE/share/"
+              fi
+
+              # Z-Mod owns the interpreter and libc ABI. Do not let the bundle
+              # shadow either one merely because Buildroot needed them to build.
+              rm -f \
+                "$BUNDLE/lib/ld-linux-mipsn8.so.1" \
+                "$BUNDLE/lib/libanl.so.1" \
+                "$BUNDLE/lib/libc.so.6" \
+                "$BUNDLE/lib/libdl.so.2" \
+                "$BUNDLE/lib/libm.so.6" \
+                "$BUNDLE/lib/libnsl.so.1" \
+                "$BUNDLE/lib/libnss_dns.so.2" \
+                "$BUNDLE/lib/libnss_files.so.2" \
+                "$BUNDLE/lib/libpthread.so.0" \
+                "$BUNDLE/lib/libresolv.so.2" \
+                "$BUNDLE/lib/librt.so.1" \
+                "$BUNDLE/lib/libutil.so.1" \
+                "$BUNDLE/lib/libpython3.12.so" \
+                "$BUNDLE/lib/libpython3.12.so.1.0"
+
+              # Inventory ELF NEEDED entries and fail on any dependency that is
+              # neither private nor one of the glibc-owned runtime libraries.
+              : > out/gtk/elf-needed.txt
+              : > out/gtk/missing-needed.txt
+              while IFS= read -r elf; do
+                if ! mipsel-buildroot-linux-gnu-readelf -h "$elf" >/dev/null 2>&1; then
+                  continue
+                fi
+                while IFS= read -r needed; do
+                  [ -n "$needed" ] || continue
+                  printf "%s -> %s\n" "${elf#$BUNDLE_ROOT/}" "$needed" >> out/gtk/elf-needed.txt
+                  case "$needed" in
+                    ld-linux-mipsn8.so.1|libanl.so.1|libc.so.6|libdl.so.2|libm.so.6|libnsl.so.1|libnss_dns.so.2|libnss_files.so.2|libpthread.so.0|libresolv.so.2|librt.so.1|libutil.so.1)
+                      continue
+                      ;;
+                  esac
+                  if ! find "$BUNDLE/lib" -name "$needed" -print -quit | grep -q .; then
+                    printf "%s -> %s\n" "${elf#$BUNDLE_ROOT/}" "$needed" >> out/gtk/missing-needed.txt
+                  fi
+                done < <(mipsel-buildroot-linux-gnu-readelf -d "$elf" 2>/dev/null | sed -n "s/.*Shared library: \[\(.*\)\]/\1/p")
+              done < <(find "$BUNDLE" -type f -print | sort)
+
+              sort -u out/gtk/elf-needed.txt -o out/gtk/elf-needed.txt
+              sort -u out/gtk/missing-needed.txt -o out/gtk/missing-needed.txt
+              if [ -s out/gtk/missing-needed.txt ]; then
+                echo "ERROR: unresolved private runtime dependencies:" >&2
+                cat out/gtk/missing-needed.txt >&2
+                exit 1
+              fi
+
+              GI_SO="$(find "$BUNDLE/lib/python3.12/site-packages/gi" -type f -name "_gi*.so" | head -n1)"
+              CAIRO_SO="$(find "$BUNDLE/lib/python3.12/site-packages" -type f -name "_cairo*.so" | head -n1)"
+              test -n "$GI_SO"
+              test -n "$CAIRO_SO"
+              mipsel-buildroot-linux-gnu-readelf -h "$GI_SO" > out/gtk/gi-elf-header.txt
+              mipsel-buildroot-linux-gnu-readelf -d "$GI_SO" > out/gtk/gi-dynamic.txt
+              mipsel-buildroot-linux-gnu-readelf -h "$CAIRO_SO" > out/gtk/pycairo-elf-header.txt
+              mipsel-buildroot-linux-gnu-readelf -d "$CAIRO_SO" > out/gtk/pycairo-dynamic.txt
+
+              tar -C "$BUNDLE_ROOT" -czf out/gtk/ad5x-gtk-bundle.tar.gz opt/ad5x-x11
+            '
+
+      - name: Validate GTK3 payload and bundle
+        run: |
+          set -euo pipefail
+
+          TARGET=.ci/buildroot/output/target
+          BUNDLE=out/gtk/bundle-root/opt/ad5x-x11
+
+          test -s out/gtk/ad5x-gtk-rootfs.tar.gz
+          test -s out/gtk/ad5x-gtk-bundle.tar.gz
+          test -x "$BUNDLE/bin/Xorg"
+          test -x "$BUNDLE/run-xorg-test.sh"
+          test -x "$BUNDLE/run-gtk-test.sh"
+          test -f "$BUNDLE/gtk-smoke.py"
+          test -d "$BUNDLE/lib/girepository-1.0"
+          test -f "$BUNDLE/lib/girepository-1.0/Gtk-3.0.typelib"
+          test -d "$BUNDLE/lib/python3.12/site-packages/gi"
+          test -n "$(find "$BUNDLE/lib/python3.12/site-packages/gi" -name '_gi*.so' -print -quit)"
+          test -n "$(find "$BUNDLE/lib/python3.12/site-packages" -name '_cairo*.so' -print -quit)"
+          test -d "$BUNDLE/share/fonts"
+          test -f "$BUNDLE/etc/fonts/fonts.conf"
+          test -s out/gtk/qemu-gi-smoke.txt
+          test ! -s out/gtk/missing-needed.txt
+
+          test ! -e "$BUNDLE/lib/libc.so.6"
+          test ! -e "$BUNDLE/lib/ld-linux-mipsn8.so.1"
+          test ! -e "$BUNDLE/lib/libpython3.12.so.1.0"
+
+          grep -q "PYTHON3_VERSION = 3.12.9" out/gtk/runtime-versions.txt
+          grep -q "PYTHON_PYCAIRO_VERSION = 1.29.0" out/gtk/runtime-versions.txt
+          grep -q "QEMU_GI_OK" out/gtk/qemu-gi-smoke.txt
+          grep -q "--disable-glx" out/gtk/xorg-configure-args.txt
+
+          grep -Eq '^[[:space:]]*Class:[[:space:]]+ELF32[[:space:]]*$' out/gtk/gi-elf-header.txt
+          grep -Eq '^[[:space:]]*Data:.*little endian' out/gtk/gi-elf-header.txt
+          grep -Eq 'Flags:.*nan2008.*o32' out/gtk/gi-elf-header.txt
+          grep -Eq 'Flags:.*nan2008.*o32' out/gtk/pycairo-elf-header.txt
+
+          strings "$BUNDLE/bin/Xorg" | grep -F '/opt/ad5x-x11/bin'
+          strings "$BUNDLE/bin/Xorg" | grep -F '/opt/ad5x-x11/share/X11/xkb'
+
+          tar -tzf out/gtk/ad5x-gtk-bundle.tar.gz > out/gtk/bundle-files.txt
+          if grep -v '^opt/ad5x-x11/\|^opt/ad5x-x11$' out/gtk/bundle-files.txt; then
+            echo "ERROR: GTK bundle contains paths outside opt/ad5x-x11" >&2
+            exit 1
+          fi
+          grep -Fx 'opt/ad5x-x11/run-gtk-test.sh' out/gtk/bundle-files.txt
+          grep -Fx 'opt/ad5x-x11/gtk-smoke.py' out/gtk/bundle-files.txt
+
+          {
+            echo "helixscreen_ref=$HELIXSCREEN_REF"
+            echo "buildroot_ref=$BUILDROOT_REF"
+            echo "plugins_ad5x_sha=$GITHUB_SHA"
+            du -h out/gtk/ad5x-gtk-rootfs.tar.gz
+            sha256sum out/gtk/ad5x-gtk-rootfs.tar.gz
+            du -h out/gtk/ad5x-gtk-bundle.tar.gz
+            sha256sum out/gtk/ad5x-gtk-bundle.tar.gz
+          } | tee out/gtk/BUILDINFO.txt
+
+          sudo rm -rf out/gtk/bundle-root
+
+      - name: Upload isolated GTK3 bundle artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-gtk-bundle-${{ github.sha }}
+          path: |
+            out/gtk/ad5x-gtk-bundle.tar.gz
+            out/gtk/bundle-files.txt
+            out/gtk/runtime-versions.txt
+            out/gtk/qemu-gi-smoke.txt
+            out/gtk/xorg-configure-args.txt
+            out/gtk/elf-needed.txt
+            out/gtk/missing-needed.txt
+            out/gtk/gi-elf-header.txt
+            out/gtk/gi-dynamic.txt
+            out/gtk/pycairo-elf-header.txt
+            out/gtk/pycairo-dynamic.txt
+            out/gtk/BUILDINFO.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload GTK3 rootfs artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-gtk-rootfs-${{ github.sha }}
+          path: out/gtk/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Buildroot diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-gtk-diagnostics-${{ github.sha }}
+          path: |
+            out/gtk/defconfig.log
+            out/gtk/build.log
+            out/gtk/buildroot.config
+            out/gtk/generated-defconfig.txt
+            out/gtk/toolchain-features.txt
+            out/gtk/runtime-versions.txt
+            out/gtk/qemu-gi-smoke.txt
+            out/gtk/xorg-configure-args.txt
+            out/gtk/elf-needed.txt
+            out/gtk/missing-needed.txt
+          if-no-files-found: warn
+          retention-days: 7
