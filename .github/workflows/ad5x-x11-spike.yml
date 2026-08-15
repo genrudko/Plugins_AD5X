@@ -237,7 +237,7 @@ jobs:
             sha256sum out/x11/ad5x-x11-bundle.tar.gz
           } | tee out/x11/BUILDINFO.txt
 
-          rm -rf out/x11/bundle-root
+          sudo rm -rf out/x11/bundle-root
 
       - name: Upload isolated X11 bundle artifact
         if: success()
