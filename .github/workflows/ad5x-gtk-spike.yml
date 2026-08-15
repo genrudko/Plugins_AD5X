@@ -153,17 +153,18 @@ jobs:
                 fi
               done
 
+              printf "int main(void){return 0;}\n" | gcc -x c - -o /tmp/ad5x-host-native-test
               {
                 echo "host gcc: $(gcc -dumpmachine)"
                 echo "host strip: $(strip --version | head -n1)"
-                printf "int main(void){return 0;}\n" | gcc -x c - -o /tmp/ad5x-host-native-test
-                file /tmp/ad5x-host-native-test
+                /usr/bin/readelf -h /tmp/ad5x-host-native-test
               } | tee out/gtk/preflight-host-tools.txt
               case "$(gcc -dumpmachine)" in
                 x86_64-*) ;;
                 *) echo "ERROR: Buildroot host compiler is not native x86_64" >&2; exit 1 ;;
               esac
-              file /tmp/ad5x-host-native-test | grep -q "x86-64"
+              /usr/bin/readelf -h /tmp/ad5x-host-native-test | grep -Eq "Class:[[:space:]]+ELF64"
+              /usr/bin/readelf -h /tmp/ad5x-host-native-test | grep -Eq "Machine:[[:space:]]+Advanced Micro Devices X86-64"
               rm -f /tmp/ad5x-host-native-test
 
               if ! make -C .ci/buildroot -j1 host-libglib2 >out/gtk/preflight-host-libglib2.log 2>&1; then
