@@ -26,6 +26,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ad5x-gtk-spike-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   HELIXSCREEN_REF: 708e992618d57814055346ae827c0479e7843fc6
   BUILDROOT_REF: 2024.11.2
@@ -148,6 +152,31 @@ jobs:
                   exit 1
                 fi
               done
+
+              {
+                echo "host gcc: $(gcc -dumpmachine)"
+                echo "host strip: $(strip --version | head -n1)"
+                printf "int main(void){return 0;}\n" | gcc -x c - -o /tmp/ad5x-host-native-test
+                file /tmp/ad5x-host-native-test
+              } | tee out/gtk/preflight-host-tools.txt
+              case "$(gcc -dumpmachine)" in
+                x86_64-*) ;;
+                *) echo "ERROR: Buildroot host compiler is not native x86_64" >&2; exit 1 ;;
+              esac
+              file /tmp/ad5x-host-native-test | grep -q "x86-64"
+              rm -f /tmp/ad5x-host-native-test
+
+              if ! make -C .ci/buildroot -j1 host-libglib2 >out/gtk/preflight-host-libglib2.log 2>&1; then
+                echo "=== host-libglib2 preflight failure: last 200 lines ==="
+                tail -n 200 out/gtk/preflight-host-libglib2.log
+                exit 1
+              fi
+
+              if ! make -C .ci/buildroot -j1 host-qemu >out/gtk/preflight-host-qemu.log 2>&1; then
+                echo "=== host-qemu preflight failure: last 300 lines ==="
+                tail -n 300 out/gtk/preflight-host-qemu.log
+                exit 1
+              fi
 
               if ! make -C .ci/buildroot -j1 >out/gtk/build.log 2>&1; then
                 echo "=== Buildroot failure: last 400 lines ==="
@@ -383,6 +412,9 @@ jobs:
             out/gtk/buildroot.config
             out/gtk/generated-defconfig.txt
             out/gtk/toolchain-features.txt
+            out/gtk/preflight-host-tools.txt
+            out/gtk/preflight-host-libglib2.log
+            out/gtk/preflight-host-qemu.log
             out/gtk/runtime-versions.txt
             out/gtk/qemu-gi-smoke.txt
             out/gtk/xorg-configure-args.txt
