@@ -21,7 +21,8 @@ BR2_PACKAGE_EUDEV=y
 # BR2_PACKAGE_EUDEV_MODULE_LOADING is not set
 # BR2_PACKAGE_EUDEV_ENABLE_HWDB is not set
 
-BR2_ROOTFS_OVERLAY="../../tools/ad5x-display-spike/rootfs-overlay"
+# Apply the accepted X11 overlay first, then only the Stage 3 GTK additions.
+BR2_ROOTFS_OVERLAY="../../tools/ad5x-display-spike/rootfs-overlay ../../tools/ad5x-display-spike/gtk-overlay"
 
 # Stage 2 display/input baseline.
 BR2_PACKAGE_XORG7=y
