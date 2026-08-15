@@ -45,6 +45,38 @@ sed "s#@TOUCH_EVENT@#$TOUCH_EVENT#g" "$BUNDLE/xorg.conf.in" > "$CONF"
 mkdir -p /tmp/.X11-unix /tmp/ad5x-xkb
 rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
 
+BACKLIGHT=/sys/class/backlight/backlight_gpio0
+BACKLIGHT_BRIGHTNESS=""
+BACKLIGHT_POWER=""
+XORG_PID=""
+
+if [ -r "$BACKLIGHT/brightness" ] && [ -w "$BACKLIGHT/brightness" ] && \
+   [ -r "$BACKLIGHT/max_brightness" ] && \
+   [ -r "$BACKLIGHT/bl_power" ] && [ -w "$BACKLIGHT/bl_power" ]; then
+    BACKLIGHT_BRIGHTNESS="$(cat "$BACKLIGHT/brightness")"
+    BACKLIGHT_POWER="$(cat "$BACKLIGHT/bl_power")"
+fi
+
+cleanup() {
+    if [ -n "$XORG_PID" ]; then
+        kill "$XORG_PID" 2>/dev/null || true
+        wait "$XORG_PID" 2>/dev/null || true
+    fi
+    if [ -n "$BACKLIGHT_BRIGHTNESS" ] && [ -n "$BACKLIGHT_POWER" ]; then
+        echo "$BACKLIGHT_BRIGHTNESS" > "$BACKLIGHT/brightness" 2>/dev/null || true
+        echo "$BACKLIGHT_POWER" > "$BACKLIGHT/bl_power" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+if [ -n "$BACKLIGHT_BRIGHTNESS" ] && [ -n "$BACKLIGHT_POWER" ]; then
+    echo "$(cat "$BACKLIGHT/max_brightness")" > "$BACKLIGHT/brightness"
+    echo 0 > "$BACKLIGHT/bl_power"
+    echo "LCD backlight enabled via $BACKLIGHT"
+else
+    echo "WARNING: $BACKLIGHT is unavailable; LCD may remain blank" >&2
+fi
+
 "$BUNDLE/bin/Xorg" :0 vt1 \
     -config "$CONF" \
     -modulepath "$BUNDLE/lib/xorg/modules" \
@@ -54,12 +86,6 @@ rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
     -noreset \
     -s 0 &
 XORG_PID=$!
-
-cleanup() {
-    kill "$XORG_PID" 2>/dev/null || true
-    wait "$XORG_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
 
 READY=0
 i=0
