@@ -160,6 +160,7 @@ jobs:
                 "$BUNDLE/bin/"
               cp -a "$TARGET/usr/lib/xorg" "$BUNDLE/lib/"
               cp -a "$TARGET/usr/lib/"*.so* "$BUNDLE/lib/"
+              cp -a "$TARGET/lib/"*.so* "$BUNDLE/lib/"
               cp -a "$TARGET/usr/share/X11/xkb" "$BUNDLE/share/X11/"
 
               # The Z-Mod chroot already owns the ABI/runtime libc. Do not shadow
@@ -206,6 +207,7 @@ jobs:
           test -x "$BUNDLE/run-xorg-test.sh"
           test -f "$BUNDLE/lib/xorg/modules/libfbdevhw.so"
           test -f "$BUNDLE/lib/xorg/modules/libshadow.so"
+          test -e "$BUNDLE/lib/libudev.so.1"
           test -d "$BUNDLE/share/X11/xkb"
           test ! -e "$BUNDLE/lib/libc.so.6"
           test ! -e "$BUNDLE/lib/ld-linux-mipsn8.so.1"
