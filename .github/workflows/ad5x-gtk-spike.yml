@@ -156,14 +156,7 @@ jobs:
               cp .ci/buildroot/output/images/rootfs.tar.gz out/gtk/ad5x-gtk-rootfs.tar.gz
 
               grep "ac_cs_config=" "$XORG_BUILD/config.status" > out/gtk/xorg-configure-args.txt
-              python3 - <<PY
-from pathlib import Path
-s = Path("out/gtk/xorg-configure-args.txt").read_text()
-for enabled, disabled in (("--enable-glx", "--disable-glx"), ("--enable-dri", "--disable-dri")):
-    if s.rfind(disabled) <= s.rfind(enabled):
-        raise SystemExit(f"{disabled} is not the final winning configure option")
-print("XORG_FBDEV_NO_GLX_OK")
-PY
+              python3 -c "from pathlib import Path; s=Path(\"out/gtk/xorg-configure-args.txt\").read_text(); pairs=((\"--enable-glx\",\"--disable-glx\"),(\"--enable-dri\",\"--disable-dri\")); bad=[d for e,d in pairs if s.rfind(d) <= s.rfind(e)]; assert not bad, f\"non-winning disable flags: {bad}\"; print(\"XORG_FBDEV_NO_GLX_OK\")"
 
               QEMU="$HOST/bin/qemu-mipsel"
               test -x "$QEMU"
