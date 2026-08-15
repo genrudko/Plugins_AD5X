@@ -23,3 +23,42 @@
  # Locally computed sha256 checksums
  sha256  360b9a526d47c51a7cab7f1ec49ca5893050562d639b742d588934ff84823a72  COPYING
  sha256  d80c9d084ebfb50ea1ed91bfbc2410d6ce542097a32c43b00781b83adcb8c77f  COPYING-LGPL-2.1
+
+--- /dev/null
++++ b/package/qemu/0004-linux-user-do-not-define-struct-sched-attr-if-libc-does.patch
+@@ -0,0 +1,35 @@
++From b4b23b11af796c5e3740d34a17e94eeca4ca9a75 Mon Sep 17 00:00:00 2001
++From: Khem Raj <raj.khem@gmail.com>
++Date: Fri, 7 Feb 2025 16:09:20 +0000
++Subject: [PATCH] linux-user: Do not define struct sched_attr if libc headers do
++
++glibc 2.41+ defines struct sched_attr. Guard QEMU's fallback definition
++with SCHED_ATTR_SIZE_VER0 to avoid a duplicate definition.
++
++Upstream: 27a8d899c7a100fd5aa040a8b993bb257687c393
++Backport: b4b23b11af796c5e3740d34a17e94eeca4ca9a75
++---
++ linux-user/syscall.c | 4 +++-
++ 1 file changed, 3 insertions(+), 1 deletion(-)
++
++diff --git a/linux-user/syscall.c b/linux-user/syscall.c
++--- a/linux-user/syscall.c
+++++ b/linux-user/syscall.c
++@@ -358,7 +358,8 @@ _syscall3(int, sys_sched_getaffinity, pid_t, pid, unsigned int, len,
++ #define __NR_sys_sched_setaffinity __NR_sched_setaffinity
++ _syscall3(int, sys_sched_setaffinity, pid_t, pid, unsigned int, len,
++           unsigned long *, user_mask_ptr);
++-/* sched_attr is not defined in glibc */
+++/* sched_attr is not defined in glibc < 2.41 */
+++#ifndef SCHED_ATTR_SIZE_VER0
++ struct sched_attr {
++     uint32_t size;
++     uint32_t sched_policy;
++@@ -371,6 +372,7 @@ struct sched_attr {
++     uint32_t sched_util_min;
++     uint32_t sched_util_max;
++ };
+++#endif
++ #define __NR_sys_sched_getattr __NR_sched_getattr
++ _syscall4(int, sys_sched_getattr, pid_t, pid, struct sched_attr *, attr,
++           unsigned int, size, unsigned int, flags);
