@@ -376,7 +376,7 @@ Exact repository evidence at current implementation head:
 
 ```text
 head: b852f25c2c5f52d62ee65a83ea3f420d4b327bd0
-compare vs dev: ahead 31 / behind 0
+compare vs dev at that head: ahead 31 / behind 0
 workflow: 31954499638
 compile: PASS
 shell syntax: PASS
