@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import pathlib
+import re
 import sys
 import types
 import unittest
@@ -61,10 +62,19 @@ def load_component_module():
 component_module = load_component_module()
 
 
+class FakeServerError(RuntimeError):
+    def __init__(self, message: str, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class FakeKlippyAPI:
     def __init__(self, payload: Any) -> None:
         self.payload = payload
         self.queries: List[Dict[str, Any]] = []
+        self.gcode: List[str] = []
+        self.fail_gcode: BaseException | None = None
+        self.ignore_gcode_write = False
 
     async def query_objects(self, objects: Dict[str, Any], default: Any = None) -> Any:
         self.queries.append(objects)
@@ -74,14 +84,34 @@ class FakeKlippyAPI:
             return default
         return self.payload
 
+    async def run_gcode(self, script: str, default: Any = None) -> str:
+        self.gcode.append(script)
+        if self.fail_gcode is not None:
+            raise self.fail_gcode
+        if not self.ignore_gcode_write:
+            match = re.fullmatch(
+                r"SET_GCODE_OFFSET Z=([-+]?[0-9]+(?:\.[0-9]+)?) MOVE=0",
+                script,
+            )
+            if match and isinstance(self.payload, dict):
+                self.payload["gcode_move"]["homing_origin"][2] = float(match.group(1))
+        return "ok"
+
 
 class FakeServer:
-    def __init__(self, klippy_apis: FakeKlippyAPI | None = None) -> None:
+    def __init__(
+        self,
+        klippy_apis: FakeKlippyAPI | None = None,
+        *,
+        enable_remote_methods: bool = True,
+    ) -> None:
         self.endpoints: List[Dict[str, Any]] = []
         self.notifications: List[Tuple[str, str]] = []
         self.events: List[Tuple[str, Tuple[Any, ...]]] = []
         self.event_handlers: Dict[str, Any] = {}
+        self.remote_methods: Dict[str, Any] = {}
         self.klippy_apis = klippy_apis
+        self.enable_remote_methods = enable_remote_methods
 
     def register_endpoint(
         self,
@@ -108,6 +138,10 @@ class FakeServer:
     def register_event_handler(self, event_name: str, callback: Any) -> None:
         self.event_handlers[event_name] = callback
 
+    def register_remote_method(self, name: str, callback: Any) -> None:
+        if self.enable_remote_methods:
+            self.remote_methods[name] = callback
+
     def send_event(self, event_name: str, *args: Any) -> None:
         self.events.append((event_name, args))
 
@@ -115,6 +149,9 @@ class FakeServer:
         if name == "klippy_apis" and self.klippy_apis is not None:
             return self.klippy_apis
         raise KeyError(name)
+
+    def error(self, message: str, status_code: int = 400) -> FakeServerError:
+        return FakeServerError(message, status_code)
 
 
 class FakeConfig:
@@ -175,7 +212,7 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         )
         self.assertEqual(rpc_method, "server.plugins_ad5x.snapshot")
 
-    def test_notification_and_klippy_event_contract(self) -> None:
+    def test_notification_klippy_job_and_remote_contract(self) -> None:
         self.assertEqual(
             self.server.notifications,
             [
@@ -189,7 +226,15 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertEqual(wire_method, "notify_plugins_ad5x_snapshot_changed")
         self.assertEqual(
             set(self.server.event_handlers),
-            {"server:klippy_disconnect", "server:klippy_ready"},
+            {
+                "server:klippy_disconnect",
+                "server:klippy_ready",
+                "job_state:state_changed",
+            },
+        )
+        self.assertEqual(
+            set(self.server.remote_methods),
+            {"plugins_ad5x_z_job_start"},
         )
 
     def test_snapshot_keeps_platform_healthy_when_klippy_unavailable(self) -> None:
@@ -205,8 +250,10 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertFalse(module["available"])
         self.assertEqual(module["health"], "degraded")
         self.assertFalse(module["state"]["calibration"]["motion_actions_enabled"])
+        self.assertFalse(module["state"]["calibration"]["offset_hook_enabled"])
         self.assertTrue(module["state"]["safety"]["fail_closed"])
         self.assertEqual(module["state"]["safety"]["h7_role"], "secondary")
+        self.assertEqual(module["state"]["job"]["phase"], "idle")
 
     def test_backend_version_matches_repository_version(self) -> None:
         repository_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
@@ -238,7 +285,7 @@ class PluginsAD5XComponentTests(unittest.TestCase):
                 "toolhead": ["homed_axes"],
             },
         )
-        self.assertFalse(hasattr(klippy, "run_gcode"))
+        self.assertEqual(klippy.gcode, [])
 
     def test_reconcile_endpoint_is_authenticated_read_only_action(self) -> None:
         klippy = FakeKlippyAPI(ready_payload(offset=0.04))
@@ -257,7 +304,7 @@ class PluginsAD5XComponentTests(unittest.TestCase):
             result["module"]["state"]["offset"]["external_unknown"],
             0.04,
         )
-        self.assertFalse(hasattr(klippy, "run_gcode"))
+        self.assertEqual(klippy.gcode, [])
 
     def test_matching_known_composition_reconciles_without_unknown(self) -> None:
         klippy = FakeKlippyAPI(ready_payload(offset=0.006))
@@ -286,7 +333,9 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         module = snapshot["modules"]["z_calibration"]
         self.assertFalse(module["available"])
         self.assertEqual(module["health"], "degraded")
-        self.assertEqual(module["state"]["safety"]["last_error"], "klippy_query_failed")
+        self.assertEqual(
+            module["state"]["safety"]["last_error"], "klippy_query_failed"
+        )
 
     def test_klippy_query_exception_degrades_without_stale_effective_value(self) -> None:
         server = FakeServer(FakeKlippyAPI(RuntimeError("disconnect")))
@@ -313,11 +362,204 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertAlmostEqual(last["payload"]["actual_effective"], -0.125)
         self.assertIn("external_unknown", last["payload"])
 
+    def test_global_start_adopts_zmod_baseline_without_rewriting_it(self) -> None:
+        klippy = FakeKlippyAPI(
+            ready_payload(offset=-0.13, print_state="printing")
+        )
+        server = FakeServer(klippy)
+        component = component_module.load_component(FakeConfig(server))
+
+        result = asyncio.run(
+            server.remote_methods["plugins_ad5x_z_job_start"](
+                mode="global", z_offset=99.0
+            )
+        )
+
+        state = result["module"]["state"]
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(state["job"]["phase"], "active")
+        self.assertEqual(state["job"]["mode"], "global")
+        self.assertAlmostEqual(state["offset"]["external_unknown"], -0.13)
+        self.assertAlmostEqual(state["offset"]["slicer_job"], 0.0)
+        self.assertEqual(klippy.gcode, [])
+
+    def test_job_start_adopts_existing_zmod_z_offset_exactly_once(self) -> None:
+        klippy = FakeKlippyAPI(
+            ready_payload(offset=-0.07, print_state="printing")
+        )
+        server = FakeServer(klippy)
+        component = component_module.load_component(FakeConfig(server))
+
+        first = asyncio.run(
+            server.remote_methods["plugins_ad5x_z_job_start"](
+                mode="job", z_offset=-0.07
+            )
+        )
+        second = asyncio.run(
+            server.remote_methods["plugins_ad5x_z_job_start"](
+                mode="job", z_offset=-0.07
+            )
+        )
+
+        self.assertEqual(first["status"], "applied")
+        self.assertEqual(second["status"], "already_applied")
+        self.assertAlmostEqual(
+            second["module"]["state"]["offset"]["slicer_job"], -0.07
+        )
+        self.assertEqual(klippy.gcode, [])
+
+    def test_auto_alignment_is_added_once_after_zmod_job_baseline(self) -> None:
+        klippy = FakeKlippyAPI(
+            ready_payload(offset=-0.07, print_state="printing")
+        )
+        server = FakeServer(klippy)
+        component = component_module.load_component(FakeConfig(server))
+        component._z_offsets = component_module.zcore.OffsetComposition(
+            auto_alignment=0.02
+        )
+
+        first = asyncio.run(
+            server.remote_methods["plugins_ad5x_z_job_start"](
+                mode="job", z_offset=-0.07
+            )
+        )
+        second = asyncio.run(
+            server.remote_methods["plugins_ad5x_z_job_start"](
+                mode="job", z_offset=-0.07
+            )
+        )
+
+        self.assertEqual(klippy.gcode, ["SET_GCODE_OFFSET Z=-0.050000000 MOVE=0"])
+        self.assertAlmostEqual(
+            first["module"]["state"]["offset"]["effective"], -0.05
+        )
+        self.assertEqual(second["status"], "already_applied")
+        self.assertEqual(len(klippy.gcode), 1)
+
+    def test_job_mode_mismatch_fails_before_any_write(self) -> None:
+        klippy = FakeKlippyAPI(
+            ready_payload(offset=-0.06, print_state="printing")
+        )
+        server = FakeServer(klippy)
+        component = component_module.load_component(FakeConfig(server))
+
+        with self.assertRaises(FakeServerError) as ctx:
+            asyncio.run(
+                server.remote_methods["plugins_ad5x_z_job_start"](
+                    mode="job", z_offset=-0.07
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(klippy.gcode, [])
+        self.assertEqual(component._z_job["phase"], "idle")
+
+    def test_none_mode_rejects_non_sentinel_parameter(self) -> None:
+        klippy = FakeKlippyAPI(
+            ready_payload(offset=0.0, print_state="printing")
+        )
+        server = FakeServer(klippy)
+        component = component_module.load_component(FakeConfig(server))
+
+        with self.assertRaises(FakeServerError) as ctx:
+            asyncio.run(
+                server.remote_methods["plugins_ad5x_z_job_start"](
+                    mode="none", z_offset=0.01
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(klippy.gcode, [])
+
+    def test_terminal_job_event_clears_auto_job_live_and_external(self) -> None:
+        klippy = FakeKlippyAPI(
+            ready_payload(offset=-0.07, print_state="printing")
+        )
+        server = FakeServer(klippy)
+        component = component_module.load_component(FakeConfig(server))
+        component._z_offsets = component_module.zcore.OffsetComposition(
+            auto_alignment=0.02
+        )
+        asyncio.run(
+            server.remote_methods["plugins_ad5x_z_job_start"](
+                mode="job", z_offset=-0.07
+            )
+        )
+        component._z_offsets = component._z_offsets.step_live(0.01)
+
+        server.event_handlers["job_state:state_changed"](
+            "cancelled", {}, {"state": "cancelled"}
+        )
+
+        snapshot = component.get_snapshot()["modules"]["z_calibration"]
+        offset = snapshot["state"]["offset"]
+        self.assertEqual(snapshot["state"]["job"]["phase"], "idle")
+        self.assertAlmostEqual(offset["auto_alignment"], 0.0)
+        self.assertAlmostEqual(offset["slicer_job"], 0.0)
+        self.assertAlmostEqual(offset["live_adjustment"], 0.0)
+        self.assertAlmostEqual(offset["external_unknown"], 0.0)
+
+    def test_disconnect_clears_active_transients_before_reconnect(self) -> None:
+        klippy = FakeKlippyAPI(
+            ready_payload(offset=-0.07, print_state="printing")
+        )
+        server = FakeServer(klippy)
+        component = component_module.load_component(FakeConfig(server))
+        asyncio.run(
+            server.remote_methods["plugins_ad5x_z_job_start"](
+                mode="job", z_offset=-0.07
+            )
+        )
+
+        server.event_handlers["server:klippy_disconnect"]()
+        self.assertEqual(component._z_job["phase"], "idle")
+        self.assertFalse(component.get_snapshot()["modules"]["z_calibration"]["available"])
+
+        klippy.payload = ready_payload(offset=0.0, print_state="standby")
+        asyncio.run(server.event_handlers["server:klippy_ready"]())
+        self.assertEqual(
+            component.get_snapshot()["modules"]["z_calibration"]["state"]["job"]["phase"],
+            "idle",
+        )
+
+    def test_failed_apply_verification_rolls_back_and_disarms_transients(self) -> None:
+        klippy = FakeKlippyAPI(
+            ready_payload(offset=-0.07, print_state="printing")
+        )
+        klippy.ignore_gcode_write = True
+        server = FakeServer(klippy)
+        component = component_module.load_component(FakeConfig(server))
+        component._z_offsets = component_module.zcore.OffsetComposition(
+            auto_alignment=0.02
+        )
+
+        with self.assertRaises(FakeServerError) as ctx:
+            asyncio.run(
+                server.remote_methods["plugins_ad5x_z_job_start"](
+                    mode="job", z_offset=-0.07
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(component._z_job["phase"], "idle")
+        self.assertAlmostEqual(component._z_offsets.auto_alignment, 0.0)
+        self.assertAlmostEqual(component._z_offsets.slicer_job, 0.0)
+        self.assertEqual(
+            klippy.gcode,
+            [
+                "SET_GCODE_OFFSET Z=-0.050000000 MOVE=0",
+                "SET_GCODE_OFFSET Z=0.000000000 MOVE=0",
+            ],
+        )
+        self.assertEqual(
+            component._z_last_error,
+            "offset_apply_failed_reconciliation_required",
+        )
+
     def test_klippy_disconnect_invalidates_snapshot_and_fails_closed(self) -> None:
         server = FakeServer(FakeKlippyAPI(ready_payload(offset=0.0)))
         component = component_module.load_component(FakeConfig(server))
         asyncio.run(component._handle_snapshot(object()))
-        self.assertTrue(component.get_snapshot()["modules"]["z_calibration"]["available"])
+        self.assertTrue(
+            component.get_snapshot()["modules"]["z_calibration"]["available"]
+        )
 
         server.event_handlers["server:klippy_disconnect"]()
         snapshot = component.get_snapshot()
@@ -359,6 +601,7 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         klippy = FakeKlippyAPI(ready_payload(offset=0.0))
         component_module.load_component(FakeConfig(FakeServer(klippy)))
         self.assertEqual(klippy.queries, [])
+        self.assertEqual(klippy.gcode, [])
 
 
 if __name__ == "__main__":
