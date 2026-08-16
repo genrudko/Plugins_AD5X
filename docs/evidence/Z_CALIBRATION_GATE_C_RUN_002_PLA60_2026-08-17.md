@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** MEASUREMENT COMPLETE / CLEANUP PENDING  
+**Status:** COMPLETE / PASS AS HEATED-BED REPEATABILITY EVIDENCE  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -20,13 +20,13 @@
 
 Measure whether the nozzle↔bed reference changes materially when the bed is brought from ambient to the owner's representative PLA target of `60 C`.
 
-This run deliberately changes the bed thermal condition only at first. The nozzle heater remains off during this condition so bed-temperature influence is not deliberately conflated with hotend heating. Passive nozzle warming from the heated bed/chamber is recorded rather than ignored.
+The bed heater is the deliberate thermal change in this run. The nozzle heater remains off throughout. Passive nozzle warming from the heated bed/chamber is recorded explicitly rather than treated as an unchanged-nozzle condition.
 
 ## Previous repeatability context
 
 ```text
 Gate B ambient mean   = -1.985500 mm
-Gate C ambient mean   = -1.973000 mm
+Gate C001 ambient mean= -1.973000 mm
 ambient mean delta    = +0.012500 mm
 ```
 
@@ -34,15 +34,13 @@ These values are descriptive evidence only and do not define an acceptance band.
 
 ## Heated condition establishment
 
-Owner selected `60 C` as the representative PLA bed target.
-
 Command:
 
 ```text
 M190 S60
 ```
 
-The command returned normally. Immediate live state after the heater wait:
+Immediate live state after heater wait:
 
 ```text
 heater_bed.temperature   = 59.36 C
@@ -57,20 +55,11 @@ gcode_move.homing_origin = [0.0, 0.0, 0.0, 0.0]
 bed_mesh.profile_name    = auto
 ```
 
-Interpretation:
-
-- the ordinary Klipper heater wait accepted the 60 C target condition and returned normally;
-- the bed was measured at `59.36 C` immediately after return, with target still `60.0 C`;
-- the nozzle heater remained off and nozzle temperature was `26.54 C` at that point;
-- printer remained idle/standby;
-- standard Klipper effective Z offset remained `0.0 mm`;
-- saved `auto` was still the active runtime mesh before the measurement path began.
-
-The `59.36 C` observation is retained exactly as measured. It is not rewritten as an assumed `60.00 C`, and no temperature tolerance policy is inferred from this one run.
+The exact `59.36 C` observation is retained as measured; it is not rewritten as an assumed `60.00 C` and establishes no temperature tolerance policy.
 
 ## Heated read-only preflight
 
-A second live read-only snapshot was taken after the bed had remained at its `60 C` target condition for additional time.
+After additional dwell at target:
 
 ```text
 heater_bed.temperature     = 60.13 C
@@ -88,16 +77,7 @@ bed_mesh.profile_name      = auto
 printer.cfg SHA-256        = eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
 ```
 
-The raw active `auto` matrix and saved profile map matched the prior baseline. The `6.925833` G-code Z with physical/toolhead Z `5.0` is the expected active-mesh transform at the center and is not a new standard Z offset.
-
-Interpretation:
-
-- the bed condition is observed essentially at the selected target (`60.13 C` actual, `60.0 C` target) with low maintenance power;
-- the nozzle heater remains off, but the nozzle has passively warmed from `26.54 C` to `29.23 C`; this passive warming is part of the recorded physical condition and must not be mislabeled as a strictly unchanged nozzle temperature;
-- standard Klipper effective Z offset remains `0.0 mm`;
-- printer remains standby;
-- the saved `auto` profile remains active and unchanged before runtime clear;
-- the persistent-config guard exactly matches Gate B and Gate C run 001.
+The raw active `auto` matrix and saved profile map matched the prior baseline. `6.925833` G-code Z at physical Z `5.0` is the expected active-mesh transform, not a standard Z offset.
 
 ## Heated-condition runtime mesh clear + fresh homing
 
@@ -109,7 +89,7 @@ G28
 M400
 ```
 
-Both commands returned `ok`. Post-G28 live state:
+Post-G28:
 
 ```text
 heater_bed.temperature     = 60.02 C
@@ -124,11 +104,11 @@ gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
 bed_mesh.profile_name      = ""
 ```
 
-Saved profiles `MESH_DATA` and `auto` remained present with the same raw point matrices. Runtime mesh was cleared only; no saved profile was changed or deleted.
+Saved `MESH_DATA` and `auto` profiles remained present and unchanged.
 
-## Heated-condition controlled center/non-contact positioning
+## Heated-condition center / non-contact position
 
-Command path:
+Commands:
 
 ```text
 G90
@@ -137,7 +117,7 @@ G1 Z5 F300
 M400
 ```
 
-The command returned `ok`. Post-move live state:
+Post-move:
 
 ```text
 heater_bed.temperature     = 59.96 C
@@ -162,7 +142,7 @@ Command:
 LOAD_CELL_TARE
 ```
 
-Z-Mod returned the command as `ok` and reported:
+Z-Mod returned `ok` and reported:
 
 ```text
 H1 > command H1 ok. 8431997
@@ -172,9 +152,7 @@ N 2. Вес: 20.0
 Сброс тензодатчка: ОК. Вес: 80.0->20.0
 ```
 
-This observation is retained exactly. It differs from the previous ambient runs (`60→0 g` in Gate B and `0→0 g` in Gate C run 001): this heated-condition tare required the second observation and ended at a reported residual `20 g`, while Z-Mod itself still classified the tare as `ОК`.
-
-No new numeric tare acceptance threshold is inferred from this result. The `20 g` residual is retained as secondary H7/tare evidence and considered together with the independent contact series rather than silently normalized to zero or discarded.
+This differs from Gate B (`60→0 g`) and Gate C001 (`0→0 g`). The heated run ended with reported residual `20 g` while Z-Mod itself classified tare as `ОК`. No new tare threshold is inferred. The residual is retained as secondary H7/tare evidence.
 
 ## Heated-condition independent 10-sample reference series
 
@@ -184,14 +162,14 @@ Command:
 PROBE_ACCURACY SAMPLES=10
 ```
 
-Klipper/Z-Mod reported:
+Klipper/Z-Mod conditions:
 
 ```text
-PROBE_ACCURACY at X:107.500 Y:107.500 Z:5.000
+X=107.500 Y=107.500 Z=5.000
 samples=10 retract=2.000 speed=2.0 lift_speed=5.0
 ```
 
-User-facing contact estimates, in acquisition order:
+User-facing contact estimates:
 
 ```text
 -1.995000
@@ -218,9 +196,9 @@ standard deviation  =  0.008764 mm
 first→last drift    = -0.005000 mm
 ```
 
-The corresponding raw `probe ... is z=` values remained exactly `0.250000 mm` lower than the user-facing contact estimates, consistent with the configured `[probe] z_offset=-0.25` semantics. The two coordinate forms remain separate.
+The corresponding raw `probe ... is z=` values stayed exactly `0.250000 mm` lower than the user-facing contact estimates, consistent with configured `[probe] z_offset=-0.25`. The coordinate forms are kept separate.
 
-Post-probe live state before cleanup:
+Post-probe before cleanup:
 
 ```text
 heater_bed.temperature     = 59.99 C
@@ -234,8 +212,6 @@ toolhead.position          = [107.5, 107.5, -0.2500, 0.0]
 gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
 bed_mesh.profile_name      = ""
 ```
-
-No standard Klipper Z offset was introduced. The bed remained essentially at the selected 60 C target throughout the series. The nozzle heater remained off, while passive nozzle temperature reached `31.86 C`.
 
 ## Comparison with ambient runs
 
@@ -256,32 +232,76 @@ Mean differences:
 60 C minus mean of ambient means (-1.979250) = -0.010500 mm
 ```
 
-Saved `auto` center remains `-1.925833 mm`; this run's mean minus saved center is `-0.063917 mm`.
+Saved `auto` center remains `-1.925833 mm`; this run mean minus saved center is `-0.063917 mm`.
 
 Descriptive interpretation only:
 
-- the 60 C series remains tightly clustered on the scale of the historical anomalous/drifting runs;
-- there is no large monotonic drift in the 10 samples;
-- the hot-bed mean lies within `0.016750 mm` of each of the two ambient run means and `0.010500 mm` below the mean of those two ambient means;
-- the 20 g tare residual did not coincide with an obvious collapse of contact-series repeatability in this run, but this is not proof that the residual is harmless or causally unrelated;
-- no thermal correction, tare threshold, acceptance band, search envelope or motion-policy value is inferred from this single heated-bed run.
+- the heated-bed contact series remains tightly clustered on the scale of historical anomalous/drifting runs;
+- no large monotonic drift was observed;
+- the 60 C mean is within `0.016750 mm` of both ambient means and `0.010500 mm` from the mean of the two ambient means;
+- the `20 g` tare residual did not coincide with an obvious collapse of contact repeatability, but this does not prove the residual harmless or causally unrelated;
+- no thermal correction, tare threshold, correction limit, search envelope or motion-policy value is inferred from this single heated-bed run.
 
-## Remaining controlled path
+## Cleanup / persistence verification
+
+Cleanup command path:
 
 ```text
-explicit Z5 retract
-→ restore saved auto mesh at runtime
-→ post-state/hash verification
+G90
+G1 Z5 F300
+M400
+BED_MESH_PROFILE LOAD=auto
+M400
 ```
 
-No `SAVE_CONFIG`, persistent trim mutation, saved-mesh overwrite/delete, Plugins AD5X Z-offset write, or production Plugins AD5X motion adapter is permitted.
+The command returned `ok`. Post-cleanup live state:
 
-## Pending
+```text
+heater_bed.temperature     = 59.91 C
+heater_bed.target          = 60.0 C
+heater_bed.power           = 0.1605460859
+extruder.temperature       = 33.89 C
+extruder.target            = 0.0 C
+print_stats.state          = standby
+toolhead.homed_axes        = xyz
+toolhead.position          = [107.5, 107.5, 5.0, 0.0]
+gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
+gcode_move.position        = [107.5, 107.5, 6.925833, 0.0]
+gcode_move.gcode_position  = [107.5, 107.5, 6.925833, 0.0]
+bed_mesh.profile_name      = auto
+```
 
-- cleanup/retract confirmation: PENDING
-- post-run standard effective Z offset: PENDING
-- saved mesh unchanged proof: PENDING
-- post-run `printer.cfg` hash: PENDING
-- stop condition observed: PENDING
+The raw active `auto` matrix exactly matched the saved baseline, and the saved `MESH_DATA` / `auto` profile map remained unchanged. `6.925833` G-code Z at physical/toolhead Z `5.0` is again the expected center mesh transform, not a standard Z offset.
 
-Until cleanup/persistence verification is complete, this run is not yet structurally complete and authorizes nothing.
+Post-run `/opt/config/printer.cfg` SHA-256:
+
+```text
+eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
+```
+
+It exactly matched the pre-run, Gate B and Gate C001 hashes.
+
+## Run disposition
+
+```text
+reference series present      = true
+cleanup/retract confirmed     = true
+standard Z offset unchanged   = true
+persistent state changed      = false
+saved mesh changed            = false
+stop condition observed       = false
+```
+
+Therefore `gate-c-002-pla-bed-60c-2026-08-17` is structurally complete and suitable for later policy review as heated-bed repeatability evidence.
+
+It does **not** authorize a motion policy, search envelope, correction limit, thermal compensation, tare threshold, production adapter or gate opening.
+
+## Dataset note / next conditions
+
+The dataset now contains:
+
+1. one clean ambient controlled-measurement run (Gate B run 001);
+2. one clean back-to-back ambient repeatability run (Gate C001);
+3. one clean 60 C bed repeatability run (Gate C002).
+
+The next useful evidence should not repeat the same condition immediately. Remaining useful condition diversity includes a representative higher-bed-temperature condition, reboot/power-cycle, reasonable time separation, and—if needed for actual print semantics—a deliberately heated-nozzle condition recorded separately from bed-only heating.
