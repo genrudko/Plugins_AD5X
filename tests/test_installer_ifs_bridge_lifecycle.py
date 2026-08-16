@@ -54,7 +54,7 @@ class IFSBridgeInstallerLifecycleTests(unittest.TestCase):
 
     def test_source_validation_and_stock_ad5x_destination(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
-        self.assertIn("/usr/prog/klipper/klippy/extras/ad5x_ifs.py", text)
+        self.assertIn("/opt/config/base/klipper/klippy/extras/ad5x_ifs.py", text)
         with tempfile.TemporaryDirectory() as td:
             result = self.run_shell("klipper_bridge_source_valid", Path(td), check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -62,7 +62,18 @@ class IFSBridgeInstallerLifecycleTests(unittest.TestCase):
     def test_default_destination_matches_ad5x_stock_klipper_runtime(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
         self.assertIn(
+            'KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/opt/config/base/klipper/klippy/extras/ad5x_ifs.py}"',
+            text,
+        )
+
+    def test_default_destination_does_not_use_non_live_ad5x_trees(self) -> None:
+        text = INSTALLER.read_text(encoding="utf-8")
+        self.assertNotIn(
             'KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/usr/prog/klipper/klippy/extras/ad5x_ifs.py}"',
+            text,
+        )
+        self.assertNotIn(
+            'KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/root/klipper-env/klippy/extras/ad5x_ifs.py}"',
             text,
         )
 
