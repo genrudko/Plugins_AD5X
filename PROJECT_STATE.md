@@ -7,8 +7,8 @@
 **Основной новый work item:** [#13 — CALIBRATION-SUBSYSTEM-002: explainable safe Auto-Z, mesh policy and multi-frontend Calibration Center](https://github.com/genrudko/Plugins_AD5X/issues/13)  
 **Рабочая ветка:** `feature/z-calibration-subsystem-v2`  
 **База ветки:** `dev` @ `ab25f96c017d56fe3a754ce4d05664c710dd2a80`  
-**Текущий repository implementation head перед frontend slice:** `b852f25c2c5f52d62ee65a83ea3f420d4b327bd0`  
-**Repository gates:** exact-head `Z Calibration Core` run `31954499638` — compile PASS, shell syntax PASS, **117/117 tests PASS**  
+**Последний exact-head с изменением implementation:** `b852f25c2c5f52d62ee65a83ea3f420d4b327bd0`  
+**Repository gates для implementation:** `Z Calibration Core` run `31954499638` — compile PASS, shell syntax PASS, **117/117 tests PASS**  
 **Platform Foundation issue #8:** остаётся OPEN / coordinator review pending; его принятый backend/managed-copy contract используется как foundation и не переоткрывается автоматически  
 **Старый Calibration Center:** issue #5 CLOSED `not_planned`; Draft PR #6 CLOSED / UNMERGED / research-history only
 
@@ -372,7 +372,7 @@ Implemented:
 - exact tests proving hook activation ordering after idle/snapshot gates;
 - no direct Z/probe/motion command in the hook.
 
-Exact repository evidence at current implementation head:
+Exact repository evidence for the latest implementation-changing head:
 
 ```text
 head: b852f25c2c5f52d62ee65a83ea3f420d4b327bd0
@@ -382,6 +382,8 @@ compile: PASS
 shell syntax: PASS
 repository tests: 117 / 117 PASS
 ```
+
+Later commits may update coordination/docs only; they do not supersede the exact implementation gate above unless implementation files change again.
 
 No CALIBRATION-SUBSYSTEM-002 artifact has been deployed to the live AD5X in this work item. No live Z movement or Z-offset mutation has been performed.
 
