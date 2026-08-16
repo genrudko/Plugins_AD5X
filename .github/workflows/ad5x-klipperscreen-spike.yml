@@ -1,0 +1,219 @@
+name: AD5X KlipperScreen spike
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - ad5x-gtk-spike
+    paths:
+      - ".github/workflows/ad5x-klipperscreen-spike.yml"
+      - "tools/ad5x-display-spike/klipperscreen/**"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ad5x-klipperscreen-spike-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  KLIPPERSCREEN_REF: ed40799f92f8a5044082aee75b832a9e97084c7f
+  STAGE3_ROOTFS_ARTIFACT_ID: "9254039722"
+  STAGE3_ROOTFS_ZIP_SHA256: bb11794acf51b2d622117f149cce00e634759dddb49397e91785bdd7254e8ff7
+
+jobs:
+  build-klipperscreen:
+    name: Build isolated upstream KlipperScreen app layer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout Plugins_AD5X
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned upstream KlipperScreen
+        uses: actions/checkout@v4
+        with:
+          repository: KlipperScreen/KlipperScreen
+          ref: ${{ env.KLIPPERSCREEN_REF }}
+          path: .ci/KlipperScreen
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install fast Stage 4 host tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            librsvg2-bin \
+            qemu-user \
+            rsync \
+            unzip \
+            xvfb
+
+      - name: Preflight pinned upstream contract
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci/KlipperScreen rev-parse HEAD)" = "$KLIPPERSCREEN_REF"
+          grep -Fx 'jinja2>=3.1.6;python_version>="3.10"' .ci/KlipperScreen/scripts/KlipperScreen-requirements.txt
+          grep -Fx 'requests>=2.34.2;python_version>="3.10"' .ci/KlipperScreen/scripts/KlipperScreen-requirements.txt
+          grep -Fx 'websocket-client>=1.9.0;python_version>="3.9"' .ci/KlipperScreen/scripts/KlipperScreen-requirements.txt
+          grep -q 'import psutil' .ci/KlipperScreen/panels/base_panel.py
+          grep -q 'except ImportError:' .ci/KlipperScreen/panels/base_panel.py
+          grep -q 'import mpv' .ci/KlipperScreen/panels/camera.py
+          grep -q 'from sdbus' .ci/KlipperScreen/ks_includes/sdbus_nm.py
+          if grep -Eq '(^|[[:space:]])(import|from)[[:space:]]+(mpv|sdbus|sdbus_networkmanager)' .ci/KlipperScreen/screen.py; then
+            echo "ERROR: an intentionally deferred feature dependency became a top-level screen.py import" >&2
+            exit 1
+          fi
+          echo "UPSTREAM_STARTUP_CONTRACT_OK"
+
+      - name: Build architecture-neutral KlipperScreen layer
+        env:
+          UPSTREAM_REF: ${{ env.KLIPPERSCREEN_REF }}
+        run: |
+          set -euo pipefail
+          chmod +x tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+
+      - name: Download accepted Stage 3 rootfs evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out/stage3
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE3_ROOTFS_ARTIFACT_ID}/zip" \
+            -o out/stage3/rootfs-artifact.zip
+          echo "${STAGE3_ROOTFS_ZIP_SHA256}  out/stage3/rootfs-artifact.zip" | sha256sum -c -
+          unzip -q out/stage3/rootfs-artifact.zip -d out/stage3/artifact
+          test -f out/stage3/artifact/ad5x-gtk-rootfs.tar.gz
+          mkdir -p out/stage3/rootfs
+          gzip -dc out/stage3/artifact/ad5x-gtk-rootfs.tar.gz | tar -xf - -C out/stage3/rootfs
+          test -x out/stage3/rootfs/usr/bin/python3
+          echo "STAGE3_ROOTFS_READY"
+
+      - name: MIPS QEMU startup import and PNG proof
+        run: |
+          set -euo pipefail
+          TARGET="$PWD/out/stage3/rootfs"
+          APPROOT="$PWD/out/klipperscreen/bundle-root/opt/ad5x-klipperscreen"
+          SITE="$APPROOT/lib/python3.12/site-packages"
+          APP="$APPROOT/app"
+          ICON="$APP/styles/icon.png"
+          test -f "$ICON"
+          env \
+            QEMU_LD_PREFIX="$TARGET" \
+            PYTHONHOME="$TARGET/usr" \
+            PYTHONPATH="$SITE:$TARGET/usr/lib/python3.12/site-packages:$APP" \
+            GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
+            qemu-mipsel "$TARGET/usr/bin/python3" -c 'import cairo,gi,jinja2,requests,websocket,sys; gi.require_version("Gtk","3.0"); gi.require_version("GdkPixbuf","2.0"); from gi.repository import Gtk,GdkPixbuf; import screen; p=GdkPixbuf.Pixbuf.new_from_file(sys.argv[1]); print("QEMU_KLIPPERSCREEN_IMPORT_OK", sys.version.split()[0], Gtk.get_major_version(), Gtk.get_minor_version(), jinja2.__version__, requests.__version__, websocket.__version__, p.get_width(), p.get_height())' "$ICON" \
+            | tee out/klipperscreen/qemu-klipperscreen-import.txt
+          grep -q 'QEMU_KLIPPERSCREEN_IMPORT_OK 3.12.9 3 24 3.1.6 2.34.2 1.9.0' out/klipperscreen/qemu-klipperscreen-import.txt
+
+      - name: MIPS QEMU full KlipperScreen X11 startup smoke
+        run: |
+          set -euo pipefail
+          TARGET="$PWD/out/stage3/rootfs"
+          APPROOT="$PWD/out/klipperscreen/bundle-root/opt/ad5x-klipperscreen"
+          SITE="$APPROOT/lib/python3.12/site-packages"
+          APP="$APPROOT/app"
+          mkdir -p out/qemu-home out/qemu-runtime
+          chmod 700 out/qemu-runtime
+
+          Xvfb :99 -screen 0 800x480x24 -nolisten tcp >out/klipperscreen/xvfb.log 2>&1 &
+          XVFB_PID=$!
+          trap 'kill "$XVFB_PID" 2>/dev/null || true' EXIT
+          sleep 1
+
+          set +e
+          env \
+            DISPLAY=:99 \
+            GDK_BACKEND=x11 \
+            HOME="$PWD/out/qemu-home" \
+            XDG_RUNTIME_DIR="$PWD/out/qemu-runtime" \
+            QEMU_LD_PREFIX="$TARGET" \
+            PYTHONHOME="$TARGET/usr" \
+            PYTHONPATH="$SITE:$TARGET/usr/lib/python3.12/site-packages:$APP" \
+            GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
+            XDG_DATA_DIRS="$TARGET/usr/share" \
+            FONTCONFIG_PATH="$TARGET/etc/fonts" \
+            timeout --signal=TERM 25s \
+            qemu-mipsel "$TARGET/usr/bin/python3" "$APP/screen.py" \
+              -c "$APPROOT/KlipperScreen.conf" \
+              -l "$PWD/out/klipperscreen/qemu-KlipperScreen.log" \
+              >out/klipperscreen/qemu-startup.stdout 2>&1
+          RC=$?
+          set -e
+
+          kill "$XVFB_PID" 2>/dev/null || true
+          wait "$XVFB_PID" 2>/dev/null || true
+          trap - EXIT
+
+          case "$RC" in
+            124|143) ;;
+            *)
+              echo "ERROR: QEMU KlipperScreen exited before the intentional timeout (rc=$RC)" >&2
+              cat out/klipperscreen/qemu-startup.stdout >&2 || true
+              tail -n 160 out/klipperscreen/qemu-KlipperScreen.log >&2 || true
+              exit 1
+              ;;
+          esac
+
+          grep -q 'Screen resolution: 800x480' out/klipperscreen/qemu-KlipperScreen.log
+          grep -q 'Connecting to AD5X' out/klipperscreen/qemu-KlipperScreen.log
+          if grep -q 'Fatal error in main loop' out/klipperscreen/qemu-KlipperScreen.log; then
+            echo "ERROR: upstream KlipperScreen hit a fatal startup error under target QEMU" >&2
+            tail -n 160 out/klipperscreen/qemu-KlipperScreen.log >&2
+            exit 1
+          fi
+          echo "QEMU_KLIPPERSCREEN_X11_STARTUP_OK" | tee out/klipperscreen/qemu-startup-result.txt
+
+      - name: Validate Stage 4 payload
+        run: |
+          set -euo pipefail
+          test -s out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz
+          test -s out/klipperscreen/SHA256SUMS
+          test -s out/klipperscreen/svg-rendered.txt
+          test -s out/klipperscreen/dependency-versions.txt
+          grep -q '^opt/ad5x-klipperscreen/' out/klipperscreen/bundle-files.txt
+          if grep -Eq '^(usr|lib|bin)/|^opt/ad5x-x11/' out/klipperscreen/bundle-files.txt; then
+            echo "ERROR: Stage 4 archive escaped its private /opt/ad5x-klipperscreen root" >&2
+            exit 1
+          fi
+          if tar -tzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz | grep -E '\.so($|\.)'; then
+            echo "ERROR: native shared object found in architecture-neutral Stage 4 archive" >&2
+            exit 1
+          fi
+          echo "STAGE4_PAYLOAD_OK"
+
+      - name: Upload Stage 4 KlipperScreen bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-klipperscreen-stage4-${{ github.sha }}
+          path: |
+            out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz
+            out/klipperscreen/SHA256SUMS
+            out/klipperscreen/dependency-versions.txt
+            out/klipperscreen/bundle-files.txt
+            out/klipperscreen/qemu-klipperscreen-import.txt
+            out/klipperscreen/qemu-startup-result.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload Stage 4 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-klipperscreen-stage4-diagnostics-${{ github.sha }}
+          path: |
+            out/klipperscreen/
+          retention-days: 7
+          if-no-files-found: warn
