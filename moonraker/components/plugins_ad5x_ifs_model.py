@@ -153,6 +153,18 @@ def get_ifs_capabilities() -> Dict[str, Any]:
     external integration (Spoolman, slicer, RFID) is already implemented.
     """
 
+    metadata_schema = {
+        "spool_fields": True,
+        "multi_color": True,
+        "finish": True,
+    }
+    integrations = {
+        "flashforge": True,
+        "manual_store": False,
+        "spoolman": False,
+        "slicer": False,
+        "rfid": False,
+    }
     return {
         "schema_version": IFS_SCHEMA_VERSION,
         "slot_count": SLOT_COUNT,
@@ -164,17 +176,17 @@ def get_ifs_capabilities() -> Dict[str, Any]:
             "recovery": False,
             "manage": True,
         },
-        "metadata_schema": {
-            "spool_fields": True,
-            "multi_color": True,
-            "finish": True,
-        },
-        "integrations": {
-            "flashforge": True,
-            "manual_store": False,
-            "spoolman": False,
-            "slicer": False,
-            "rfid": False,
+        "metadata_schema": metadata_schema,
+        "integrations": integrations,
+        # Transitional compatibility for early IFS consumers.  New frontends
+        # must use metadata_schema + integrations so a representable field is
+        # never confused with an implemented external integration.
+        "metadata": {
+            "multi_color": metadata_schema["multi_color"],
+            "finish": metadata_schema["finish"],
+            "spoolman": integrations["spoolman"],
+            "slicer": integrations["slicer"],
+            "rfid": integrations["rfid"],
         },
         "mapping": {
             "tool_to_slot": True,
