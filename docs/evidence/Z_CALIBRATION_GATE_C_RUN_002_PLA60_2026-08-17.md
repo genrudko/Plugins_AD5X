@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** HOT TARE COMPLETE / PROBE SERIES PENDING  
+**Status:** MEASUREMENT COMPLETE / CLEANUP PENDING  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -126,14 +126,6 @@ bed_mesh.profile_name      = ""
 
 Saved profiles `MESH_DATA` and `auto` remained present with the same raw point matrices. Runtime mesh was cleared only; no saved profile was changed or deleted.
 
-Interpretation:
-
-- fresh ordinary homing completed under the heated-bed condition with all axes homed;
-- standard Klipper effective Z offset remained `0.0 mm`;
-- bed remained at the selected 60 C condition during homing (`60.02 C` actual, `60.0 C` target);
-- nozzle heater remained off while passive nozzle temperature rose further to `30.54 C`;
-- printer remained standby and no stop condition was observed.
-
 ## Heated-condition controlled center/non-contact positioning
 
 Command path:
@@ -162,17 +154,6 @@ gcode_move.gcode_position  = [107.5, 107.5, 5.0, 0.0]
 bed_mesh.profile_name      = ""
 ```
 
-Saved `MESH_DATA` and `auto` profiles remained present and unchanged in the live profile map.
-
-Interpretation:
-
-- the physical/toolhead and G-code coordinates agree at the controlled no-mesh center position;
-- standard Klipper effective Z offset remains `0.0 mm`;
-- runtime mesh remains cleared;
-- the bed remains effectively at the 60 C target condition (`59.96 C` actual);
-- the nozzle heater remains off, with passive nozzle temperature `30.07 C`;
-- printer remains standby and no stop condition is observed.
-
 ## Heated-condition load-cell tare
 
 Command:
@@ -193,13 +174,102 @@ N 2. Вес: 20.0
 
 This observation is retained exactly. It differs from the previous ambient runs (`60→0 g` in Gate B and `0→0 g` in Gate C run 001): this heated-condition tare required the second observation and ended at a reported residual `20 g`, while Z-Mod itself still classified the tare as `ОК`.
 
-No new numeric tare acceptance threshold is inferred from this result. The `20 g` residual is retained as secondary H7/tare evidence and will be considered together with the independent contact series rather than silently normalized to zero or discarded.
+No new numeric tare acceptance threshold is inferred from this result. The `20 g` residual is retained as secondary H7/tare evidence and considered together with the independent contact series rather than silently normalized to zero or discarded.
 
-## Remaining planned path
+## Heated-condition independent 10-sample reference series
+
+Command:
 
 ```text
 PROBE_ACCURACY SAMPLES=10
-→ explicit Z5 retract
+```
+
+Klipper/Z-Mod reported:
+
+```text
+PROBE_ACCURACY at X:107.500 Y:107.500 Z:5.000
+samples=10 retract=2.000 speed=2.0 lift_speed=5.0
+```
+
+User-facing contact estimates, in acquisition order:
+
+```text
+-1.995000
+-1.980000
+-1.980000
+-1.997500
+-1.985000
+-1.985000
+-2.002500
+-1.995000
+-1.977500
+-2.000000
+```
+
+Descriptive statistics:
+
+```text
+maximum             = -1.977500 mm
+minimum             = -2.002500 mm
+range               =  0.025000 mm
+average             = -1.989750 mm
+median              = -1.990000 mm
+standard deviation  =  0.008764 mm
+first→last drift    = -0.005000 mm
+```
+
+The corresponding raw `probe ... is z=` values remained exactly `0.250000 mm` lower than the user-facing contact estimates, consistent with the configured `[probe] z_offset=-0.25` semantics. The two coordinate forms remain separate.
+
+Post-probe live state before cleanup:
+
+```text
+heater_bed.temperature     = 59.99 C
+heater_bed.target          = 60.0 C
+heater_bed.power           = 0.0695713663
+extruder.temperature       = 31.86 C
+extruder.target            = 0.0 C
+print_stats.state          = standby
+toolhead.homed_axes        = xyz
+toolhead.position          = [107.5, 107.5, -0.2500, 0.0]
+gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
+bed_mesh.profile_name      = ""
+```
+
+No standard Klipper Z offset was introduced. The bed remained essentially at the selected 60 C target throughout the series. The nozzle heater remained off, while passive nozzle temperature reached `31.86 C`.
+
+## Comparison with ambient runs
+
+```text
+                         Gate B ambient      Gate C001 ambient    Gate C002 bed 60 C
+average                  -1.985500 mm        -1.973000 mm        -1.989750 mm
+median                   -1.986250 mm        -1.975000 mm        -1.990000 mm
+range                     0.017500 mm         0.022500 mm         0.025000 mm
+stddev                    0.005220 mm         0.007730 mm         0.008764 mm
+first→last drift         +0.010000 mm        +0.005000 mm        -0.005000 mm
+```
+
+Mean differences:
+
+```text
+60 C minus Gate B ambient      = -0.004250 mm
+60 C minus Gate C001 ambient   = -0.016750 mm
+60 C minus mean of ambient means (-1.979250) = -0.010500 mm
+```
+
+Saved `auto` center remains `-1.925833 mm`; this run's mean minus saved center is `-0.063917 mm`.
+
+Descriptive interpretation only:
+
+- the 60 C series remains tightly clustered on the scale of the historical anomalous/drifting runs;
+- there is no large monotonic drift in the 10 samples;
+- the hot-bed mean lies within `0.016750 mm` of each of the two ambient run means and `0.010500 mm` below the mean of those two ambient means;
+- the 20 g tare residual did not coincide with an obvious collapse of contact-series repeatability in this run, but this is not proof that the residual is harmless or causally unrelated;
+- no thermal correction, tare threshold, acceptance band, search envelope or motion-policy value is inferred from this single heated-bed run.
+
+## Remaining controlled path
+
+```text
+explicit Z5 retract
 → restore saved auto mesh at runtime
 → post-state/hash verification
 ```
@@ -208,10 +278,10 @@ No `SAVE_CONFIG`, persistent trim mutation, saved-mesh overwrite/delete, Plugins
 
 ## Pending
 
-- raw 10-sample series: PENDING
-- descriptive statistics: PENDING
-- comparison with ambient runs: PENDING
-- cleanup/persistence verification: PENDING
+- cleanup/retract confirmation: PENDING
+- post-run standard effective Z offset: PENDING
+- saved mesh unchanged proof: PENDING
+- post-run `printer.cfg` hash: PENDING
 - stop condition observed: PENDING
 
-This run cannot authorize or freeze any motion/search/correction threshold by itself.
+Until cleanup/persistence verification is complete, this run is not yet structurally complete and authorizes nothing.
