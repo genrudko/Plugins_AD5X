@@ -222,8 +222,8 @@ class ZCalibrationOrchestrator:
         effective_before: Optional[float] = None
         effective_after: Optional[float] = None
         motion_started = False
-        offset_written = False
-        runtime_mesh_built = False
+        offset_write_attempted = False
+        runtime_mesh_attempted = False
         cleanup = {
             "offset_reconciled": True,
             "mesh_reconciled": True,
@@ -372,11 +372,13 @@ class ZCalibrationOrchestrator:
             elif mesh_decision.action is core.MeshAction.BUILD_RUNTIME:
                 if request.runtime_mesh_id is None or primary.median is None:
                     raise OrchestrationAbort("runtime_mesh_context_missing")
+                # Once the mutation request is issued, a missing ACK cannot prove
+                # that the runtime mesh was not applied.  Cleanup must reconcile.
+                runtime_mesh_attempted = True
                 self.adapter.build_runtime_mesh(
                     request.runtime_mesh_id,
                     reference=primary.median,
                 )
-                runtime_mesh_built = True
                 model = replace(model, runtime_mesh_id=request.runtime_mesh_id)
 
             model = self._advance(model, core.CalibrationState.OFFSET_COMPOSITION)
@@ -388,8 +390,10 @@ class ZCalibrationOrchestrator:
                 abs(target - effective_before)
                 > request.policies.effective_offset_tolerance
             ):
+                # Treat a sent mutation as potentially applied before any ACK.
+                # Transport failure therefore triggers mandatory reconciliation.
+                offset_write_attempted = True
                 self.adapter.set_effective_offset(target)
-                offset_written = True
             effective_after = self.adapter.read_effective_offset()
             if (
                 abs(effective_after - target)
@@ -435,8 +439,8 @@ class ZCalibrationOrchestrator:
                 request,
                 effective_before=effective_before,
                 motion_started=motion_started,
-                offset_written=offset_written,
-                runtime_mesh_built=runtime_mesh_built,
+                offset_write_attempted=offset_write_attempted,
+                runtime_mesh_attempted=runtime_mesh_attempted,
             )
             model = model.abort(
                 reason,
@@ -516,14 +520,14 @@ class ZCalibrationOrchestrator:
         *,
         effective_before: Optional[float],
         motion_started: bool,
-        offset_written: bool,
-        runtime_mesh_built: bool,
+        offset_write_attempted: bool,
+        runtime_mesh_attempted: bool,
     ) -> Mapping[str, bool]:
         offset_ok = True
         mesh_ok = True
         retract_ok = True
 
-        if offset_written and effective_before is not None:
+        if offset_write_attempted and effective_before is not None:
             try:
                 self.adapter.set_effective_offset(effective_before)
                 actual = self.adapter.read_effective_offset()
@@ -534,7 +538,7 @@ class ZCalibrationOrchestrator:
             except core.CalibrationError:
                 offset_ok = False
 
-        if runtime_mesh_built:
+        if runtime_mesh_attempted:
             try:
                 if request.mesh.saved_profile is not None:
                     self.adapter.load_saved_mesh(request.mesh.saved_profile)
