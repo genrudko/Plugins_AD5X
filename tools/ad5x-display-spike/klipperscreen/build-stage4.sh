@@ -29,9 +29,8 @@ python3 -m pip install \
     -r tools/ad5x-display-spike/klipperscreen/requirements-startup.txt \
     | tee "$OUT/pip-install.log"
 
-# pip may select optional x86_64 accelerators for otherwise pure-Python packages
-# (notably MarkupSafe/charset-normalizer). The AD5X layer must be architecture
-# neutral, so remove every native extension and prove the pure fallbacks import.
+# pip may select optional x86_64 accelerators for otherwise pure-Python packages.
+# Remove every native extension and prove the pure fallbacks import.
 find "$SITE" -type f -name '*.so' -print | sort > "$OUT/removed-host-extensions.txt"
 while IFS= read -r so; do
     [ -n "$so" ] || continue
@@ -40,7 +39,6 @@ done < "$OUT/removed-host-extensions.txt"
 
 if find "$SITE" -type f -name '*.so' -print -quit | grep -q .; then
     echo "ERROR: native extension leaked into Stage 4 app layer" >&2
-    find "$SITE" -type f -name '*.so' -print >&2
     exit 1
 fi
 
@@ -67,17 +65,11 @@ print(
 PY
 
 # Stage 3 intentionally contains no librsvg. Preserve upstream visuals without
-# adding a Rust/librsvg target stack: pre-render every shipped SVG to a 4x PNG.
-# KlippyGtk already supports PNG; generated-bundle compatibility makes PNG the
-# first choice and rewrites direct CSS/icon references. Upstream source is not
-# modified in git.
+# adding a target Rust/librsvg stack: pre-render every shipped SVG to a 4x PNG.
 : > "$OUT/svg-rendered.txt"
 while IFS= read -r svg; do
     png="${svg%.svg}.png"
-    if ! rsvg-convert --zoom=4 "$svg" --output "$png"; then
-        echo "ERROR: failed to pre-render $svg" >&2
-        exit 1
-    fi
+    rsvg-convert --zoom=4 "$svg" --output "$png"
     printf '%s -> %s\n' "${svg#$APP/}" "${png#$APP/}" >> "$OUT/svg-rendered.txt"
 done < <(find "$APP/styles" -type f -name '*.svg' -print | sort)
 
@@ -87,8 +79,7 @@ import sys
 
 app = Path(sys.argv[1])
 
-# Normal icon loading: prefer our CI-rendered PNG, retain SVG as an upstream
-# fallback for future runtimes that gain librsvg.
+# Normal icon loading: prefer our CI-rendered PNG, retain SVG as a future fallback.
 kg = app / "ks_includes" / "KlippyGtk.py"
 s = kg.read_text()
 old = 'for ext in ["svg", "png"]:'
@@ -97,14 +88,84 @@ if old not in s:
     raise SystemExit("KlippyGtk icon fallback pattern changed upstream")
 kg.write_text(s.replace(old, new, 1))
 
-# Gtk.Window icon is loaded directly rather than through KlippyGtk.
 screen = app / "screen.py"
 s = screen.read_text()
+
+# Gtk.Window icon is loaded directly rather than through KlippyGtk.
 old = 'os.path.join(klipperscreendir, "styles", "icon.svg")'
 new = 'os.path.join(klipperscreendir, "styles", "icon.png")'
 if old not in s:
     raise SystemExit("screen.py icon path changed upstream")
-screen.write_text(s.replace(old, new, 1))
+s = s.replace(old, new, 1)
+
+# AD5X has no xset in the proven private X11 runtime. The launcher directly owns
+# the panel backlight and restores its state on exit, so generated compatibility
+# must not make upstream X11 screensaver/DPMS helpers a hard startup dependency.
+old = "import pathlib\nimport subprocess\n"
+new = "import pathlib\nimport shutil\nimport subprocess\n"
+if old not in s:
+    raise SystemExit("screen.py import block changed upstream")
+s = s.replace(old, new, 1)
+
+old = '''    def set_dpms(self, use_dpms):
+        if not use_dpms and not self.wayland:
+'''
+new = '''    def set_dpms(self, use_dpms):
+        if not self.wayland and shutil.which("xset") is None:
+            if self.check_dpms_timeout is not None:
+                GLib.source_remove(self.check_dpms_timeout)
+            self.check_dpms_timeout = None
+            self.use_dpms = False
+            self._config.set("main", "use_dpms", False)
+            self._config.save_user_config_options()
+            self.blanking_time = 0
+            self.screensaver.reset_timeout()
+            logging.info("xset unavailable; AD5X launcher owns display blanking")
+            return
+        if not use_dpms and not self.wayland:
+'''
+if old not in s:
+    raise SystemExit("screen.py set_dpms pattern changed upstream")
+s = s.replace(old, new, 1)
+
+old = '''        # disable screensaver we have our own
+        if not self.wayland:
+            cmd = ["xset", "-display", self.display_number, "s", "off"]
+            subprocess.call(cmd)
+            cmd = ["xset", "-display", self.display_number, "s", "noblank"]
+            subprocess.call(cmd)
+'''
+new = '''        # disable the X11 screensaver when xset exists. AD5X uses the launcher
+        # backlight owner instead and intentionally ships no xset.
+        if not self.wayland and shutil.which("xset") is not None:
+            cmd = ["xset", "-display", self.display_number, "s", "off"]
+            subprocess.call(cmd)
+            cmd = ["xset", "-display", self.display_number, "s", "noblank"]
+            subprocess.call(cmd)
+        elif not self.wayland:
+            logging.debug("xset unavailable; skipping X11 screensaver commands")
+'''
+if old not in s:
+    raise SystemExit("screen.py blanking pattern changed upstream")
+s = s.replace(old, new, 1)
+screen.write_text(s)
+
+# Spoolman dynamically recolors its SVG in memory, which the no-librsvg Stage 3
+# runtime cannot decode. In AD5X PNG-only mode use the normal pre-rendered icon;
+# this keeps startup clean while Spoolman itself remains outside Stage 4 scope.
+base = app / "panels" / "base_panel.py"
+s = base.read_text()
+old = '''        icon_size = self._gtk.img_scale * self.bts * 0.9
+        if not os.path.isfile(icon_path):
+'''
+new = '''        icon_size = self._gtk.img_scale * self.bts * 0.9
+        if os.environ.get("AD5X_KLIPPERSCREEN_PNG_ONLY") == "1":
+            return self._gtk.PixbufFromIcon("spool", icon_size, icon_size)
+        if not os.path.isfile(icon_path):
+'''
+if old not in s:
+    raise SystemExit("base_panel.py spool icon pattern changed upstream")
+base.write_text(s.replace(old, new, 1))
 
 # CSS background-image declarations do not have KlippyGtk's extension fallback.
 for css in app.joinpath("styles").rglob("*.css"):
@@ -117,7 +178,6 @@ cp tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf "$APPROOT/KlipperSc
 cp tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh "$APPROOT/run-klipperscreen-test.sh"
 chmod +x "$APPROOT/run-klipperscreen-test.sh"
 
-# Pin/provenance evidence travels with the artifact.
 {
     echo "stage=4-klipperscreen-poc"
     echo "upstream_repo=KlipperScreen/KlipperScreen"
@@ -125,23 +185,22 @@ chmod +x "$APPROOT/run-klipperscreen-test.sh"
     echo "python_target=3.12.9"
     echo "stage3_runtime_root=/opt/ad5x-x11"
     echo "bundle_root=/opt/ad5x-klipperscreen"
-    echo "native_extensions=forbidden"
     echo "svg_strategy=ci-prerendered-png-fallback"
+    echo "display_blanking_owner=ad5x-launcher-backlight"
+    echo "xset_required=false"
 } > "$APPROOT/BUILDINFO.txt"
 
 python3 -m compileall -q "$APP"
 find "$APP" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$SITE" -type d -name '__pycache__' -prune -exec rm -rf {} +
 
-# Record actual resolved Python dependency versions for this artifact.
 PYTHONPATH="$SITE" python3 - <<'PY' > "$OUT/dependency-versions.txt"
 from importlib.metadata import distributions
-for dist in sorted(distributions(path=["out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/lib/python3.12/site-packages"]), key=lambda d: d.metadata["Name"].lower()):
+site = "out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/lib/python3.12/site-packages"
+for dist in sorted(distributions(path=[site]), key=lambda d: d.metadata["Name"].lower()):
     print(f'{dist.metadata["Name"]}=={dist.version}')
 PY
 
-# Path and payload invariants: Stage 4 is incremental and must not touch /usr,
-# /lib, Z-Mod Python, or the already hardware-proven /opt/ad5x-x11 runtime.
 find "$OUT/bundle-root" -mindepth 1 -maxdepth 1 -printf '%f\n' | grep -qx 'opt'
 find "$OUT/bundle-root/opt" -mindepth 1 -maxdepth 1 -printf '%f\n' | grep -qx 'ad5x-klipperscreen'
 test ! -e "$OUT/bundle-root/usr"
@@ -149,13 +208,10 @@ test ! -e "$OUT/bundle-root/lib"
 test ! -e "$OUT/bundle-root/bin"
 test ! -e "$OUT/bundle-root/opt/ad5x-x11"
 
-tar \
-    --sort=name \
-    --mtime='UTC 2020-01-01' \
+tar --sort=name --mtime='UTC 2020-01-01' \
     --owner=0 --group=0 --numeric-owner \
     -C "$OUT/bundle-root" \
-    -czf "$OUT/ad5x-klipperscreen-stage4.tar.gz" \
-    opt
+    -czf "$OUT/ad5x-klipperscreen-stage4.tar.gz" opt
 sha256sum "$OUT/ad5x-klipperscreen-stage4.tar.gz" | tee "$OUT/SHA256SUMS"
 tar -tzf "$OUT/ad5x-klipperscreen-stage4.tar.gz" | sort > "$OUT/bundle-files.txt"
 
