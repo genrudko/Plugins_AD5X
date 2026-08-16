@@ -1,9 +1,6 @@
 --- a/package/python-pycairo/python-pycairo.mk
 +++ b/package/python-pycairo/python-pycairo.mk
-@@ -4,13 +4,14 @@
- #
- ################################################################################
- 
+@@ -7,8 +7,9 @@
 -PYTHON_PYCAIRO_VERSION = 1.27.0
 +PYTHON_PYCAIRO_VERSION = 1.29.0
  PYTHON_PYCAIRO_SOURCE = pycairo-$(PYTHON_PYCAIRO_VERSION).tar.gz
@@ -15,7 +12,6 @@
 +PYTHON_PYCAIRO_INSTALL_STAGING = YES
  
  PYTHON_PYCAIRO_CONF_OPTS = \
- 	-Dpython=$(HOST_DIR)/bin/python \
 --- a/package/python-pycairo/python-pycairo.hash
 +++ b/package/python-pycairo/python-pycairo.hash
 @@ -1,6 +1,6 @@
