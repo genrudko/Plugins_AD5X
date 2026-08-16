@@ -25,52 +25,46 @@ jobs:
           from pathlib import Path
 
           p = Path('tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py')
-          s = p.read_text()
+          lines = p.read_text().splitlines()
 
-          old = '''        provider = Gtk.CssProvider()
-          provider.load_from_data(
-              (
-                  "* { border: 2px solid %s; border-radius: 10px; "
-                  "background-color: %s; }" % (border, background)
-              ).encode("utf-8")
+          # Scope the provider fix strictly to _apply_card_style.
+          start = next(i for i, line in enumerate(lines) if line.startswith('    def _apply_card_style'))
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith('    def _render_swatch'))
+          provider_idx = next(
+              i for i in range(start, end)
+              if lines[i].strip() == 'provider = Gtk.CssProvider()'
           )
-          widgets["card"].get_style_context().add_provider(
-              provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+          lines[provider_idx:provider_idx] = [
+              '        context = widgets["card"].get_style_context()',
+              '        old_provider = getattr(widgets["card"], "_ad5x_card_css_provider", None)',
+              '        if old_provider is not None:',
+              '            context.remove_provider(old_provider)',
+          ]
+          end += 4
+          add_idx = next(
+              i for i in range(provider_idx + 4, end)
+              if lines[i].strip() == 'widgets["card"].get_style_context().add_provider('
           )
-          widgets["card"]._ad5x_card_css_provider = provider
-          '''.replace('          ', '        ')
-          new = '''        context = widgets["card"].get_style_context()
-          old_provider = getattr(widgets["card"], "_ad5x_card_css_provider", None)
-          if old_provider is not None:
-              context.remove_provider(old_provider)
-          provider = Gtk.CssProvider()
-          provider.load_from_data(
-              (
-                  "* { border: 2px solid %s; border-radius: 10px; "
-                  "background-color: %s; }" % (border, background)
-              ).encode("utf-8")
-          )
-          context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-          widgets["card"]._ad5x_card_css_provider = provider
-          '''.replace('          ', '        ')
-          assert old in s, 'card provider block missing'
-          s = s.replace(old, new, 1)
+          lines[add_idx] = '        context.add_provider('
 
-          old = '''        if slot == active:
-              widgets["title"].set_markup(
-                  f"<big><b>Слот {slot}</b></big>  <small>АКТИВНЫЙ</small>"
-              )
-          else:
-              widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
-          '''.replace('          ', '        ')
-          assert s.count(old) == 2, f'expected two active-title blocks, got {s.count(old)}'
-          s = s.replace(
-              old,
-              '        widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")\n',
-              2,
-          )
+          # Remove duplicated АКТИВНЫЙ title text. Active remains visible through
+          # green card frame, `В тракте`, and the hardware path row.
+          removed = 0
+          i = 0
+          while i < len(lines):
+              if lines[i].strip() == 'if slot == active:' and i + 5 < len(lines):
+                  block = '\n'.join(lines[i:i + 6])
+                  if 'АКТИВНЫЙ' in block and lines[i + 4].strip() == 'else:':
+                      indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+                      lines[i:i + 6] = [
+                          indent + 'widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")'
+                      ]
+                      removed += 1
+                      continue
+              i += 1
+          assert removed == 2, f'expected two duplicated active-title blocks, removed={removed}'
 
-          p.write_text(s)
+          p.write_text('\n'.join(lines) + '\n')
           PY
 
           python3 -m py_compile tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
