@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** PRE-MOTION / PREFLIGHT COMPLETE  
+**Status:** MEASUREMENT IN PROGRESS  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -90,15 +90,76 @@ eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
 
 This exactly matches the Gate-B pre/post hash. Post-run evidence must compare it again.
 
-## Planned semantics
+## Controlled path evidence so far
+
+### Runtime mesh clear + fresh ordinary homing
+
+Commands:
 
 ```text
-read-only preflight
-→ runtime mesh clear only
-→ fresh ordinary G28
-→ move to X107.5/Y107.5/Z5
-→ LOAD_CELL_TARE
-→ PROBE_ACCURACY SAMPLES=10
+BED_MESH_CLEAR
+G28
+M400
+```
+
+Post-G28 live state:
+
+```text
+print_stats.state        = standby
+toolhead.homed_axes      = xyz
+toolhead.position        = [220.0375, 220.0, 220.0, 0.0]
+gcode_move.homing_origin = [0.0, 0.0, 0.0, 0.0]
+bed_mesh.profile_name    = ""
+```
+
+Saved `MESH_DATA` and `auto` profiles remained present. Owner reported homing visually normal.
+
+### Controlled center/non-contact positioning
+
+Command path:
+
+```text
+G90
+G1 X107.5 Y107.5 F3000
+G1 Z5 F300
+M400
+```
+
+Post-move live state:
+
+```text
+print_stats.state        = standby
+toolhead.homed_axes      = xyz
+toolhead.position        = [107.5, 107.5, 5.0, 0.0]
+gcode_move.homing_origin = [0.0, 0.0, 0.0, 0.0]
+gcode_move.position      = [107.5, 107.5, 5.0, 0.0]
+bed_mesh.profile_name    = ""
+```
+
+No runtime mesh was active and no standard Klipper Z offset was introduced.
+
+### Fresh load-cell tare
+
+Command:
+
+```text
+LOAD_CELL_TARE
+```
+
+Observed Z-Mod responses:
+
+```text
+H1 > command H1 ok. 8425884
+N 1. Вес: 0.0
+Сброс тензодатчка: ОК. Вес: 0.0->0.0
+```
+
+Interpretation: this independent run's tare succeeded on the first reported attempt with residual `0.0 g`. This is retained as descriptive H7/tare evidence only.
+
+## Remaining controlled path
+
+```text
+PROBE_ACCURACY SAMPLES=10
 → explicit Z5 retract
 → restore saved auto mesh at runtime
 → post-state/hash verification
@@ -108,8 +169,6 @@ No `SAVE_CONFIG`, persistent user-trim mutation, saved-mesh overwrite/delete, Pl
 
 ## Pending
 
-- fresh homing result: PENDING
-- tare observation: PENDING
 - raw 10-sample reference series: PENDING
 - descriptive mean/median/spread/drift: PENDING
 - comparison with Gate B run 001: PENDING
