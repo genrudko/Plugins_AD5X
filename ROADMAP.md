@@ -69,7 +69,7 @@ AD5X имеет ограниченные вычислительные ресур
 | Класс | Подход | Политика |
 |---|---|---|
 | **A — UI / Macro only** | UI, Moonraker API, существующие макросы | предпочтительный вариант |
-| **B — Lightweight daemon** | лёгкая event-driven логика, редкий polling | допускается при необходимости |
+| **B — Lightweight backend logic** | лёгкая event-driven логика, редкий polling | допускается при необходимости |
 | **C — Heavy service** | тяжёлый CPU/I/O, постоянная обработка | на AD5X не устанавливаем; только sidecar |
 
 Принцип фоновой работы:
@@ -83,11 +83,11 @@ AD5X имеет ограниченные вычислительные ресур
 Предпочтительная схема:
 
 ```text
-                  ┌──────────── Fluidd fork
-                  │
-Z-Mod / Moonraker ├──────────── Mainsail fork
-      + plugins   │
-                  └──────────── HelixScreen / local screen
+                    ┌──────────── Fluidd
+                    ├──────────── Mainsail
+Z-Mod / Moonraker   ├──────────── HelixScreen
++ Plugins AD5X      ├──────────── Guppy
+                    └──────────── KlipperScreen
 ```
 
 Frontend — это представление общих возможностей, а не отдельная реализация каждой функции.
@@ -106,7 +106,7 @@ Frontend — это представление общих возможносте
 
 ### 3.5. Fail-safe и rollback
 
-Любая функция проекта должна проектироваться так, чтобы её поломка **не превращала принтер в кирпич**.
+Любая функция проекта должна проектироваться так, чтобы её поломка **не превращала принтер в кирпич и не создавала опасного движения**.
 
 Требования:
 
@@ -115,7 +115,8 @@ Frontend — это представление общих возможносте
 - проверка конфигурации до рестарта;
 - понятный uninstall;
 - rollback на предыдущую рабочую конфигурацию;
-- базовый Z-Mod должен оставаться доступным после удаления нашей надстройки.
+- базовый Z-Mod должен оставаться доступным после удаления нашей надстройки;
+- safety-critical автоматизация должна отказываться от действия при неоднозначности, а не угадывать.
 
 ---
 
@@ -160,7 +161,8 @@ Frontend — это представление общих возможносте
 3. установка и удаление воспроизводимы;
 4. отсутствие соответствующего железа не ломает систему;
 5. пользовательский сценарий понятен без чтения исходников;
-6. ошибка функции не мешает базовой печати.
+6. ошибка функции не мешает базовой печати;
+7. для safety-critical функции отрицательные сценарии и реальные hardware gates приняты отдельно.
 
 ---
 
@@ -186,11 +188,13 @@ ghzserg/fluidd
 
 ### Mainsail
 
-Второй frontend после стабилизации общего API. Пользователь должен иметь возможность выбрать UI без потери основных возможностей проекта.
+Второй web frontend после стабилизации общего API. Пользователь должен иметь возможность выбрать UI без потери основных возможностей проекта.
 
-### HelixScreen / локальные экраны
+### HelixScreen / Guppy / KlipperScreen
 
-Поздний этап. Экран должен использовать тот же backend/API и отображать наиболее полезные операции непосредственно на принтере.
+Экранные frontends используют тот же backend/API и отображают наиболее полезные операции непосредственно на принтере.
+
+KlipperScreen parity не начинается как продуктовый dependency до отдельной успешной AD5X runtime/platform acceptance.
 
 ---
 
@@ -214,7 +218,7 @@ ghzserg/fluidd
 - логирование без постоянного тяжёлого I/O;
 - версия и compatibility matrix;
 - подготовка fork Fluidd;
-- механизм безопасного переопределения репозитория Fluidd через пользовательский Moonraker config;
+- безопасный backend deployment lifecycle;
 - документация для разработчика модуля.
 
 ### Результат
@@ -262,7 +266,7 @@ Side / AUX Fan
 - Chamber heater;
 - Recirculation;
 - Exhaust;
-- тип хотэнда/сопла;
+- тип хотэнда/сопла как capability/config identity, но не как владелец скрытого Z-offset profile;
 - дополнительные датчики;
 - позднее — другие community hardware mods.
 
@@ -345,48 +349,122 @@ Slot 4  TPU 95A Black          420 g
 
 ---
 
-## Phase 3 — Calibration Center
+## Phase 3 — Z Calibration Subsystem / Calibration Center v2
 
-**Приоритет: очень высокий.**
+**Приоритет: очень высокий / safety-critical.**
 
-Самая важная первая задача — сделать замену хотэнда/сопла безопасным и понятным бытовым сценарием.
+Текущий активный design/work item: **issue #13 — CALIBRATION-SUBSYSTEM-002**.
 
-### Первый сценарий: Z-offset wizard
+Старый profile-based CALIBRATION-CENTER-001 (#5 / PR #6) закрыт без merge и остаётся только исследовательской историей.
 
-```text
-Я поменял сопло
-→ проверить текущую конфигурацию
-→ выполнить измерение
-→ напечатать тест первого слоя
-→ визуально/ручной корректировкой подтвердить результат
-→ сохранить
-→ записать историю
-```
+### Цель
 
-### Состояние вместо магии
-
-Пользователь должен видеть:
+Сделать замену хотэнда/сопла/пластины и обычный старт печати понятным и безопасным сценарием без ручного знания внутренностей Z-Mod.
 
 ```text
-Hotend: 0.4 mm
-Z-offset: -0.130 mm
-Последняя калибровка: 12.08.2026
-Проверка первым слоем: ✓
-Сохранено: ✓
+пользователь запускает калибровку/печать
+→ система готовит probe
+→ безопасно устанавливает текущий nozzle↔bed reference
+→ валидирует серию измерений
+→ применяет выбранную bed-mesh policy
+→ формирует обычный Klipper effective Z-offset
+→ объясняет результат в UI и журнале
+→ печатает
 ```
 
-После смены хотэнда/сопла старая калибровка помечается потенциально неактуальной.
+### Модель Z-offset
 
-### Последующие разделы
+Внутренне различаются источники:
 
-- Bed Mesh;
-- Screw Tilt;
-- PID;
-- Input Shaper;
-- belt test/spectrogram;
-- другие калибровки Z-Mod.
+```text
+Auto-Z alignment
++ persistent user Z trim
++ slicer/job Z offset
++ live babystepping
+────────────────────────
+= effective Klipper gcode_offset
+```
 
-Задача центра — не писать свои алгоритмы там, где они уже существуют, а сделать понятный workflow над проверенными механизмами.
+Наружу остаётся стандартная Klipper-семантика. Никакой второй скрытой продуктовой системы координат.
+
+### Хотэнды/сопла
+
+Нормальные persistent Z profiles под каждую инструментальную сборку не требуются.
+
+После замены система заново измеряет nozzle↔bed reference. Большой подтверждённый delta переводит workflow в `hardware_change_suspected` / full calibration, а не превращается в огромный автоматический offset.
+
+### Bed mesh перед печатью
+
+Пользователь получает три режима:
+
+```text
+saved
+saved+check   ← рекомендуемый
+runtime       ← свежая карта перед этой печатью, по духу как stock AD5X
+```
+
+Runtime map не затирает permanent/default mesh автоматически.
+
+### First-layer verifier
+
+Тестовый первый слой **опционален** и запускается по желанию/рекомендации пользователя, а не перед каждой печатью.
+
+Основные измерения должны быть достаточны для геометрической калибровки при прохождении safety/metrology gates.
+
+First-layer test проверяет уже полный технологический процесс: extrusion, plate, material, temperature, flow и желаемый squish. Он рекомендуется после первого включения, крупной смены hardware/plate, большого подтверждённого reference change, настройки persistent user trim или по явному запросу.
+
+### Plate protection
+
+Обязательные свойства:
+
+- bounded Z search;
+- conservative initial acquisition;
+- slow final approach;
+- repeated reference validation;
+- outlier/drift/spread/plausibility gates;
+- early/no-trigger fail-closed;
+- large unexpected delta не применяется молча;
+- cancel/failure не меняет persistent user trim и saved mesh;
+- abort/retract;
+- H7 вторичен до отдельного доказательства latency/stop-distance;
+- thresholds только после source/hardware evidence + margin.
+
+### Diagnostics
+
+Отдельный bounded structured event log должен позволять понять:
+
+- что измерено;
+- какие offset components были активны;
+- какая mesh policy использовалась;
+- что применено;
+- почему решение принято/отклонено;
+- какая защита сработала.
+
+### UI
+
+Обычный экран показывает:
+
+```text
+Z calibration      Ready
+Bed mesh           Saved + checked
+Current Z-offset   +0.006 mm
+Auto correction    +0.036 mm
+User trim          -0.030 mm
+Job offset          0.000 mm
+
+[Check Z]
+[Build bed mesh]
+[Full calibration]
+[Test first layer]
+```
+
+Advanced раскрывает raw probe/reference/mesh/offset/log state.
+
+### Test policy
+
+`docs/Z_CALIBRATION_TEST_PLAN_V2.md` является обязательным release contract.
+
+Safety-critical paths сначала доказываются в pure/fake tests, затем контролируемо на реальном принтере.
 
 ---
 
@@ -402,10 +480,10 @@ Preflight — guard перед штатным запуском печати, а 
 - MCU Ready;
 - IFS Ready;
 - выбранные материалы реально установлены;
-- сопло соответствует ожидаемой конфигурации;
-- Z-offset актуален/подтверждён;
-- hardware modules готовы;
+- hardware/capability state;
+- Z Calibration readiness и выбранная bed-mesh policy;
 - G-code metadata обработаны;
+- slicer/job Z-offset распознан и отображён;
 - достаточно свободного места;
 - нет критических ошибок системы.
 
@@ -416,7 +494,7 @@ Preflight — guard перед штатным запуском печати, а 
 ✓ MCU
 ✓ IFS
 ✓ Filament assignment
-✓ Z-offset
+✓ Z calibration
 ✓ G-code metadata
 
 ⚠ Slot 2: файл ожидает PLA Blue,
@@ -476,6 +554,7 @@ Preflight — guard перед штатным запуском печати, а 
 
 - версии firmware/Z-Mod/plugins;
 - логи Klipper/Moonraker;
+- Plugins AD5X structured event logs;
 - MCU state;
 - CPU/RAM;
 - USB mapping;
@@ -539,13 +618,15 @@ Wi-Fi        🟠 Слабый сигнал
 
 ## Phase 8 — Frontend parity
 
-После стабилизации API:
+После стабилизации общего backend API конкретного модуля:
 
-1. Fluidd — основной frontend;
+1. Fluidd — основной первый frontend;
 2. Mainsail — функциональный parity основных модулей;
-3. HelixScreen/локальный экран — ключевые повседневные сценарии непосредственно на принтере.
+3. HelixScreen — ключевые сценарии непосредственно на принтере;
+4. Guppy — адаптер ключевых сценариев;
+5. KlipperScreen — после отдельной AD5X runtime/platform acceptance.
 
-Не требуется делать интерфейсы пиксель-в-пиксель одинаковыми. Требуется единая бизнес-логика и совместимое состояние.
+Не требуется делать интерфейсы пиксель-в-пиксель одинаковыми. Требуется единая бизнес-логика, compatible state/actions и одинаковая safety semantics.
 
 ---
 
@@ -563,9 +644,10 @@ SAVE_CONFIG
 Хорошо:
 
 ```text
-Z-offset: -0.130 mm
-Калибровка: актуальна
-Проверка первого слоя: выполнена
+Z calibration: Ready
+Current Z-offset: +0.006 mm
+Auto correction: +0.036 mm
+User trim: -0.030 mm
 ```
 
 ## 7.2. Показывать проблему и следующее действие
@@ -573,21 +655,23 @@ Z-offset: -0.130 mm
 Не только:
 
 ```text
-MCU error / filament mismatch / calibration invalid
+probe error / calibration invalid / hardware changed
 ```
 
 А:
 
 ```text
-Калибровка Z-offset была выполнена до замены хотэнда.
-Рекомендуется повторная проверка первого слоя.
+Высота поверхности значительно отличается от сохранённой карты.
+Измерение повторено и изменение подтверждено.
 
-[Запустить мастер]
+[Полная калибровка]
+[Построить новую карту]
+[Отмена]
 ```
 
 ## 7.3. Не угадывать там, где ошибка дорога
 
-Если система не уверена в катушке, конфигурации хотэнда или аппаратном модуле — она должна попросить подтверждение, а не молча выбрать наиболее похожий вариант.
+Если система не уверена в катушке, hardware state, Z-reference или safety condition — она должна попросить подтверждение/отказаться от автоматического действия, а не молча выбрать наиболее похожий вариант.
 
 ## 7.4. Progressive disclosure
 
@@ -595,7 +679,7 @@ MCU error / filament mismatch / calibration invalid
 
 `Advanced` открывает детали, но они не должны быть обязательными для обычной эксплуатации.
 
-## 7.5. Любая автоматика имеет override
+## 7.5. Любая автоматика имеет override там, где это безопасно
 
 Пользователь может вручную:
 
@@ -604,7 +688,10 @@ MCU error / filament mismatch / calibration invalid
 - отключить автоматический сценарий;
 - открыть настоящий config;
 - вызвать макрос;
-- продолжить печать после некритичного предупреждения.
+- использовать стандартный Klipper Z-adjust;
+- продолжить после некритичного предупреждения, если safety policy допускает это.
+
+Safety-critical lower bounds/plate-protection не являются удобством, которое можно случайно отключить обычным UI toggle.
 
 ---
 
@@ -614,42 +701,47 @@ MCU error / filament mismatch / calibration invalid
 
 Не форкаем. Сохраняем штатный upstream и максимально используем пользовательские конфиги/overlays/plugins.
 
-## Fluidd/Mainsail
+## Fluidd/Mainsail/screens
 
-Допускается собственный fork frontend для нативной интеграции UI.
+Допускаются собственные frontend forks/adapters для нативной интеграции UI.
 
-Требования к fork:
+Требования:
 
 - явное указание upstream и авторства;
 - сохранение лицензий;
 - минимизация изменений upstream-файлов;
 - собственные модули по возможности изолированы;
 - upstream sync сначала проходит через отдельную sync/test ветку;
-- автоматический merge не публикуется в stable без сборки и проверки.
+- автоматический merge не публикуется в stable без сборки и проверки;
+- safety/business logic не копируется отдельно в каждый frontend.
 
 ## Release policy
 
 `main` должен быть скучным и предсказуемым.
 
-Эксперименты происходят в `dev` и только после стабилизации становятся публичным функционалом.
+Эксперименты происходят в `dev`/feature branches и только после стабилизации становятся публичным функционалом.
+
+Safety-critical Z Calibration не переносится в stable до полного `docs/Z_CALIBRATION_TEST_PLAN_V2.md` acceptance и explicit owner acceptance.
 
 ---
 
 # 9. Ближайший порядок работ
 
-Текущий рекомендуемый порядок:
+Архитектурный порядок проекта сохраняется, но owner-approved CALIBRATION-SUBSYSTEM-002 может идти параллельно на отдельной feature branch, используя уже принятый backend foundation.
 
-1. **Platform Foundation** — manifests, lifecycle, API, rollback, frontend integration points;
-2. **Hardware / Mods Manager** — начать с Side/AUX/PLA Fan как минимального hardware module;
-3. **IFS Manager 1.0** — переработать модель spool/slot/material;
-4. **Calibration Center** — Z-offset wizard и история;
-5. **Print Preflight / Safe Start**;
+Текущий порядок:
+
+1. **Platform Foundation** — backend/API/lifecycle/rollback/frontend integration seams;
+2. **CALIBRATION-SUBSYSTEM-002** — сначала core model + safety tests + backend, затем Fluidd UI и controlled hardware acceptance;
+3. **Hardware / Mods Manager** — Side/AUX/PLA Fan как минимальный hardware module;
+4. **IFS Manager 1.0** — spool/slot/material model;
+5. **Print Preflight / Safe Start** — использует уже стабилизированный Z Calibration readiness;
 6. **Camera Manager** — перенести текущую двухкамерную интеграцию в общую архитектуру;
 7. **Maintenance + Diagnostics + System Health**;
 8. **Advanced hardware modules** в `dev`;
-9. **Mainsail / HelixScreen parity**.
+9. **Mainsail / HelixScreen / Guppy / KlipperScreen parity** по стабилизированным API.
 
-Это порядок архитектурных приоритетов, а не запрет на параллельную работу. Уже существующие рабочие компоненты продолжают поддерживаться.
+Это порядок архитектурных приоритетов, а не запрет на контролируемую параллельную работу. Уже существующие рабочие компоненты продолжают поддерживаться.
 
 ---
 
@@ -658,7 +750,9 @@ MCU error / filament mismatch / calibration invalid
 Проект можно считать удачным, если новый владелец AD5X с Z-Mod способен:
 
 - установить поддерживаемый hardware mod без ручного копирования чужих конфигов;
-- поменять сопло и восстановить корректный первый слой через мастер;
+- поменять сопло/хотэнд и восстановить корректную геометрию/первый слой через безопасную автоматическую калибровку без выбора скрытого Z-профиля;
+- при желании строить свежую карту стола перед печатью как на stock, либо использовать сохранённую с проверкой;
+- видеть, из чего сложился текущий Z-offset, включая slicer/job/live corrections;
 - загрузить/назначить материалы IFS без понимания внутренних макросов;
 - понять, почему печать не стартует;
 - выполнить базовое обслуживание;
