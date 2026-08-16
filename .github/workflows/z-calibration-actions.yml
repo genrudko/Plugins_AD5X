@@ -16,6 +16,7 @@ on:
       - 'tests/test_z_calibration_orchestrator_atomicity.py'
       - 'tests/test_z_calibration_cleanup_safety.py'
       - 'tests/test_z_calibration_hardware_evidence.py'
+      - 'docs/Z_CALIBRATION_HARDWARE_EVIDENCE_RUN_V1.md'
       - '.github/workflows/z-calibration-actions.yml'
   pull_request:
     paths:
@@ -30,6 +31,7 @@ on:
       - 'tests/test_z_calibration_orchestrator_atomicity.py'
       - 'tests/test_z_calibration_cleanup_safety.py'
       - 'tests/test_z_calibration_hardware_evidence.py'
+      - 'docs/Z_CALIBRATION_HARDWARE_EVIDENCE_RUN_V1.md'
       - '.github/workflows/z-calibration-actions.yml'
   workflow_dispatch:
 
