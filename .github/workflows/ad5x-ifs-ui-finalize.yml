@@ -8,69 +8,25 @@ on:
       - '.github/workflows/ad5x-ifs-ui-finalize.yml'
 
 permissions:
-  contents: write
+  contents: read
+  actions: write
 
 jobs:
-  patch:
+  dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feature/ifs-manager-v1
-      - name: Finalize card state styling
+      - name: Dispatch exact-branch final gates
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py')
-          lines = p.read_text().splitlines()
-
-          # Scope the provider fix strictly to _apply_card_style.
-          start = next(i for i, line in enumerate(lines) if line.startswith('    def _apply_card_style'))
-          end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith('    def _render_swatch'))
-          provider_idx = next(
-              i for i in range(start, end)
-              if lines[i].strip() == 'provider = Gtk.CssProvider()'
-          )
-          lines[provider_idx:provider_idx] = [
-              '        context = widgets["card"].get_style_context()',
-              '        old_provider = getattr(widgets["card"], "_ad5x_card_css_provider", None)',
-              '        if old_provider is not None:',
-              '            context.remove_provider(old_provider)',
-          ]
-          end += 4
-          add_idx = next(
-              i for i in range(provider_idx + 4, end)
-              if lines[i].strip() == 'widgets["card"].get_style_context().add_provider('
-          )
-          lines[add_idx] = '        context.add_provider('
-
-          # Remove duplicated АКТИВНЫЙ title text. Active remains visible through
-          # green card frame, `В тракте`, and the hardware path row.
-          removed = 0
-          i = 0
-          while i < len(lines):
-              if lines[i].strip() == 'if slot == active:' and i + 5 < len(lines):
-                  block = '\n'.join(lines[i:i + 6])
-                  if 'АКТИВНЫЙ' in block and lines[i + 4].strip() == 'else:':
-                      indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
-                      lines[i:i + 6] = [
-                          indent + 'widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")'
-                      ]
-                      removed += 1
-                      continue
-              i += 1
-          assert removed == 2, f'expected two duplicated active-title blocks, removed={removed}'
-
-          p.write_text('\n'.join(lines) + '\n')
-          PY
-
-          python3 -m py_compile tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
-          git diff --check
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
-          git commit -m 'fix(ifs-ui): finalize active and selected card styling'
-          git push origin HEAD:feature/ifs-manager-v1
+          for WORKFLOW in ad5x-ifs-ui-target-smoke.yml ad5x-klipperscreen-spike.yml; do
+            curl -fsS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches" \
+              -d '{"ref":"feature/ifs-manager-v1"}'
+            echo "DISPATCH_OK ${WORKFLOW}"
+          done
