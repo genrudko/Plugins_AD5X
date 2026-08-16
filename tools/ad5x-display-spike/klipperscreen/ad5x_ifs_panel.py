@@ -268,20 +268,22 @@ class Panel(ScreenPanel):
             data.get("appearance") if isinstance(data.get("appearance"), dict) else {}
         )
         parts = []
-        series = spool.get("series") or ""
-        variant = spool.get("variant") or ""
-        if series:
-            parts.append(series)
-        if variant:
-            parts.append(variant)
-        finish = FINISH_NAMES.get(appearance.get("finish"), appearance.get("finish") or "")
-        if finish:
-            parts.append(finish)
+
+        def add(value):
+            if not value:
+                return
+            text = str(value)
+            if text.casefold() not in {item.casefold() for item in parts}:
+                parts.append(text)
+
+        add(spool.get("series") or "")
+        add(spool.get("variant") or "")
+        add(FINISH_NAMES.get(appearance.get("finish"), appearance.get("finish") or ""))
         colors = appearance.get("colors") if isinstance(appearance.get("colors"), list) else []
         mode = appearance.get("color_mode")
         if colors:
-            parts.append(COLOR_MODE_NAMES.get(mode, f"{len(colors)} цвета"))
-        return " • ".join(str(item) for item in parts if item)
+            add(COLOR_MODE_NAMES.get(mode, f"{len(colors)} цвета"))
+        return " • ".join(parts)
 
     def activate(self):
         self._request_snapshot()
@@ -475,7 +477,6 @@ class Panel(ScreenPanel):
 
     def _render_selection(self):
         for slot, widgets in self._slot_widgets.items():
-            data = widgets.get("data") or {}
             active = 0
             if isinstance(self._last_module, dict):
                 active = int(self._last_module.get("active_slot") or 0)
