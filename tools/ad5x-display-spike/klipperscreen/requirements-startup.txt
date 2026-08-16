@@ -1,0 +1,8 @@
+# Stage 4 PoC startup-only dependency set for Python 3.12.
+# Full upstream requirements are intentionally not bundled yet: psutil is optional
+# in base_panel; sdbus/sdbus_networkmanager are loaded by the network panel; and
+# python-mpv is loaded by the camera panel. Those feature layers follow only after
+# the real upstream shell is hardware-proven on AD5X.
+Jinja2==3.1.6
+requests==2.34.2
+websocket-client==1.9.0
