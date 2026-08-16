@@ -17,6 +17,7 @@ on:
       - 'tests/test_ad5x_ifs_bridge.py'
       - 'tests/test_installer_backend_lifecycle.py'
       - 'tests/test_installer_ifs_bridge_lifecycle.py'
+      - 'tests/test_installer_ifs_manager_model_lifecycle.py'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_plugins_ad5x_ifs_backend.py'
       - 'tests/test_plugins_ad5x_ifs_model.py'
@@ -65,4 +66,5 @@ jobs:
             tests.test_plugins_ad5x_ifs_manager_contract \
             tests.test_ad5x_ifs_bridge \
             tests.test_installer_backend_lifecycle \
-            tests.test_installer_ifs_bridge_lifecycle
+            tests.test_installer_ifs_bridge_lifecycle \
+            tests.test_installer_ifs_manager_model_lifecycle
