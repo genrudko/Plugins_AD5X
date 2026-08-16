@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** HEATED PREFLIGHT COMPLETE / MOTION PENDING  
+**Status:** HEATED HOMING COMPLETE / CENTER MOVE PENDING  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -92,19 +92,52 @@ The raw active `auto` matrix and saved profile map matched the prior baseline. T
 
 Interpretation:
 
-- the bed condition is now observed essentially at the selected target (`60.13 C` actual, `60.0 C` target) with low maintenance power;
+- the bed condition is observed essentially at the selected target (`60.13 C` actual, `60.0 C` target) with low maintenance power;
 - the nozzle heater remains off, but the nozzle has passively warmed from `26.54 C` to `29.23 C`; this passive warming is part of the recorded physical condition and must not be mislabeled as a strictly unchanged nozzle temperature;
 - standard Klipper effective Z offset remains `0.0 mm`;
 - printer remains standby;
 - the saved `auto` profile remains active and unchanged before runtime clear;
 - the persistent-config guard exactly matches Gate B and Gate C run 001.
 
+## Heated-condition runtime mesh clear + fresh homing
+
+Commands:
+
+```text
+BED_MESH_CLEAR
+G28
+M400
+```
+
+Both commands returned `ok`. Post-G28 live state:
+
+```text
+heater_bed.temperature     = 60.02 C
+heater_bed.target          = 60.0 C
+heater_bed.power           = 0.1654182796
+extruder.temperature       = 30.54 C
+extruder.target            = 0.0 C
+print_stats.state          = standby
+toolhead.homed_axes        = xyz
+toolhead.position          = [220.0375, 220.0, 220.0, 0.0]
+gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
+bed_mesh.profile_name      = ""
+```
+
+Saved profiles `MESH_DATA` and `auto` remained present with the same raw point matrices. Runtime mesh was cleared only; no saved profile was changed or deleted.
+
+Interpretation:
+
+- fresh ordinary homing completed under the heated-bed condition with all axes homed;
+- standard Klipper effective Z offset remained `0.0 mm`;
+- bed remained at the selected 60 C condition during homing (`60.02 C` actual, `60.0 C` target);
+- nozzle heater remained off while passive nozzle temperature rose further to `30.54 C`;
+- printer remained standby and no stop condition was observed.
+
 ## Remaining planned path
 
 ```text
-runtime mesh clear only
-→ fresh G28 while bed target remains 60 C
-→ X107.5/Y107.5/Z5
+X107.5/Y107.5/Z5
 → fresh LOAD_CELL_TARE
 → PROBE_ACCURACY SAMPLES=10
 → explicit Z5 retract
@@ -116,7 +149,7 @@ No `SAVE_CONFIG`, persistent trim mutation, saved-mesh overwrite/delete, Plugins
 
 ## Pending
 
-- fresh heated-condition homing result: PENDING
+- controlled center/non-contact positioning: PENDING
 - tare observation: PENDING
 - raw 10-sample series: PENDING
 - descriptive statistics: PENDING
