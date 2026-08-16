@@ -12,6 +12,7 @@ on:
       - "tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf"
       - "tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh"
       - "tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py"
+      - "tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py"
 
 permissions:
   contents: read
@@ -168,6 +169,23 @@ jobs:
           trap 'kill "$XVFB_PID" 2>/dev/null || true' EXIT
           sleep 1
 
+          env \
+            DISPLAY=:99 \
+            GDK_BACKEND=x11 \
+            HOME="$PWD/out/qemu-home" \
+            XDG_RUNTIME_DIR="$PWD/out/qemu-runtime" \
+            QEMU_LD_PREFIX="$TARGET" \
+            PYTHONHOME="$TARGET/usr" \
+            PYTHONPATH="$DYNL:$SITE:$TARGET/usr/lib/python3.12/site-packages:$APP" \
+            LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \
+            GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
+            XDG_DATA_DIRS="$TARGET/usr/share" \
+            FONTCONFIG_PATH="$TARGET/etc/fonts" \
+            qemu-mipsel "$TARGET/usr/bin/python3" \
+              "$PWD/tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py" \
+              | tee out/klipperscreen/qemu-ifs-panel-smoke.txt
+          grep -q 'QEMU_AD5X_IFS_PANEL_CONSTRUCT_OK 17' out/klipperscreen/qemu-ifs-panel-smoke.txt
+
           set +e
           env \
             DISPLAY=:99 \
@@ -265,6 +283,7 @@ jobs:
             out/klipperscreen/bundle-files.txt
             out/klipperscreen/final-native-files.txt
             out/klipperscreen/qemu-klipperscreen-import.txt
+            out/klipperscreen/qemu-ifs-panel-smoke.txt
             out/klipperscreen/qemu-startup-result.txt
           retention-days: 14
           if-no-files-found: error
