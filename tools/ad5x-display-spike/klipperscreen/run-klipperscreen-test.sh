@@ -16,6 +16,7 @@ export XDG_DATA_DIRS="$RUNTIME/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
 export FONTCONFIG_PATH="$RUNTIME/etc/fonts"
 export FONTCONFIG_FILE="$RUNTIME/etc/fonts/fonts.conf"
 export GDK_BACKEND=x11
+export AD5X_KLIPPERSCREEN_PNG_ONLY=1
 export HOME=/tmp/ad5x-klipperscreen-home
 export XDG_RUNTIME_DIR=/tmp/ad5x-klipperscreen-runtime
 
