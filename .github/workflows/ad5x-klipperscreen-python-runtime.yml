@@ -2,18 +2,12 @@ name: AD5X KlipperScreen Python runtime
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - ad5x-gtk-spike
-    paths:
-      - ".github/workflows/ad5x-klipperscreen-python-runtime.yml"
-      - "tools/ad5x-display-spike/klipperscreen/ad5x_ks_python_network_defconfig"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ad5x-klipperscreen-python-runtime-${{ github.event.pull_request.number || github.ref }}
+  group: ad5x-klipperscreen-python-runtime-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -89,10 +83,7 @@ jobs:
                 BR2_PACKAGE_ZLIB \
                 BR2_PACKAGE_OPENSSL \
                 BR2_PACKAGE_OPENSSL_FORCE_LIBOPENSSL; do
-                grep -qx "$symbol=y" .ci/buildroot/.config || {
-                  echo "ERROR: Buildroot dropped required symbol $symbol" >&2
-                  exit 1
-                }
+                grep -qx "$symbol=y" .ci/buildroot/.config || exit 1
               done
 
               if ! make -C .ci/buildroot -j2 >out/ks-python/build.log 2>&1; then
@@ -193,12 +184,10 @@ jobs:
           test ! -s out/ks-python/missing-needed.txt
           grep -q '^opt/ad5x-klipperscreen/' out/ks-python/bundle-files.txt
           if grep -Eq '^(usr|lib|bin)/|^opt/ad5x-x11/' out/ks-python/bundle-files.txt; then
-            echo "ERROR: Python network delta escaped /opt/ad5x-klipperscreen" >&2
             exit 1
           fi
           for forbidden in libc.so.6 ld-linux-mipsn8.so.1 libpython3.so libpython3.12.so libatomic.so.1; do
             if grep -F "/$forbidden" out/ks-python/bundle-files.txt; then
-              echo "ERROR: forbidden/Stage3-owned runtime $forbidden leaked into delta" >&2
               exit 1
             fi
           done
