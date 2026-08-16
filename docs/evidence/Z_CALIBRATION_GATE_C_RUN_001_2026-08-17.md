@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** MEASUREMENT COMPLETE / CLEANUP PENDING  
+**Status:** COMPLETE / PASS AS REPEATABILITY EVIDENCE  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -34,7 +34,7 @@ saved mesh change       = false
 cleanup confirmed       = true
 ```
 
-This Gate C run must produce an independent series with its own fresh homing/tare path. The previous series is not reused as current measurement data.
+This Gate C run produced an independent series with its own fresh homing/tare path. The previous series was not reused as current measurement data.
 
 ## Pre-motion snapshot
 
@@ -54,10 +54,10 @@ gcode_move.gcode_position  = [107.5, 107.5, 6.925833, 0.0]
 
 Interpretation:
 
-- printer remains idle/standby;
-- all axes remain homed from the previous run, but Gate C intentionally requires a fresh `G28` for independent path repeatability;
-- standard Klipper effective Z offset remains `0.0 mm` (`homing_origin[2]`);
-- the `6.925833` G-code Z with physical/toolhead Z `5.0` is the expected active-mesh transform at the center and is not a new standard Z offset.
+- printer remained idle/standby;
+- all axes were homed from the previous run, but Gate C intentionally performed a fresh `G28` for independent path repeatability;
+- standard Klipper effective Z offset remained `0.0 mm` (`homing_origin[2]`);
+- the `6.925833` G-code Z with physical/toolhead Z `5.0` was the expected active-mesh transform at the center and was not a new standard Z offset.
 
 ### Active/saved mesh state
 
@@ -67,7 +67,7 @@ mesh_min              = [0.0, 0.0]
 mesh_max              = [215.0, 215.0]
 ```
 
-The raw `auto` profile supplied by the live object query matches the Gate-A/Gate-B matrix. `MESH_DATA` and `auto` remain present in the saved profile map.
+The raw `auto` profile supplied by the live object query matched the Gate-A/Gate-B matrix. `MESH_DATA` and `auto` remained present in the saved profile map.
 
 ### Thermal state
 
@@ -78,7 +78,7 @@ extruder.temperature   = 26.55 C
 extruder.target        = 0.0 C
 ```
 
-This is a second ambient/cold observation immediately following Gate B, suitable for short-term/back-to-back repeatability evidence.
+This was a second ambient/cold observation immediately following Gate B, suitable for short-term/back-to-back repeatability evidence.
 
 ### Persistence guard
 
@@ -88,9 +88,9 @@ Pre-run `/opt/config/printer.cfg` SHA-256:
 eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
 ```
 
-This exactly matches the Gate-B pre/post hash. Post-run evidence must compare it again.
+This exactly matched the Gate-B pre/post hash.
 
-## Controlled path evidence so far
+## Controlled path evidence
 
 ### Runtime mesh clear + fresh ordinary homing
 
@@ -225,27 +225,66 @@ first→last drift         +0.010000 mm        +0.005000 mm        -0.005000 mm
 
 Descriptive interpretation only:
 
-- the independently homed/tared second ambient series remains tightly clustered and shows no large monotonic drift or old-style transient;
-- its mean is `+0.012500 mm` higher (less negative) than Gate B run 001;
-- both series remain close on the scale of the historical anomalies, but **no acceptance band or motion/search threshold is inferred from two runs**;
-- the saved `auto` center remains `-1.925833 mm`; current Gate-C mean minus that saved center is `-0.047167 mm`, retained as observation only and not applied.
+- the independently homed/tared second ambient series remained tightly clustered and showed no large monotonic drift or old-style transient;
+- its mean was `+0.012500 mm` higher (less negative) than Gate B run 001;
+- both series remained close on the scale of the historical anomalies, but **no acceptance band or motion/search threshold is inferred from two runs**;
+- the saved `auto` center remained `-1.925833 mm`; Gate-C mean minus that saved center is `-0.047167 mm`, retained as observation only and not applied.
 
-## Remaining controlled path
+## Cleanup / persistence verification
+
+Cleanup command path:
 
 ```text
-explicit Z5 retract
-→ restore saved auto mesh at runtime
-→ post-state/hash verification
+G90
+G1 Z5 F300
+M400
+BED_MESH_PROFILE LOAD=auto
+M400
 ```
 
-No `SAVE_CONFIG`, persistent user-trim mutation, saved-mesh overwrite/delete, Plugins AD5X Z-offset write, or production Plugins AD5X motion adapter is permitted.
+Post-cleanup live state:
 
-## Pending
+```text
+print_stats.state          = standby
+toolhead.homed_axes        = xyz
+toolhead.position          = [107.5, 107.5, 5.0, 0.0]
+gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
+gcode_move.position        = [107.5, 107.5, 6.925833, 0.0]
+gcode_move.gcode_position  = [107.5, 107.5, 6.925833, 0.0]
+bed_mesh.profile_name      = auto
+```
 
-- cleanup/retract confirmation: PENDING
-- post-run effective offset: PENDING
-- saved mesh unchanged proof: PENDING
-- post-run `printer.cfg` hash: PENDING
-- stop condition observed: PENDING
+Interpretation:
 
-Until cleanup/persistence verification is complete, this run is not yet policy-reviewable and authorizes nothing.
+- explicit retract returned physical/toolhead Z to `5.0 mm`;
+- saved `auto` was restored as the active runtime profile;
+- `homing_origin.z` remained exactly `0.0 mm`;
+- the post-load G-code Z `6.925833` again differs from physical Z by the saved center mesh transform and is not a persistent/user offset;
+- raw `auto` matrix and saved profile map remained unchanged in the live query.
+
+Post-run `/opt/config/printer.cfg` SHA-256:
+
+```text
+eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
+```
+
+It exactly matches the pre-run, Gate-B pre-run and Gate-B post-run hashes.
+
+## Run disposition
+
+```text
+reference series present      = true
+cleanup/retract confirmed     = true
+standard Z offset unchanged   = true
+persistent state changed      = false
+saved mesh changed            = false
+stop condition observed       = false
+```
+
+Therefore `gate-c-001-ambient-back-to-back-2026-08-17` is **structurally complete and suitable for later policy review as repeatability evidence**.
+
+It does **not** by itself authorize a motion policy, search envelope, correction limit, production adapter or gate opening.
+
+## Next evidence condition
+
+Do not spend additional runs on identical immediate ambient repetition unless a later observation creates a reason to do so. The next useful Gate-C condition should be a distinct recorded condition such as the owner's representative PLA bed temperature, followed later by representative higher-bed temperature, reboot/power-cycle and time-separated evidence.
