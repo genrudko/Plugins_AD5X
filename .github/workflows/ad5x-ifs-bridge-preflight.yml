@@ -3,9 +3,13 @@ name: AD5X IFS bridge preflight
 on:
   pull_request:
     paths:
+      - 'ad5x_custom.cfg'
+      - 'install.sh'
       - 'klipper/extras/ad5x_ifs.py'
       - 'moonraker/components/plugins_ad5x.py'
       - 'tests/test_ad5x_ifs_bridge.py'
+      - 'tests/test_installer_backend_lifecycle.py'
+      - 'tests/test_installer_ifs_bridge_lifecycle.py'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_plugins_ad5x_ifs_backend.py'
       - '.github/workflows/ad5x-ifs-bridge-preflight.yml'
@@ -28,9 +32,13 @@ jobs:
           python -m py_compile \
             klipper/extras/ad5x_ifs.py \
             moonraker/components/plugins_ad5x.py
+      - name: Validate installer shell syntax
+        run: sh -n install.sh
       - name: Run Plugins AD5X backend and IFS bridge tests
         run: |
           python -m unittest -v \
             tests.test_plugins_ad5x_component \
+            tests.test_plugins_ad5x_ifs_backend \
             tests.test_ad5x_ifs_bridge \
-            tests.test_plugins_ad5x_ifs_backend
+            tests.test_installer_backend_lifecycle \
+            tests.test_installer_ifs_bridge_lifecycle
