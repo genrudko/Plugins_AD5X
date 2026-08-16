@@ -296,6 +296,28 @@ Therefore `gate-c-002-pla-bed-60c-2026-08-17` is structurally complete and suita
 
 It does **not** authorize a motion policy, search envelope, correction limit, thermal compensation, tare threshold, production adapter or gate opening.
 
+## Post-run heater shutdown
+
+After the run had already been completed and cleanup/persistence verification had passed, the bed heater target was explicitly cleared:
+
+```text
+M140 S0
+```
+
+The command returned `ok`. Immediate heater state:
+
+```text
+heater_bed.temperature = 60.10 C
+heater_bed.target      = 0.0 C
+heater_bed.power       = 0.0039349720
+extruder.temperature   = 34.21 C
+extruder.target        = 0.0 C
+extruder.power         = 0.0
+print_stats.state      = standby
+```
+
+This confirms the commanded bed target was cleared to `0.0 C` and the printer entered passive cooldown. The tiny non-zero instantaneous bed `power` field is retained exactly as observed rather than rewritten as a hard zero. No additional calibration motion was performed after heater shutdown.
+
 ## Dataset note / next conditions
 
 The dataset now contains:
