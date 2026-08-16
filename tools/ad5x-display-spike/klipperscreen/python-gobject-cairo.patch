@@ -1,0 +1,16 @@
+--- a/package/python-gobject/python-gobject.mk
++++ b/package/python-gobject/python-gobject.mk
+@@ -14,11 +14,12 @@ PYTHON_GOBJECT_DEPENDENCIES = \
+ 	gobject-introspection \
+ 	host-pkgconf \
+ 	libglib2 \
+-	python3
++	python3 \
++	python-pycairo
+ 
+ PYTHON_GOBJECT_CONF_OPTS += \
+-	-Dpycairo=disabled \
++	-Dpycairo=enabled \
+ 	-Dtests=false
+ 
+ # A sysconfigdata_name must be manually specified or the resulting .so
