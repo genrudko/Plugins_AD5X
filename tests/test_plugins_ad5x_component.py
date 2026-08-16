@@ -104,20 +104,33 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertIsInstance(self.component, component_module.PluginsAD5X)
 
     def test_endpoint_registration_contract(self) -> None:
-        self.assertEqual(len(self.server.endpoints), 1)
-        endpoint = self.server.endpoints[0]
-        self.assertEqual(endpoint["endpoint"], "/server/plugins_ad5x/snapshot")
-        self.assertEqual(endpoint["request_types"], RequestType.GET)
+        endpoints = {entry["endpoint"]: entry for entry in self.server.endpoints}
         self.assertEqual(
-            endpoint["transports"],
-            TransportType.HTTP | TransportType.WEBSOCKET,
+            set(endpoints),
+            {
+                component_module.SNAPSHOT_ENDPOINT,
+                component_module.IFS_ACTION_ENDPOINT,
+            },
         )
-        self.assertNotIn(TransportType.MQTT, endpoint["transports"])
-        self.assertNotIn(TransportType.INTERNAL, endpoint["transports"])
-        self.assertTrue(endpoint["auth_required"])
 
-        rpc_method = endpoint["endpoint"].strip("/").replace("/", ".")
-        self.assertEqual(rpc_method, "server.plugins_ad5x.snapshot")
+        snapshot = endpoints[component_module.SNAPSHOT_ENDPOINT]
+        self.assertEqual(snapshot["request_types"], RequestType.GET)
+        action = endpoints[component_module.IFS_ACTION_ENDPOINT]
+        self.assertEqual(action["request_types"], RequestType.POST)
+
+        for endpoint in (snapshot, action):
+            self.assertEqual(
+                endpoint["transports"],
+                TransportType.HTTP | TransportType.WEBSOCKET,
+            )
+            self.assertNotIn(TransportType.MQTT, endpoint["transports"])
+            self.assertNotIn(TransportType.INTERNAL, endpoint["transports"])
+            self.assertTrue(endpoint["auth_required"])
+
+        snapshot_rpc = snapshot["endpoint"].strip("/").replace("/", ".")
+        action_rpc = action["endpoint"].strip("/").replace("/", ".")
+        self.assertEqual(snapshot_rpc, "server.plugins_ad5x.snapshot")
+        self.assertEqual(action_rpc, "server.plugins_ad5x.ifs.action")
 
     def test_notification_registration_contract(self) -> None:
         self.assertEqual(
@@ -138,7 +151,7 @@ class PluginsAD5XComponentTests(unittest.TestCase):
             snapshot,
             {
                 "api_version": "1.0",
-                "backend_version": "0.1.2",
+                "backend_version": component_module.BACKEND_VERSION,
                 "revision": 1,
                 "backend": {"health": "ok"},
                 "modules": {},
@@ -170,9 +183,9 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertEqual(fresh_component.get_snapshot()["revision"], 1)
 
     def test_basic_snapshot_has_no_hardware_dependencies(self) -> None:
-        # FakeConfig/FakeServer intentionally expose only the four Moonraker
-        # interfaces required by the foundation component.  Successful load and
-        # snapshot prove there is no Klipper/hardware/USB/GPIO/macro dependency.
+        # FakeConfig/FakeServer intentionally expose only the Moonraker interfaces
+        # required by the foundation component. Successful load and snapshot prove
+        # there is no direct Klipper/hardware/USB/GPIO/macro dependency at import.
         snapshot = self.component.get_snapshot()
         self.assertEqual(snapshot["backend"]["health"], "ok")
         self.assertEqual(snapshot["modules"], {})
