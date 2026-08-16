@@ -207,7 +207,7 @@ Side/AUX/PLA Fan.
 ## D-011 — Calibration Center хранит валидность калибровки
 
 **Дата:** 2026-08-12  
-**Статус:** accepted
+**Статус:** superseded by D-024, D-025, D-026
 
 ### Решение
 
@@ -220,6 +220,10 @@ Side/AUX/PLA Fan.
 ### Следствие
 
 После смены релевантного hardware calibration state может становиться `stale`, а UI должен предлагать мастер повторной проверки.
+
+### Уточнение 2026-08-16
+
+Сама идея хранить валидность/контекст сохраняется, но профильная модель `hotend/nozzle → persistent Z profile` больше не является целевым контрактом. Новая модель зафиксирована D-024–D-028 и issue #13.
 
 ---
 
@@ -598,3 +602,147 @@ Controlled acceptance на физическом AD5X доказал managed-copy
 - backend runtime/config входят в существующий snapshot/rollback contour;
 - `--status` различает source/runtime/config/component/snapshot и service-unavailable state;
 - production installer не скрывает managed runtime artifact из Moonraker Git status.
+
+---
+
+## D-024 — Z Calibration v2 сохраняет стандартный Klipper effective Z-offset
+
+**Дата:** 2026-08-16  
+**Статус:** accepted  
+**Supersedes:** product-level correction model of CALIBRATION-CENTER-001 / PR #6; уточняет D-011
+
+### Решение
+
+Внешне для пользователя и стандартных Klipper-инструментов существует обычный действующий `gcode_offset`. Plugins AD5X не создаёт параллельную скрытую систему координат.
+
+Внутренне backend хранит provenance составляющих:
+
+```text
+Auto-Z alignment
++ persistent user Z trim
++ slicer/job Z offset
++ live babystepping
+────────────────────────
+= effective Klipper gcode_offset
+```
+
+### Следствие
+
+- Auto-Z не перезаписывает молча persistent user trim;
+- slicer/job correction имеет scope задания;
+- live adjustment остаётся привычным Klipper-поведением;
+- UI показывает итоговый Z-offset и при раскрытии — его составляющие;
+- external/legacy `SET_GCODE_OFFSET` не запрещается глобально, но неизвестное происхождение должно быть диагностируемо;
+- скрытый `temp_z_offset`/G92-подобный продуктовый контракт не переносится из старого PR #6.
+
+---
+
+## D-025 — Нормальные Z-профили по хотэндам/соплам не нужны
+
+**Дата:** 2026-08-16  
+**Статус:** accepted  
+**Supersedes:** profile requirement of D-011 / issue #5 / PR #6
+
+### Решение
+
+После замены хотэнда/сопла система заново измеряет фактический nozzle↔bed reference. Пользователь не обязан выбирать отдельный persistent Z-profile для каждой инструментальной сборки.
+
+Большой подтверждённый reference delta является признаком изменения геометрии/железа и переводит систему в `hardware_change_suspected` / full calibration path. Он не является разрешением на молчаливое применение огромного Auto-Z.
+
+### Следствие
+
+Hardware Manager может хранить идентичность/возможности хотэнда для конфигурации, но эта идентичность не владеет скрытым Z-offset profile. Слайсерные nozzle/material/flow/temperature profiles остаются отдельной сущностью.
+
+---
+
+## D-026 — Bed mesh имеет три режима, first-layer test опционален
+
+**Дата:** 2026-08-16  
+**Статус:** accepted
+
+### Решение
+
+Перед печатью доступны три понятных режима:
+
+1. `saved` — сохранённая карта;
+2. `saved+check` — проверка текущего Z reference + сохранённая карта, рекомендуемый normal mode;
+3. `runtime` — свежая runtime map перед конкретной печатью.
+
+Runtime map не перезаписывает saved/default mesh без отдельного явного действия.
+
+First-layer verifier запускается по желанию/рекомендации пользователя, а не перед каждой печатью.
+
+### Почему
+
+Контактные измерения и bed mesh устанавливают геометрию. Первый слой проверяет уже полный технологический процесс: extrusion, plate condition, material, temperature, flow и желаемый squish.
+
+### Следствие
+
+Допустимо состояние:
+
+```text
+Geometry calibration: PASS
+First-layer verification: NOT RUN
+```
+
+при котором обычная печать не блокируется, если safety/metrology gates валидны. First-layer test не является plate-protection interlock.
+
+---
+
+## D-027 — Z calibration fail-closed и не доверяет одному аномальному измерению
+
+**Дата:** 2026-08-16  
+**Статус:** accepted  
+**Уточняет:** D-014, D-016
+
+### Решение
+
+Safety state machine обязана иметь bounded Z search envelope, conservative initial-acquisition path, safe/slow final approach, repeated reference validation, spread/drift/plausibility checks и fail-closed abort/retract.
+
+Один неожиданный sample или большой delta не может напрямую превратиться в Z correction.
+
+Failure/cancel не изменяет persistent user trim и не перезаписывает saved mesh.
+
+### H7/load-cell
+
+Текущий H7 имеет доказанный timing/relaxation behaviour; `WeightValue` теряет знак через `abs()`. Поэтому H7 пока secondary plausibility/safety signal, а не единственный hard real-time force watchdog.
+
+Продвижение H7 в независимую силовую защиту требует отдельного доказательства latency/stop-distance и безопасного порога на реальном железе.
+
+### Следствие
+
+Ни один safety threshold не фиксируется «по ощущениям»: source/runtime evidence → repeated hardware dataset → margin → acceptance.
+
+---
+
+## D-028 — Z Calibration является backend-owned subsystem с диагностическим журналом
+
+**Дата:** 2026-08-16  
+**Статус:** accepted  
+**Уточняет:** D-006, D-013, D-020, D-022
+
+### Решение
+
+Z Calibration business logic, safety decisions, offset provenance, mesh policy и structured diagnostics принадлежат общему Plugins AD5X backend/core.
+
+Целевые frontend-потребители:
+
+- Fluidd — первый полноценный UI;
+- Mainsail;
+- HelixScreen;
+- Guppy;
+- KlipperScreen после отдельной успешной AD5X runtime/platform acceptance.
+
+Frontend не считает Auto-Z самостоятельно.
+
+Подсистема ведёт lightweight bounded event log без heavy DB/high-rate idle polling. Журнал должен позволять восстановить, что было измерено, что применено, почему решение принято/отклонено и какая защита сработала.
+
+### Следствие
+
+Canonical design/evidence/test sources:
+
+- issue #13;
+- `docs/Z_CALIBRATION_SUBSYSTEM_V2.md`;
+- `docs/Z_CALIBRATION_REVERSE_ENGINEERING_2026-08-16.md`;
+- `docs/Z_CALIBRATION_TEST_PLAN_V2.md`;
+- `docs/HANDOFF_Z_CALIBRATION_SUBSYSTEM_V2.md`.
