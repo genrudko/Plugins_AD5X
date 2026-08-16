@@ -274,6 +274,10 @@ class Panel(ScreenPanel):
         else:
             background = "rgba(255,255,255,0.025)"
 
+        context = widgets["card"].get_style_context()
+        old_provider = getattr(widgets["card"], "_ad5x_card_css_provider", None)
+        if old_provider is not None:
+            context.remove_provider(old_provider)
         provider = Gtk.CssProvider()
         provider.load_from_data(
             (
@@ -281,7 +285,7 @@ class Panel(ScreenPanel):
                 "background-color: %s; }" % (border, background)
             ).encode("utf-8")
         )
-        widgets["card"].get_style_context().add_provider(
+        context.add_provider(
             provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
         widgets["card"]._ad5x_card_css_provider = provider
@@ -509,12 +513,7 @@ class Panel(ScreenPanel):
     def _render_slot(self, slot, data, active):
         widgets = self._slot_widgets[slot]
         widgets["data"] = data if isinstance(data, dict) else {}
-        if slot == active:
-            widgets["title"].set_markup(
-                f"<big><b>Слот {slot}</b></big>  <small>АКТИВНЫЙ</small>"
-            )
-        else:
-            widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
+        widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
 
         present = bool(data.get("present", False))
         stall = bool(data.get("stall", False))
@@ -548,12 +547,7 @@ class Panel(ScreenPanel):
         if isinstance(self._last_module, dict):
             active = int(self._last_module.get("active_slot") or 0)
         for slot, widgets in self._slot_widgets.items():
-            if slot == active:
-                widgets["title"].set_markup(
-                    f"<big><b>Слот {slot}</b></big>  <small>АКТИВНЫЙ</small>"
-                )
-            else:
-                widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
+            widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
             self._apply_card_style(slot)
 
         self._render_path()
