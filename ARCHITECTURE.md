@@ -24,20 +24,20 @@ Plugins AD5X — **UX/integration layer для Flashforge AD5X поверх Z-Mo
 ## 2. Слои системы
 
 ```text
-┌──────────────────────────────────────────────┐
-│ Пользователь                                 │
-├──────────────────────────────────────────────┤
-│ Frontend                                     │
-│ Fluidd fork / позже Mainsail / local screen  │
-├──────────────────────────────────────────────┤
-│ Plugins AD5X                                 │
-│ capabilities / state / orchestration / API   │
-├──────────────────────────────────────────────┤
-│ Moonraker / Klipper / Z-Mod                  │
-│ штатные API, macros, config, update manager  │
-├──────────────────────────────────────────────┤
-│ Flashforge AD5X + опциональное железо        │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ Пользователь                                             │
+├──────────────────────────────────────────────────────────┤
+│ Frontend                                                 │
+│ Fluidd / Mainsail / HelixScreen / Guppy / KlipperScreen │
+├──────────────────────────────────────────────────────────┤
+│ Plugins AD5X                                             │
+│ capabilities / state / orchestration / API               │
+├──────────────────────────────────────────────────────────┤
+│ Moonraker / Klipper / Z-Mod                              │
+│ штатные API, macros, config, update manager              │
+├──────────────────────────────────────────────────────────┤
+│ Flashforge AD5X + опциональное железо                    │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ### 2.1. Z-Mod — фундамент
@@ -62,7 +62,7 @@ Z-Mod остаётся внешним upstream-проектом и источн�
 
 ### 2.3. Frontend — представление, а не второй backend
 
-Fluidd, Mainsail и локальный экран не должны содержать независимые копии бизнес-логики.
+Fluidd, Mainsail и локальные экраны не должны содержать независимые копии бизнес-логики.
 
 Frontend должен:
 
@@ -71,6 +71,8 @@ Frontend должен:
 - запускать понятные пользовательские действия;
 - показывать Advanced-информацию;
 - корректно переживать отсутствие необязательного backend-модуля.
+
+Для safety-critical функций вроде Z Calibration frontend не имеет права самостоятельно вычислять Auto-Z, safety envelope или acceptance decision: эти решения принадлежат общему backend/core.
 
 ---
 
@@ -146,7 +148,7 @@ Manifest должен уметь описать минимум:
 - install/uninstall hooks;
 - experimental/stable status.
 
-Формат manifest пока **не зафиксирован**. Его следует выбрать в Phase 0 после анализа текущего `ad5x_custom` и требований frontend.
+Формат manifest пока **не зафиксирован**. Его следует выбрать после анализа требований реальных модулей, а не заранее ради абстрактной схемы.
 
 ### 4.2. Capability-first UI
 
@@ -201,6 +203,8 @@ frontend отображает только доступные действия
 - текущие detected capabilities;
 - ручной override там, где он безопасен.
 
+Для Z Calibration внешний стандартный Klipper `gcode_offset`, `GET_POSITION`, обычные Z-adjust/babystepping и консоль остаются наблюдаемыми и совместимыми; Plugins AD5X не подменяет их отдельной скрытой системой координат.
+
 ---
 
 ## 6. Backend policy и бюджет ресурсов
@@ -210,7 +214,7 @@ frontend отображает только доступные действия
 | Класс | Механизм | Политика |
 |---|---|---|
 | A | UI + Moonraker API + существующие macros | предпочтительно |
-| B | лёгкий event-driven daemon | только при необходимости |
+| B | лёгкий event-driven daemon/component logic | только при необходимости |
 | C | тяжёлый постоянный service | на AD5X не ставим |
 
 Правила:
@@ -221,7 +225,8 @@ frontend отображает только доступные действия
 - не делать постоянную обработку изображений;
 - не перекодировать видео на принтере;
 - не размещать на AD5X тяжёлую аналитику/AI;
-- функция UI не должна создавать постоянную нагрузку только ради красивого dashboard.
+- функция UI не должна создавать постоянную нагрузку только ради красивого dashboard;
+- safety-critical module может вести bounded structured event log, но не high-rate telemetry без отдельного доказанного требования.
 
 ---
 
@@ -229,7 +234,7 @@ frontend отображает только доступные действия
 
 ### 7.1. Fluidd — первый frontend
 
-Phase 0 начинается с изучения `genrudko/fluidd:ad5x-dev` и поиска минимальных точек интеграции:
+Принятые integration seams:
 
 ```text
 navigation
@@ -239,7 +244,7 @@ navigation
 → module capability
 ```
 
-**До этого анализа не следует размазывать AD5X-код по существующим компонентам Fluidd.**
+Основной AD5X-код локализуется в `src/ad5x/**`; штатный Fluidd patch surface сохраняется минимальным по D-018–D-021.
 
 Желаемый результат — отдельная локализованная область проекта плюс минимальное количество изменений в upstream-файлах навигации/роутинга.
 
@@ -247,15 +252,19 @@ navigation
 
 Добавляется после стабилизации общего backend API. Не является отдельной реализацией Plugins AD5X.
 
-### 7.3. HelixScreen / локальный экран
+### 7.3. HelixScreen / Guppy / KlipperScreen
 
-Поздний этап. Должен использовать те же capabilities/API.
+Локальные экраны используют те же capabilities/state/actions.
+
+- HelixScreen и Guppy получают адаптеры после стабилизации конкретного module API;
+- KlipperScreen получает адаптер только после отдельной успешной AD5X runtime/platform acceptance;
+- pixel-perfect parity не требуется, semantic/safety parity обязателен.
 
 ---
 
 ## 8. Hardware Manager как первый потребитель архитектуры
 
-Hardware / Mods Manager — первый крупный модуль после Platform Foundation.
+Hardware / Mods Manager — крупный модуль после Platform Foundation.
 
 Ключевой сценарий:
 
@@ -297,23 +306,88 @@ IFS Manager должен оперировать **конкретной кату�
 
 ---
 
-## 10. Calibration policy
+## 10. Z Calibration Subsystem policy
 
-Calibration Center должен превращать низкоуровневые команды в проверяемые сценарии.
+D-024–D-028 и `docs/Z_CALIBRATION_SUBSYSTEM_V2.md` являются текущим контрактом и supersede старую profile-based Calibration Center модель.
 
-Пример после замены сопла:
+### 10.1. Цель
+
+Обычный пользователь после замены сопла/хотэнда/пластины должен иметь возможность запустить безопасную калибровку или обычную печать с автоматической проверкой и получить корректный первый слой без знания внутренних `MESH_TEST`/macro layers.
+
+### 10.2. Стандартная Klipper-модель наружу
+
+Внутренний provenance:
 
 ```text
-hotend/nozzle changed
-→ calibration state becomes stale
-→ Z-offset wizard
-→ first-layer test
-→ correction
-→ explicit save
-→ history/status
+Auto-Z alignment
++ persistent user Z trim
++ slicer/job Z offset
++ live babystepping
+────────────────────────
+= effective Klipper gcode_offset
 ```
 
-Пользователь должен видеть не только число offset, но и **контекст его валидности**: когда измерен, для какого хотэнда/сопла и прошёл ли проверку первым слоем.
+Итоговое runtime-значение остаётся нормальным Klipper `gcode_offset` и наблюдаемо обычными инструментами.
+
+Automation не перезаписывает persistent user trim без явного действия пользователя. Job offset имеет scope задания. Live adjustment можно явно сохранить в persistent user trim либо оставить transient.
+
+### 10.3. Нет обязательных Z-профилей под каждый хотэнд
+
+Смена длины инструмента компенсируется новой измеренной nozzle↔bed reference.
+
+Большой подтверждённый reference delta означает `hardware_change_suspected` / full calibration, а не разрешение на огромный скрытый offset.
+
+### 10.4. Bed mesh modes
+
+```text
+saved
+saved+check   ← recommended
+runtime
+```
+
+Runtime map не перезаписывает saved/default mesh автоматически. Сохранение текущей карты как основной — отдельное явное действие.
+
+### 10.5. First-layer verifier
+
+First-layer test является optional process/quality verification, а не обязательным шагом каждой печати и не safety interlock.
+
+Допустимое состояние:
+
+```text
+Geometry calibration: PASS
+First-layer verification: NOT RUN
+```
+
+если metrology/safety gates валидны.
+
+Тест рекомендуется при первом включении, крупной смене hardware/plate, подтверждённом большом reference change, настройке persistent user trim или явном запросе пользователя.
+
+### 10.6. Safety
+
+Z Calibration обязана работать fail-closed:
+
+- bounded search envelope;
+- conservative initial-acquisition path;
+- fast approach только до доказанно безопасной зоны;
+- slow bounded final contact search;
+- repeated sample validation;
+- spread/drift/plausibility gates;
+- early trigger / no trigger / communication fault → abort;
+- large delta → revalidation/full calibration, не blind correction;
+- failure/cancel не меняет persistent user trim и saved mesh;
+- retract on abort, когда это безопасно;
+- H7 является secondary signal, пока latency/stop-distance не доказаны;
+- safety thresholds принимаются только после source + hardware evidence + margin.
+
+### 10.7. Diagnostics
+
+Backend ведёт lightweight bounded structured event log, достаточный для восстановления измерений, offset provenance, mesh decision, safety reason и результата. High-rate idle polling/telemetry не вводится.
+
+### 10.8. Реализация
+
+Один common backend/core обслуживает Fluidd, Mainsail, HelixScreen, Guppy и KlipperScreen. Frontend не считает Auto-Z.
+
+Подробный test/release contract: `docs/Z_CALIBRATION_TEST_PLAN_V2.md`.
 
 ---
 
@@ -322,6 +396,8 @@ hotend/nozzle changed
 Preflight — guard, а не собственный print engine.
 
 Он проверяет состояние системы и после успешной проверки передаёт старт штатному механизму Z-Mod/Klipper.
+
+Для Z Calibration Preflight использует backend-owned readiness/state и выбранную mesh policy; он не повторяет Auto-Z математику самостоятельно.
 
 Не допускается создание параллельного механизма печати, который дублирует Z-Mod.
 
@@ -341,7 +417,8 @@ Preflight — guard, а не собственный print engine.
 - понятный disable/uninstall;
 - rollback;
 - отсутствие обязательной зависимости от frontend для базовой печати;
-- отсутствие скрытых автоматических рестартов во время печати.
+- отсутствие скрытых автоматических рестартов во время печати;
+- safety-critical runtime state must fail closed rather than guess after backend/frontend disconnect.
 
 ---
 
@@ -353,13 +430,14 @@ Plugins AD5X и frontend должны обновляться отдельно о
 
 - Z-Mod продолжает получать свои upstream-обновления;
 - наш integration layer имеет собственную версию;
-- frontend fork имеет собственный канал разработки;
+- frontend forks/adapters имеют собственные каналы разработки;
 - upstream sync не должен автоматически попадать на принтер без build/test;
-- желательно иметь compatibility matrix вида `Plugins AD5X version ↔ minimum Z-Mod version ↔ Fluidd base`.
+- желательно иметь compatibility matrix вида `Plugins AD5X version ↔ minimum Z-Mod version ↔ frontend base`;
+- safety-critical Z Calibration compatibility must be revalidated against material Z-Mod/Klipper probe/mesh changes before public release.
 
-### Непроверенный пока вопрос
+### Backend deployment
 
-Точный безопасный способ переопределения `[update_manager fluidd] repo` через пользовательский Moonraker config **ещё необходимо подтвердить по актуальной документации/поведению Moonraker**. До проверки это не считать зафиксированным механизмом установки.
+D-023 managed-copy + observed-stop lifecycle является принятым production primitive для Plugins AD5X Moonraker component.
 
 ---
 
@@ -371,20 +449,21 @@ Plugins AD5X и frontend должны обновляться отдельно о
 problem/use case
 → issue с границами задачи
 → архитектурное решение
-→ реализация в dev
+→ pure/fake tests where safety/state applies
+→ реализация в feature branch
 → build/static checks
 → code review
-→ установка на тестовый принтер
-→ реальная проверка сценария
-→ исправления
-→ кандидат в main
+→ controlled install on test printer
+→ real scenario acceptance
+→ fixes
+→ candidate into dev/main according to maturity
 ```
 
 AI/Codex допускается как инструмент разработки, но действует правило:
 
 > **AI drafts → source/code verification → test on printer → only then ship.**
 
-Ни один сгенерированный конфиг, GPIO mapping или опасная hardware-команда не считается истинной только потому, что она выглядит убедительно.
+Ни один сгенерированный конфиг, GPIO mapping, probing threshold или опасная hardware-команда не считается истинной только потому, что выглядит убедительно.
 
 ---
 
@@ -398,4 +477,7 @@ AI/Codex допускается как инструмент разработки
 - обновление Z-Mod не требует заново вручную патчить его файлы;
 - отсутствие модуля не ломает UI;
 - продвинутый пользователь не теряет доступ к низкоуровневой настройке;
-- обычный пользователь не обязан эту низкоуровневую настройку понимать.
+- обычный пользователь не обязан эту низкоуровневую настройку понимать;
+- safety-critical решение можно объяснить по state + structured diagnostics;
+- Z Calibration не может молча превратить один аномальный sample в большой опасный offset;
+- один и тот же Z Calibration backend ведёт себя одинаково независимо от выбранного frontend.
