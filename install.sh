@@ -37,12 +37,14 @@ fi
 
 fail(){ echo "ОШИБКА: $*" >&2; exit 1; }
 find_root(){
+    # AD5X has a stable Z-Mod chroot. Prefer it over /proc/<pid>/root:
+    # the latter disappears when the installer intentionally stops Moonraker.
+    [ -d /usr/data/.mod/.zmod ] && { echo /usr/data/.mod/.zmod; return 0; }
     for P in /proc/[0-9]*; do
         [ -r "$P/cmdline" ] || continue
         CMD="$(tr '\0' ' ' <"$P/cmdline" 2>/dev/null || true)"
         case "$CMD" in *moonraker.py*) [ -d "$P/root" ] && { echo "$P/root"; return 0; };; esac
     done
-    [ -d /usr/data/.mod/.zmod ] && { echo /usr/data/.mod/.zmod; return 0; }
     return 1
 }
 remove_lines(){ F="$1"; P="$2"; [ -f "$F" ] || : >"$F"; grep -Ev "$P" "$F" >"$F.tmp" 2>/dev/null || true; mv "$F.tmp" "$F"; }

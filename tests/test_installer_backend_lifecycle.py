@@ -59,6 +59,16 @@ class BackendInstallerLifecycleTests(unittest.TestCase):
     def print_stats_payload(state: str) -> str:
         return '{"result":{"status":{"print_stats":{"state":"' + state + '"}}}}'
 
+    def test_stable_zmod_root_precedes_process_root_fallback(self) -> None:
+        text = INSTALLER.read_text(encoding="utf-8")
+        start = text.index("find_root(){")
+        end = text.index("remove_lines(){", start)
+        body = text[start:end]
+        self.assertLess(
+            body.index("[ -d /usr/data/.mod/.zmod ]"),
+            body.index("for P in /proc/[0-9]*"),
+        )
+
     def test_idle_http_unavailable_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             result = self.run_idle_check(Path(td), wget_rc=7)
