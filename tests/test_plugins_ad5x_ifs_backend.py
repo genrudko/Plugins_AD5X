@@ -147,14 +147,25 @@ def live_initial(print_state="standby", head=True):
 
 
 def assert_ready_core(testcase, module):
+    # Manager v1 is additive: preserve every legacy field/value while allowing
+    # normalized spool/appearance/permission fields to coexist inside slots.
     for key, value in READY.items():
-        testcase.assertEqual(module[key], value)
+        if key != "slots":
+            testcase.assertEqual(module[key], value)
+            continue
+        testcase.assertEqual(len(module["slots"]), len(value))
+        for expected, actual in zip(value, module["slots"]):
+            for field, expected_value in expected.items():
+                testcase.assertEqual(actual[field], expected_value)
+
     testcase.assertEqual(module["print_state"], "standby")
     testcase.assertTrue(module["filament_at_toolhead"])
     testcase.assertEqual(module["operation"]["state"], "idle")
     testcase.assertTrue(module["operations"]["select_slot"])
     testcase.assertTrue(module["operations"]["load_slot"])
     testcase.assertTrue(module["operations"]["unload_slot"])
+    testcase.assertEqual(module["capabilities"]["schema_version"], "1.0")
+    testcase.assertEqual(module["capabilities"]["slot_count"], 4)
 
 
 class PluginsAD5XIFSBackendTests(unittest.TestCase):
@@ -186,6 +197,7 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         module = component.get_snapshot()["modules"]["ifs"]
         self.assertFalse(module["available"])
         self.assertEqual(module["reason"], "bridge_not_loaded")
+        self.assertEqual(module["capabilities"]["schema_version"], "1.0")
         self.assertEqual(component.get_snapshot()["revision"], 2)
 
     def test_initial_bridge_status_enters_snapshot_with_aux_state(self):
@@ -229,6 +241,9 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         module = component.get_snapshot()["modules"]["ifs"]
         self.assertEqual(module["print_state"], "paused")
         self.assertFalse(module["filament_at_toolhead"])
+        self.assertEqual(module["write_blocked_reason"], "unsafe_print_state")
+        for slot in module["slots"]:
+            self.assertEqual(slot["permissions"]["blocked_reason"], "unsafe_print_state")
 
     def test_disconnect_marks_module_unavailable(self):
         component, server, _api = self.make_live_component()
@@ -238,6 +253,7 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         module = component.get_snapshot()["modules"]["ifs"]
         self.assertFalse(module["available"])
         self.assertEqual(module["reason"], "klippy_disconnected")
+        self.assertEqual(module["write_blocked_reason"], "ifs_not_ready")
         self.assertEqual(component.get_snapshot()["revision"], revision + 1)
 
     def test_select_load_and_active_unload_translate_to_zmod_commands(self):
@@ -340,9 +356,13 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
                 self.assertEqual(module["active_slot"], 3)
                 self.assertEqual(module["tool_mapping"], [1, 1, 1, 4])
                 self.assertEqual(module["slots"][0]["material"], "PETG")
+                self.assertEqual(module["slots"][0]["spool"]["material"], "PETG")
+                self.assertEqual(module["slots"][0]["spool"]["source"], "flashforge")
                 self.assertEqual(module["slots"][2]["color"], "#F330F9")
+                self.assertEqual(module["slots"][2]["appearance"]["colors"], ["#F330F9"])
                 self.assertFalse(module["slots"][3]["present"])
                 self.assertEqual(module["slots"][3]["material"], "TPU")
+                self.assertEqual(module["slots"][3]["metadata_status"], "stale")
         finally:
             component_module.FFCONFIG_PATH = old_ffconfig
             component_module.FILE_MAPPING_PATH = old_mapping
@@ -380,7 +400,9 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
                 ffconfig.write_text(json.dumps(data), encoding="utf-8")
 
                 snapshot = asyncio.run(component._handle_snapshot(None))
-                self.assertEqual(snapshot["modules"]["ifs"]["slots"][0]["material"], "ABS")
+                slot = snapshot["modules"]["ifs"]["slots"][0]
+                self.assertEqual(slot["material"], "ABS")
+                self.assertEqual(slot["spool"]["material"], "ABS")
                 self.assertEqual(snapshot["revision"], revision + 1)
         finally:
             component_module.FFCONFIG_PATH = old_ffconfig
