@@ -1,6 +1,6 @@
 --- a/package/python-pycairo/python-pycairo.mk
 +++ b/package/python-pycairo/python-pycairo.mk
-@@ -4,9 +4,9 @@
+@@ -4,13 +4,14 @@
  #
  ################################################################################
  
@@ -12,6 +12,10 @@
  PYTHON_PYCAIRO_DEPENDENCIES = cairo
  PYTHON_PYCAIRO_LICENSE = LGPL-2.1 or MPL-1.1
  PYTHON_PYCAIRO_LICENSE_FILES = COPYING COPYING-LGPL-2.1 COPYING-MPL-1.1
++PYTHON_PYCAIRO_INSTALL_STAGING = YES
+ 
+ PYTHON_PYCAIRO_CONF_OPTS = \
+ 	-Dpython=$(HOST_DIR)/bin/python \
 --- a/package/python-pycairo/python-pycairo.hash
 +++ b/package/python-pycairo/python-pycairo.hash
 @@ -1,6 +1,6 @@
