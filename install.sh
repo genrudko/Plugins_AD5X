@@ -131,7 +131,15 @@ python_bin(){
     elif command -v python3 >/dev/null 2>&1; then
         command -v python3
     else
-        return 1
+        ROOT_="${ROOT:-$(find_root)}" || return 1
+        [ -x "$ROOT_/bin/python3" ] || return 1
+        WRAPPER=/tmp/ad5x-installer-python3
+        cat >"$WRAPPER" <<EOF
+#!/bin/sh
+exec chroot "$ROOT_" /bin/python3 "\$@"
+EOF
+        chmod 0755 "$WRAPPER"
+        echo "$WRAPPER"
     fi
 }
 sha256_file(){ sha256sum "$1" | awk '{print $1}'; }
