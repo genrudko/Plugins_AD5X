@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feature/ifs-manager-v1
-      - name: Apply hardware review fixes
+      - name: Expose direct spool editor
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -28,153 +28,82 @@ jobs:
           panel = Path('tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py')
           s = panel.read_text()
 
-          # Do not accumulate CSS providers on each live snapshot update.
-          old = '''        provider = Gtk.CssProvider()
-          provider.load_from_data(
-              (
-                  "* { border: 2px solid %s; border-radius: 10px; "
-                  "background-color: %s; }" % (border, background)
-              ).encode("utf-8")
+          # Add a non-mechanical metadata action before the mechanical controls.
+          pat = re.compile(
+              r'(?m)^(\s*)self\.action_select = Gtk\.Button\(label="Выбрать"\)\n'
           )
-          widgets["card"].get_style_context().add_provider(
-              provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+          repl = (
+              r'\1self.action_edit = Gtk.Button(label="Катушка")\n'
+              r'\1self.action_edit.connect("clicked", self._on_edit_clicked)\n'
+              r'\1action_bar.pack_start(self.action_edit, False, False, 0)\n\n'
+              r'\1self.action_select = Gtk.Button(label="Выбрать")\n'
           )
-          widgets["card"]._ad5x_card_css_provider = provider
-          '''.replace('          ', '')
-          new = '''        context = widgets["card"].get_style_context()
-          old_provider = getattr(widgets["card"], "_ad5x_card_css_provider", None)
-          if old_provider is not None:
-              context.remove_provider(old_provider)
-          provider = Gtk.CssProvider()
-          provider.load_from_data(
-              (
-                  "* { border: 2px solid %s; border-radius: 10px; "
-                  "background-color: %s; }" % (border, background)
-              ).encode("utf-8")
+          s, n = pat.subn(repl, s, count=1)
+          assert n == 1, f'action edit insertion failed: {n}'
+
+          # Direct navigation keeps selected slot as frontend-local context.
+          pat = re.compile(
+              r'(?m)^(    def _on_slot_clicked\(self, _widget, slot\):\n'
+              r'        self\._select_slot\(slot\)\n\n)'
           )
-          context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-          widgets["card"]._ad5x_card_css_provider = provider
-          '''.replace('          ', '')
-          assert old in s, 'card css provider block not found'
-          s = s.replace(old, new, 1)
-
-          # Active state is encoded by green frame + path/state, not duplicate title text.
-          old = '''        if slot == active:
-              widgets["title"].set_markup(
-                  f"<big><b>Слот {slot}</b></big>  <small>АКТИВНЫЙ</small>"
-              )
-          else:
-              widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
-          '''.replace('          ', '')
-          count = s.count(old)
-          assert count >= 1, f'active title block not found: {count}'
-          s = s.replace(old, '        widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")\n', count)
-
-          # Direct metadata editor on the primary IFS surface.
-          needle = '''        self.action_select = Gtk.Button(label="Выбрать")
-          self.action_load = Gtk.Button(label="Загрузить")
-          self.action_unload = Gtk.Button(label="Выгрузить")
-          self.action_select.connect("clicked", self._on_context_action_clicked, "select_slot")
-          self.action_load.connect("clicked", self._on_context_action_clicked, "load_slot")
-          self.action_unload.connect("clicked", self._on_context_action_clicked, "unload_slot")
-          for button in (self.action_select, self.action_load, self.action_unload):
-              button.set_sensitive(False)
-              action_bar.pack_start(button, False, False, 0)
-          '''.replace('          ', '')
-          replacement = '''        self.action_edit = Gtk.Button(label="Катушка")
-          self.action_edit.connect("clicked", self._on_edit_clicked)
-          action_bar.pack_start(self.action_edit, False, False, 0)
-
-          self.action_select = Gtk.Button(label="Выбрать")
-          self.action_load = Gtk.Button(label="Загрузить")
-          self.action_unload = Gtk.Button(label="Выгрузить")
-          self.action_select.connect("clicked", self._on_context_action_clicked, "select_slot")
-          self.action_load.connect("clicked", self._on_context_action_clicked, "load_slot")
-          self.action_unload.connect("clicked", self._on_context_action_clicked, "unload_slot")
-          for button in (self.action_select, self.action_load, self.action_unload):
-              button.set_sensitive(False)
-              action_bar.pack_start(button, False, False, 0)
-          '''.replace('          ', '')
-          assert needle in s, 'action bar block not found'
-          s = s.replace(needle, replacement, 1)
-
-          needle = '''    def _on_slot_clicked(self, _widget, slot):
-              self._select_slot(slot)
-
-          def _select_slot(self, slot):
-          '''.replace('          ', '')
-          replacement = '''    def _on_slot_clicked(self, _widget, slot):
-              self._select_slot(slot)
-
-          def _on_edit_clicked(self, _widget):
-              slot = self._selected_slot or 1
-              self._screen.show_panel(
-                  "ad5x_ifs_metadata",
-                  "IFS — катушка",
-                  panel_name=f"ad5x_ifs_metadata_slot_{slot}",
-                  slot=slot,
-              )
-
-          def _select_slot(self, slot):
-          '''.replace('          ', '')
-          assert needle in s, 'slot click boundary not found'
-          s = s.replace(needle, replacement, 1)
+          repl = (
+              r'\1'
+              r'    def _on_edit_clicked(self, _widget):\n'
+              r'        slot = self._selected_slot or 1\n'
+              r'        self._screen.show_panel(\n'
+              r'            "ad5x_ifs_metadata",\n'
+              r'            "IFS — катушка",\n'
+              r'            panel_name=f"ad5x_ifs_metadata_slot_{slot}",\n'
+              r'            slot=slot,\n'
+              r'        )\n\n'
+          )
+          s, n = pat.subn(repl, s, count=1)
+          assert n == 1, f'edit handler insertion failed: {n}'
           panel.write_text(s)
 
           metadata = Path('tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py')
           m = metadata.read_text()
-          old = '''class Panel(ScreenPanel):
-              def __init__(self, screen, title):
-                  super().__init__(screen, title or "IFS — катушки")
-                  self._request_pending = False
-                  self._save_pending = False
-                  self._last_module = None
-                  self._selected_slot = 1
-          '''.replace('          ', '')
-          new = '''class Panel(ScreenPanel):
-              def __init__(self, screen, title, slot=1):
-                  super().__init__(screen, title or "IFS — катушки")
-                  self._request_pending = False
-                  self._save_pending = False
-                  self._last_module = None
-                  try:
-                      requested_slot = int(slot)
-                  except (TypeError, ValueError):
-                      requested_slot = 1
-                  self._selected_slot = requested_slot if 1 <= requested_slot <= 4 else 1
-          '''.replace('          ', '')
-          assert old in m, 'metadata constructor block not found'
-          m = m.replace(old, new, 1)
+          m, n = re.subn(
+              r'def __init__\(self, screen, title\):',
+              'def __init__(self, screen, title, slot=1):',
+              m,
+              count=1,
+          )
+          assert n == 1, f'metadata constructor signature failed: {n}'
+          m, n = re.subn(
+              r'(?m)^(        self\._last_module = None\n)        self\._selected_slot = 1\n',
+              r'\1        try:\n'
+              r'            requested_slot = int(slot)\n'
+              r'        except (TypeError, ValueError):\n'
+              r'            requested_slot = 1\n'
+              r'        self._selected_slot = requested_slot if 1 <= requested_slot <= 4 else 1\n',
+              m,
+              count=1,
+          )
+          assert n == 1, f'metadata selected slot init failed: {n}'
           metadata.write_text(m)
 
           smoke = Path('tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py')
           q = smoke.read_text()
-          needle = '''# Restore idle sample and prove the Advanced/Details navigation target exists.
-          panel._render_snapshot(sample)
-          panel._on_manage_clicked(None)
-          assert screen.opened_panels[-1] == ("ad5x_ifs_manage", "IFS — детали")
-          '''.replace('          ', '')
-          replacement = '''# Restore idle sample and prove direct spool editing plus Advanced navigation.
-          panel._render_snapshot(sample)
-          panel._select_slot(3)
-          panel._on_edit_clicked(None)
-          assert screen.opened_panels[-1] == ("ad5x_ifs_metadata", "IFS — катушка")
-          panel._on_manage_clicked(None)
-          assert screen.opened_panels[-1] == ("ad5x_ifs_manage", "IFS — детали")
-          '''.replace('          ', '')
-          assert needle in q, 'smoke navigation block not found'
-          q = q.replace(needle, replacement, 1)
-
-          needle = 'metadata = IFSMetadataPanel(screen, "IFS — катушки")\nmetadata._render_snapshot(sample)\nassert metadata._selected_slot == 1\n'
-          replacement = 'metadata = IFSMetadataPanel(screen, "IFS — катушки", slot=3)\nmetadata._render_snapshot(sample)\nassert metadata._selected_slot == 3\n'
-          assert needle in q, 'metadata smoke constructor block not found'
-          q = q.replace(needle, replacement, 1)
-
-          # The following legacy slot-1 assertions now explicitly select slot 1.
-          needle = 'assert "Flashforge/Z-Mod" in metadata.source.get_text()\nassert metadata.entries["material"].get_text() == "PETG"\n'
-          replacement = 'assert "Plugins AD5X" in metadata.source.get_text()\nmetadata._on_slot_clicked(None, 1)\nassert "Flashforge/Z-Mod" in metadata.source.get_text()\nassert metadata.entries["material"].get_text() == "PETG"\n'
-          assert needle in q, 'metadata source assertion block not found'
-          q = q.replace(needle, replacement, 1)
+          anchor = 'panel._render_snapshot(sample)\npanel._on_manage_clicked(None)\n'
+          assert anchor in q
+          q = q.replace(
+              anchor,
+              'panel._render_snapshot(sample)\n'
+              'panel._select_slot(3)\n'
+              'panel._on_edit_clicked(None)\n'
+              'assert screen.opened_panels[-1] == ("ad5x_ifs_metadata", "IFS — катушка")\n'
+              'panel._on_manage_clicked(None)\n',
+              1,
+          )
+          old = 'metadata = IFSMetadataPanel(screen, "IFS — катушки")\nmetadata._render_snapshot(sample)\nassert metadata._selected_slot == 1\n'
+          new = 'metadata = IFSMetadataPanel(screen, "IFS — катушки", slot=3)\nmetadata._render_snapshot(sample)\nassert metadata._selected_slot == 3\n'
+          assert old in q
+          q = q.replace(old, new, 1)
+          old = 'assert "Flashforge/Z-Mod" in metadata.source.get_text()\nassert metadata.entries["material"].get_text() == "PETG"\n'
+          new = 'assert "Plugins AD5X" in metadata.source.get_text()\nmetadata._on_slot_clicked(None, 1)\nassert "Flashforge/Z-Mod" in metadata.source.get_text()\nassert metadata.entries["material"].get_text() == "PETG"\n'
+          assert old in q
+          q = q.replace(old, new, 1)
           smoke.write_text(q)
           PY
 
