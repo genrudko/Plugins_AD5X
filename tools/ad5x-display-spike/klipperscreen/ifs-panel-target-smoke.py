@@ -119,7 +119,7 @@ screen = Screen()
 panel = IFSPanel(screen, "IFS")
 
 sample = {
-    "revision": 21,
+    "revision": 17,
     "modules": {
         "ifs": {
             "available": True,
@@ -260,7 +260,7 @@ for widgets in panel._slot_widgets.values():
 # PAUSED safety is represented by backend permissions + write_blocked_reason.
 # The frontend only renders that decision.
 paused = copy.deepcopy(sample)
-paused["revision"] = 22
+paused["revision"] = 18
 paused_module = paused["modules"]["ifs"]
 paused_module["print_state"] = "paused"
 paused_module["write_blocked_reason"] = "unsafe_print_state"
