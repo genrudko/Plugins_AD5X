@@ -1,0 +1,82 @@
+name: AD5X IFS UI finalize
+
+on:
+  push:
+    branches:
+      - feature/ifs-manager-v1
+    paths:
+      - '.github/workflows/ad5x-ifs-ui-finalize.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/ifs-manager-v1
+      - name: Finalize card state styling
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py')
+          s = p.read_text()
+
+          old = '''        provider = Gtk.CssProvider()
+          provider.load_from_data(
+              (
+                  "* { border: 2px solid %s; border-radius: 10px; "
+                  "background-color: %s; }" % (border, background)
+              ).encode("utf-8")
+          )
+          widgets["card"].get_style_context().add_provider(
+              provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+          )
+          widgets["card"]._ad5x_card_css_provider = provider
+          '''.replace('          ', '        ')
+          new = '''        context = widgets["card"].get_style_context()
+          old_provider = getattr(widgets["card"], "_ad5x_card_css_provider", None)
+          if old_provider is not None:
+              context.remove_provider(old_provider)
+          provider = Gtk.CssProvider()
+          provider.load_from_data(
+              (
+                  "* { border: 2px solid %s; border-radius: 10px; "
+                  "background-color: %s; }" % (border, background)
+              ).encode("utf-8")
+          )
+          context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+          widgets["card"]._ad5x_card_css_provider = provider
+          '''.replace('          ', '        ')
+          assert old in s, 'card provider block missing'
+          s = s.replace(old, new, 1)
+
+          old = '''        if slot == active:
+              widgets["title"].set_markup(
+                  f"<big><b>Слот {slot}</b></big>  <small>АКТИВНЫЙ</small>"
+              )
+          else:
+              widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
+          '''.replace('          ', '        ')
+          assert s.count(old) == 2, f'expected two active-title blocks, got {s.count(old)}'
+          s = s.replace(
+              old,
+              '        widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")\n',
+              2,
+          )
+
+          p.write_text(s)
+          PY
+
+          python3 -m py_compile tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
+          git commit -m 'fix(ifs-ui): finalize active and selected card styling'
+          git push origin HEAD:feature/ifs-manager-v1
