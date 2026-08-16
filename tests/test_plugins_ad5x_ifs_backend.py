@@ -16,6 +16,7 @@ COMPONENT_PATH = ROOT / "moonraker" / "components" / "plugins_ad5x.py"
 
 class RequestType(Flag):
     GET = auto()
+    POST = auto()
 
 
 class TransportType(Flag):
@@ -52,6 +53,8 @@ class FakeKlippyAPIs:
         self.initial = dict(initial or {})
         self.callback = None
         self.subscription = None
+        self.gcodes = []
+        self.query_result = {}
 
     async def get_object_list(self, default=None):
         return list(self.objects)
@@ -61,15 +64,23 @@ class FakeKlippyAPIs:
         self.callback = callback
         return dict(self.initial)
 
+    async def query_objects(self, objects, default=None):
+        return dict(self.query_result)
+
+    async def run_gcode(self, script, default=None):
+        self.gcodes.append(script)
+        return "ok"
+
 
 class FakeServer:
     def __init__(self, klippy_apis):
         self.klippy_apis = klippy_apis
         self.handlers = {}
         self.events = []
+        self.endpoints = {}
 
-    def register_endpoint(self, *_args, **_kwargs):
-        pass
+    def register_endpoint(self, path, request_type, handler, **kwargs):
+        self.endpoints[path] = (request_type, handler, kwargs)
 
     def register_notification(self, *_args, **_kwargs):
         pass
@@ -94,6 +105,17 @@ class FakeConfig:
         return self.server
 
 
+class FakeRequest:
+    def __init__(self, **params):
+        self.params = params
+
+    def get_str(self, name):
+        return str(self.params[name])
+
+    def get_int(self, name):
+        return int(self.params[name])
+
+
 READY = {
     "available": True,
     "state": "ready",
@@ -113,6 +135,27 @@ READY = {
     "stall_mask": 0,
 }
 
+HEAD = "filament_switch_sensor head_switch_sensor"
+
+
+def live_initial(print_state="standby", head=True):
+    return {
+        "ad5x_ifs": dict(READY),
+        "print_stats": {"state": print_state},
+        HEAD: {"enabled": True, "filament_detected": head},
+    }
+
+
+def assert_ready_core(testcase, module):
+    for key, value in READY.items():
+        testcase.assertEqual(module[key], value)
+    testcase.assertEqual(module["print_state"], "standby")
+    testcase.assertTrue(module["filament_at_toolhead"])
+    testcase.assertEqual(module["operation"]["state"], "idle")
+    testcase.assertTrue(module["operations"]["select_slot"])
+    testcase.assertTrue(module["operations"]["load_slot"])
+    testcase.assertTrue(module["operations"]["unload_slot"])
+
 
 class PluginsAD5XIFSBackendTests(unittest.TestCase):
     def make_component(self, objects=None, initial=None):
@@ -121,10 +164,19 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         component = component_module.load_component(FakeConfig(server))
         return component, server, api
 
-    def test_registers_klippy_lifecycle_handlers_without_polling(self):
+    def make_live_component(self, print_state="standby", head=True):
+        return self.make_component(
+            objects=["ad5x_ifs", HEAD],
+            initial=live_initial(print_state, head),
+        )
+
+    def test_registers_lifecycle_and_action_endpoint_without_polling(self):
         _component, server, _api = self.make_component()
         self.assertEqual(
             set(server.handlers), {"server:klippy_ready", "server:klippy_disconnect"}
+        )
+        self.assertEqual(
+            server.endpoints[component_module.IFS_ACTION_ENDPOINT][0], RequestType.POST
         )
         self.assertFalse(hasattr(server, "timer"))
 
@@ -136,19 +188,21 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         self.assertEqual(module["reason"], "bridge_not_loaded")
         self.assertEqual(component.get_snapshot()["revision"], 2)
 
-    def test_initial_bridge_status_enters_snapshot(self):
-        component, server, api = self.make_component(
-            objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
-        )
+    def test_initial_bridge_status_enters_snapshot_with_aux_state(self):
+        component, server, api = self.make_live_component()
         asyncio.run(server.handlers["server:klippy_ready"]())
-        self.assertEqual(api.subscription, {"ad5x_ifs": None})
-        self.assertEqual(component.get_snapshot()["modules"]["ifs"], READY)
-        self.assertEqual(component.get_snapshot()["revision"], 2)
+        self.assertEqual(
+            api.subscription,
+            {
+                "ad5x_ifs": None,
+                "print_stats": ["state"],
+                HEAD: ["enabled", "filament_detected"],
+            },
+        )
+        assert_ready_core(self, component.get_snapshot()["modules"]["ifs"])
 
     def test_semantic_update_invalidates_once(self):
-        component, server, api = self.make_component(
-            objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
-        )
+        component, server, api = self.make_live_component()
         asyncio.run(server.handlers["server:klippy_ready"]())
         server.events.clear()
         revision = component.get_snapshot()["revision"]
@@ -160,10 +214,24 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         self.assertEqual(component.get_snapshot()["revision"], revision + 1)
         self.assertEqual(len(server.events), 1)
 
-    def test_disconnect_marks_module_unavailable(self):
-        component, server, _api = self.make_component(
-            objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
+    def test_aux_updates_are_push_normalized(self):
+        component, server, api = self.make_live_component()
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        asyncio.run(
+            api.callback(
+                {
+                    "print_stats": {"state": "paused"},
+                    HEAD: {"enabled": True, "filament_detected": False},
+                },
+                2.0,
+            )
         )
+        module = component.get_snapshot()["modules"]["ifs"]
+        self.assertEqual(module["print_state"], "paused")
+        self.assertFalse(module["filament_at_toolhead"])
+
+    def test_disconnect_marks_module_unavailable(self):
+        component, server, _api = self.make_live_component()
         asyncio.run(server.handlers["server:klippy_ready"]())
         revision = component.get_snapshot()["revision"]
         asyncio.run(server.handlers["server:klippy_disconnect"]())
@@ -171,6 +239,68 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         self.assertFalse(module["available"])
         self.assertEqual(module["reason"], "klippy_disconnected")
         self.assertEqual(component.get_snapshot()["revision"], revision + 1)
+
+    def test_select_load_and_active_unload_translate_to_zmod_commands(self):
+        component, server, api = self.make_live_component()
+        asyncio.run(server.handlers["server:klippy_ready"]())
+
+        result = asyncio.run(
+            component._handle_ifs_action(FakeRequest(action="select_slot", slot=2))
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(api.gcodes[-1], "SET_EXTRUDER_SLOT SLOT=2")
+
+        result = asyncio.run(
+            component._handle_ifs_action(FakeRequest(action="load_slot", slot=2))
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(api.gcodes[-1], "INSERT_PRUTOK_IFS PRUTOK=2")
+
+        result = asyncio.run(
+            component._handle_ifs_action(FakeRequest(action="unload_slot", slot=1))
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(api.gcodes[-1], "_IFS_REMOVE_CURRENT_PRUTOK")
+
+    def test_paused_and_printing_fail_closed_without_gcode(self):
+        for state in ("paused", "printing", "unknown"):
+            with self.subTest(state=state):
+                component, server, api = self.make_live_component(print_state=state)
+                asyncio.run(server.handlers["server:klippy_ready"]())
+                result = asyncio.run(
+                    component._handle_ifs_action(FakeRequest(action="load_slot", slot=2))
+                )
+                self.assertFalse(result["ok"])
+                self.assertIn("blocked", result["error"])
+                self.assertEqual(api.gcodes, [])
+
+    def test_unload_non_active_or_unconfirmed_head_fails_closed(self):
+        component, server, api = self.make_live_component(head=True)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        result = asyncio.run(
+            component._handle_ifs_action(FakeRequest(action="unload_slot", slot=2))
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(api.gcodes, [])
+
+        component, server, api = self.make_live_component(head=False)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        result = asyncio.run(
+            component._handle_ifs_action(FakeRequest(action="unload_slot", slot=1))
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("Toolhead", result["error"])
+        self.assertEqual(api.gcodes, [])
+
+    def test_empty_slot_cannot_select_or_load(self):
+        component, server, api = self.make_live_component()
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        for action in ("select_slot", "load_slot"):
+            result = asyncio.run(
+                component._handle_ifs_action(FakeRequest(action=action, slot=4))
+            )
+            self.assertFalse(result["ok"])
+        self.assertEqual(api.gcodes, [])
 
     def test_metadata_enriches_slots_active_slot_and_tool_mapping(self):
         old_ffconfig = component_module.FFCONFIG_PATH
@@ -202,9 +332,7 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
                 component_module.FFCONFIG_PATH = str(ffconfig)
                 component_module.FILE_MAPPING_PATH = str(mapping)
 
-                component, server, _api = self.make_component(
-                    objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
-                )
+                component, server, _api = self.make_live_component()
                 asyncio.run(server.handlers["server:klippy_ready"]())
                 module = component.get_snapshot()["modules"]["ifs"]
 
@@ -243,9 +371,7 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
                 component_module.FFCONFIG_PATH = str(ffconfig)
                 component_module.FILE_MAPPING_PATH = str(mapping)
 
-                component, server, _api = self.make_component(
-                    objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
-                )
+                component, server, _api = self.make_live_component()
                 asyncio.run(server.handlers["server:klippy_ready"]())
                 revision = component.get_snapshot()["revision"]
 
@@ -273,11 +399,10 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
                 component_module.FFCONFIG_PATH = str(ffconfig)
                 component_module.FILE_MAPPING_PATH = str(mapping)
 
-                component, server, _api = self.make_component(
-                    objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
-                )
+                component, server, _api = self.make_live_component()
                 asyncio.run(server.handlers["server:klippy_ready"]())
-                self.assertEqual(component.get_snapshot()["modules"]["ifs"], READY)
+                module = component.get_snapshot()["modules"]["ifs"]
+                assert_ready_core(self, module)
         finally:
             component_module.FFCONFIG_PATH = old_ffconfig
             component_module.FILE_MAPPING_PATH = old_mapping
