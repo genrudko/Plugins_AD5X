@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** PREHEAT / NOT YET COMPLETE  
+**Status:** HEATED CONDITION ESTABLISHED / PREFLIGHT PENDING  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -31,6 +31,42 @@ ambient mean delta    = +0.012500 mm
 
 These values are descriptive evidence only and do not define an acceptance band.
 
+## Heated condition establishment
+
+Owner selected `60 C` as the representative PLA bed target.
+
+Command:
+
+```text
+M190 S60
+```
+
+The command returned normally. Immediate live state after the heater wait:
+
+```text
+heater_bed.temperature   = 59.36 C
+heater_bed.target        = 60.0 C
+heater_bed.power         = 0.1141456259
+extruder.temperature     = 26.54 C
+extruder.target          = 0.0 C
+print_stats.state        = standby
+toolhead.homed_axes      = xyz
+toolhead.position        = [107.5, 107.5, 5.0, 0.0]
+gcode_move.homing_origin = [0.0, 0.0, 0.0, 0.0]
+bed_mesh.profile_name    = auto
+```
+
+Interpretation:
+
+- the ordinary Klipper heater wait accepted the 60 C target condition and returned normally;
+- the bed was measured at `59.36 C` immediately after return, with target still `60.0 C`;
+- the nozzle remained ambient/unheated at `26.54 C`;
+- printer remained idle/standby;
+- standard Klipper effective Z offset remained `0.0 mm`;
+- saved `auto` was still the active runtime mesh before the measurement path began.
+
+The `59.36 C` observation is retained exactly as measured. It is not rewritten as an assumed `60.00 C`, and no temperature tolerance policy is inferred from this one run.
+
 ## Planned path
 
 ```text
@@ -51,10 +87,7 @@ No `SAVE_CONFIG`, persistent trim mutation, saved-mesh overwrite/delete, Plugins
 
 ## Pending
 
-- post-heat actual bed temperature: PENDING
-- post-heat nozzle temperature: PENDING
-- pre-run standard effective Z offset: PENDING
-- pre-run `printer.cfg` hash: PENDING
+- read-only preflight and pre-run `printer.cfg` hash: PENDING
 - fresh homing result: PENDING
 - tare observation: PENDING
 - raw 10-sample series: PENDING
