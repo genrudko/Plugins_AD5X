@@ -234,15 +234,16 @@ panel._render_snapshot(sample)
 assert panel.status.get_text() == "IFS: Готов   •   активный слот 1"
 assert panel._selected_slot == 1
 assert panel._slot_widgets[1]["material"].get_text() == "PETG"
-assert "Активный филамент" in panel._slot_widgets[1]["state"].get_text()
+assert "В тракте" in panel._slot_widgets[1]["state"].get_text()
 assert panel._slot_widgets[2]["material"].get_text() == "Red Blue Dual"
 assert panel._slot_widgets[2]["detail"].get_text() == "Silk • 2 цвета"
 assert panel._slot_widgets[3]["material"].get_text() == "Triple Color"
 assert "3 цвета" in panel._slot_widgets[3]["detail"].get_text()
 assert len(panel._slot_widgets[3]["swatch"].get_children()) == 3
 assert "Пустой слот" == panel._slot_widgets[4]["material"].get_text()
-assert "Сохранено: Previous TPU" == panel._slot_widgets[4]["detail"].get_text()
+assert "Было: Previous TPU" == panel._slot_widgets[4]["detail"].get_text()
 assert not panel._slot_widgets[4]["swatch"].get_visible()
+assert panel.path.get_text() == "Тракт: Слот 1  →  IFS  →  ● Головка"
 
 # Contextual actions are backend-owned. The initially selected active slot may
 # only unload, exactly as slot.permissions says.

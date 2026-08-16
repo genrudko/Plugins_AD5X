@@ -113,10 +113,18 @@ class Panel(ScreenPanel):
         for slot in range(1, 5):
             card, widgets = self._make_slot_card(slot)
             self._slot_widgets[slot] = widgets
-            col = (slot - 1) % 2
-            row = (slot - 1) // 2
-            grid.attach(card, col, row, 1, 1)
+            grid.attach(card, slot - 1, 0, 1, 1)
         root.pack_start(grid, True, True, 0)
+
+        self.path = Gtk.Label(
+            label="Тракт: —",
+            hexpand=True,
+            halign=Gtk.Align.START,
+            valign=Gtk.Align.CENTER,
+            xalign=0,
+        )
+        self.path.set_ellipsize(Pango.EllipsizeMode.END)
+        root.pack_start(self.path, False, False, 0)
 
         action_bar = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL,
@@ -142,7 +150,7 @@ class Panel(ScreenPanel):
         self.action_unload.connect("clicked", self._on_context_action_clicked, "unload_slot")
         for button in (self.action_select, self.action_load, self.action_unload):
             button.set_sensitive(False)
-            action_bar.pack_end(button, False, False, 0)
+            action_bar.pack_start(button, False, False, 0)
         root.pack_end(action_bar, False, False, 0)
 
         self.content.add(root)
@@ -156,8 +164,8 @@ class Panel(ScreenPanel):
 
         box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
-            spacing=2,
-            margin=5,
+            spacing=3,
+            margin=7,
             hexpand=True,
             vexpand=True,
         )
@@ -199,13 +207,13 @@ class Panel(ScreenPanel):
             hexpand=True,
             vexpand=False,
         )
-        swatch.set_size_request(-1, 16)
+        swatch.set_size_request(-1, 24)
 
         box.pack_start(title, False, False, 0)
+        box.pack_start(swatch, False, False, 0)
         box.pack_start(material, False, False, 0)
         box.pack_start(detail, False, False, 0)
-        box.pack_start(state, False, False, 0)
-        box.pack_end(swatch, False, False, 0)
+        box.pack_end(state, False, False, 0)
         card.add(box)
         return card, {
             "card": card,
@@ -221,12 +229,55 @@ class Panel(ScreenPanel):
     def _set_background(widget, color):
         provider = Gtk.CssProvider()
         provider.load_from_data(
-            ("* { background-color: %s; min-height: 14px; }" % color).encode("utf-8")
+            (
+                "* { background-color: %s; min-height: 20px; "
+                "border: 1px solid rgba(255,255,255,0.55); border-radius: 3px; }"
+                % color
+            ).encode("utf-8")
         )
         widget.get_style_context().add_provider(
             provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
         widget._ad5x_css_provider = provider
+
+    def _apply_card_style(self, slot):
+        widgets = self._slot_widgets.get(slot)
+        if not widgets:
+            return
+        data = widgets.get("data") or {}
+        active = 0
+        if isinstance(self._last_module, dict):
+            active = int(self._last_module.get("active_slot") or 0)
+        selected = slot == self._selected_slot
+        stall = bool(data.get("stall", False))
+
+        if stall:
+            border = "#ffb020"
+        elif slot == active:
+            border = "#39d98a"
+        elif selected:
+            border = "#5da9ff"
+        else:
+            border = "rgba(255,255,255,0.20)"
+
+        if selected:
+            background = "rgba(255,255,255,0.10)"
+        elif slot == active:
+            background = "rgba(57,217,138,0.06)"
+        else:
+            background = "rgba(255,255,255,0.025)"
+
+        provider = Gtk.CssProvider()
+        provider.load_from_data(
+            (
+                "* { border: 2px solid %s; border-radius: 10px; "
+                "background-color: %s; }" % (border, background)
+            ).encode("utf-8")
+        )
+        widgets["card"].get_style_context().add_provider(
+            provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        widgets["card"]._ad5x_card_css_provider = provider
 
     def _render_swatch(self, container, appearance, present):
         for child in container.get_children():
@@ -442,13 +493,12 @@ class Panel(ScreenPanel):
     def _render_slot(self, slot, data, active):
         widgets = self._slot_widgets[slot]
         widgets["data"] = data if isinstance(data, dict) else {}
-        selected = slot == self._selected_slot
-        title = f"Слот {slot}"
         if slot == active:
-            title += "  ★"
-        if selected:
-            title += "  ▸"
-        widgets["title"].set_markup(f"<big><b>{title}</b></big>")
+            widgets["title"].set_markup(
+                f"<big><b>Слот {slot}</b></big>  <small>АКТИВНЫЙ</small>"
+            )
+        else:
+            widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
 
         present = bool(data.get("present", False))
         stall = bool(data.get("stall", False))
@@ -457,36 +507,40 @@ class Panel(ScreenPanel):
         if not present:
             widgets["material"].set_text("Пустой слот")
             if metadata_status == "stale":
-                widgets["detail"].set_text("Сохранено: " + self._spool_title(data))
+                widgets["detail"].set_text("Было: " + self._spool_title(data))
             else:
                 widgets["detail"].set_text("Катушка не назначена")
             widgets["state"].set_text("○ Пусто")
             self._render_swatch(widgets["swatch"], data.get("appearance"), False)
+            self._apply_card_style(slot)
             return
 
         widgets["material"].set_text(self._spool_title(data))
         widgets["detail"].set_text(self._spool_detail(data))
         if stall:
-            state = "⚠ Филамент остановлен"
+            state = "⚠ ЗАМЯТИЕ"
         elif slot == active:
-            state = "● Активный филамент"
+            state = "● В тракте"
         else:
-            state = "● Филамент установлен"
+            state = "● Загружен"
         widgets["state"].set_text(state)
         self._render_swatch(widgets["swatch"], data.get("appearance"), True)
+        self._apply_card_style(slot)
 
     def _render_selection(self):
+        active = 0
+        if isinstance(self._last_module, dict):
+            active = int(self._last_module.get("active_slot") or 0)
         for slot, widgets in self._slot_widgets.items():
-            active = 0
-            if isinstance(self._last_module, dict):
-                active = int(self._last_module.get("active_slot") or 0)
-            title = f"Слот {slot}"
             if slot == active:
-                title += "  ★"
-            if slot == self._selected_slot:
-                title += "  ▸"
-            widgets["title"].set_markup(f"<big><b>{title}</b></big>")
+                widgets["title"].set_markup(
+                    f"<big><b>Слот {slot}</b></big>  <small>АКТИВНЫЙ</small>"
+                )
+            else:
+                widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
+            self._apply_card_style(slot)
 
+        self._render_path()
         if not self._selected_slot:
             self.selection.set_text("Выберите слот")
             return
@@ -497,6 +551,21 @@ class Panel(ScreenPanel):
             )
         else:
             self.selection.set_text(f"Слот {self._selected_slot} • пусто")
+
+    def _render_path(self):
+        module = self._last_module if isinstance(self._last_module, dict) else {}
+        active = int(module.get("active_slot") or 0)
+        head = module.get("filament_at_toolhead")
+        if not active:
+            self.path.set_text("Тракт: —")
+            return
+        if head is True:
+            head_text = "● Головка"
+        elif head is False:
+            head_text = "○ Головка"
+        else:
+            head_text = "? Головка"
+        self.path.set_text(f"Тракт: Слот {active}  →  IFS  →  {head_text}")
 
     def _render_action_buttons(self):
         if self._action_pending or not self._selected_slot:
@@ -527,6 +596,8 @@ class Panel(ScreenPanel):
             widgets["detail"].set_text("")
             widgets["state"].set_text("Нет данных")
             self._render_swatch(widgets["swatch"], {}, False)
+            self._apply_card_style(slot)
+        self.path.set_text("Тракт: —")
         self.selection.set_text("Выберите слот")
         self._set_all_action_buttons(False)
 
