@@ -17,6 +17,9 @@ BACKEND_DEST="${AD5X_BACKEND_DEST:-/opt/config/base/moonraker/components/plugins
 BACKEND_CONFIG="$PLUGIN_DIR/plugins_ad5x.moonraker.conf"
 BACKEND_HASH_STATE="$STATE/backend-runtime.sha256"
 MOONRAKER_COMPONENTS_DIR="${AD5X_MOONRAKER_COMPONENTS_DIR:-${BACKEND_DEST%/*}}"
+BACKEND_MODEL_SOURCE="$PLUGIN_DIR/moonraker/components/plugins_ad5x_ifs_model.py"
+BACKEND_MODEL_DEST="${AD5X_BACKEND_MODEL_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_ifs_model.py}"
+BACKEND_MODEL_HASH_STATE="$STATE/backend-ifs-model-runtime.sha256"
 KLIPPER_BRIDGE_SOURCE="$PLUGIN_DIR/klipper/extras/ad5x_ifs.py"
 KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/opt/config/base/klipper/klippy/extras/ad5x_ifs.py}"
 KLIPPER_BRIDGE_HASH_STATE="$STATE/klipper-ifs-bridge.sha256"
@@ -161,12 +164,14 @@ backend_constant(){
 }
 backend_source_valid(){
     [ -s "$BACKEND_SOURCE" ] || return 1
+    [ -s "$BACKEND_MODEL_SOURCE" ] || return 1
     [ -f "$PLUGIN_DIR/VERSION" ] || return 1
     [ -d "$MOONRAKER_COMPONENTS_DIR" ] || return 1
     [ -s "$BACKEND_CONFIG" ] || return 1
     [ "$(grep -c '^\[plugins_ad5x\]$' "$BACKEND_CONFIG" 2>/dev/null || true)" -eq 1 ] || return 1
     [ "$(grep -Ec '^\[[^]]+\]$' "$BACKEND_CONFIG" 2>/dev/null || true)" -eq 1 ] || return 1
     python_source_valid "$BACKEND_SOURCE" || return 1
+    python_source_valid "$BACKEND_MODEL_SOURCE" || return 1
     API_VERSION_="$(backend_constant API_VERSION)"
     BACKEND_VERSION_="$(backend_constant BACKEND_VERSION)"
     ROOT_VERSION_="$(tr -d '\r\n' <"$PLUGIN_DIR/VERSION")"
@@ -174,21 +179,25 @@ backend_source_valid(){
     [ -n "$BACKEND_VERSION_" ] || return 1
     [ "$BACKEND_VERSION_" = "$ROOT_VERSION_" ] || return 1
 }
-validate_backend_source(){ backend_source_valid || fail 'backend source/config validation failed'; }
-backend_destination_owned(){
-    [ -e "$BACKEND_DEST" ] || [ -L "$BACKEND_DEST" ] || return 0
-    [ -f "$BACKEND_DEST" ] || return 1
-    [ ! -L "$BACKEND_DEST" ] || return 1
-    DEST_HASH="$(sha256_file "$BACKEND_DEST" 2>/dev/null || true)"
+validate_backend_source(){ backend_source_valid || fail 'backend source/config/model validation failed'; }
+managed_python_destination_owned(){
+    SOURCE="$1"; DEST="$2"; HASH_STATE="$3"
+    [ -e "$DEST" ] || [ -L "$DEST" ] || return 0
+    [ -f "$DEST" ] || return 1
+    [ ! -L "$DEST" ] || return 1
+    DEST_HASH="$(sha256_file "$DEST" 2>/dev/null || true)"
     [ -n "$DEST_HASH" ] || return 1
-    SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE" 2>/dev/null || true)"
-    if [ -f "$BACKEND_HASH_STATE" ] && [ "$(cat "$BACKEND_HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
+    SOURCE_HASH="$(sha256_file "$SOURCE" 2>/dev/null || true)"
+    if [ -f "$HASH_STATE" ] && [ "$(cat "$HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
         return 0
     fi
     [ -n "$SOURCE_HASH" ] && [ "$DEST_HASH" = "$SOURCE_HASH" ]
 }
+backend_destination_owned(){ managed_python_destination_owned "$BACKEND_SOURCE" "$BACKEND_DEST" "$BACKEND_HASH_STATE"; }
+backend_model_destination_owned(){ managed_python_destination_owned "$BACKEND_MODEL_SOURCE" "$BACKEND_MODEL_DEST" "$BACKEND_MODEL_HASH_STATE"; }
 validate_backend_destination_ownership(){
     backend_destination_owned || fail "неизвестный файл в backend destination: $BACKEND_DEST"
+    backend_model_destination_owned || fail "неизвестный файл в IFS Manager model destination: $BACKEND_MODEL_DEST"
 }
 remove_backend_bytecode(){
     rm -f "$MOONRAKER_COMPONENTS_DIR/__pycache__/plugins_ad5x"*.pyc 2>/dev/null || true
@@ -197,26 +206,42 @@ deploy_backend_managed_copy(){
     validate_backend_source
     validate_backend_destination_ownership
     SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE")"
+    MODEL_SOURCE_HASH="$(sha256_file "$BACKEND_MODEL_SOURCE")"
     TMP="$MOONRAKER_COMPONENTS_DIR/.plugins_ad5x.py.tmp.$$"
-    rm -f "$TMP"
-    cp "$BACKEND_SOURCE" "$TMP" || { rm -f "$TMP"; return 1; }
-    chmod 0644 "$TMP" || { rm -f "$TMP"; return 1; }
-    [ "$(sha256_file "$TMP")" = "$SOURCE_HASH" ] || { rm -f "$TMP"; return 1; }
-    mv -f "$TMP" "$BACKEND_DEST" || { rm -f "$TMP"; return 1; }
+    MODEL_TMP="$MOONRAKER_COMPONENTS_DIR/.plugins_ad5x_ifs_model.py.tmp.$$"
+    rm -f "$TMP" "$MODEL_TMP"
+    cp "$BACKEND_SOURCE" "$TMP" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
+    cp "$BACKEND_MODEL_SOURCE" "$MODEL_TMP" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
+    chmod 0644 "$TMP" "$MODEL_TMP" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
+    [ "$(sha256_file "$TMP")" = "$SOURCE_HASH" ] || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
+    [ "$(sha256_file "$MODEL_TMP")" = "$MODEL_SOURCE_HASH" ] || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
+    mv -f "$MODEL_TMP" "$BACKEND_MODEL_DEST" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
+    mv -f "$TMP" "$BACKEND_DEST" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
     [ "$(sha256_file "$BACKEND_DEST")" = "$SOURCE_HASH" ] || return 1
+    [ "$(sha256_file "$BACKEND_MODEL_DEST")" = "$MODEL_SOURCE_HASH" ] || return 1
     remove_backend_bytecode
     HASH_TMP="$BACKEND_HASH_STATE.tmp.$$"
+    MODEL_HASH_TMP="$BACKEND_MODEL_HASH_STATE.tmp.$$"
     printf '%s\n' "$SOURCE_HASH" >"$HASH_TMP"
+    printf '%s\n' "$MODEL_SOURCE_HASH" >"$MODEL_HASH_TMP"
     mv -f "$HASH_TMP" "$BACKEND_HASH_STATE"
+    mv -f "$MODEL_HASH_TMP" "$BACKEND_MODEL_HASH_STATE"
 }
 backend_runtime_matches_source(){
     [ -f "$BACKEND_DEST" ] || return 1
     [ ! -L "$BACKEND_DEST" ] || return 1
     [ -f "$BACKEND_HASH_STATE" ] || return 1
+    [ -f "$BACKEND_MODEL_DEST" ] || return 1
+    [ ! -L "$BACKEND_MODEL_DEST" ] || return 1
+    [ -f "$BACKEND_MODEL_HASH_STATE" ] || return 1
     SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE" 2>/dev/null || true)"
     DEST_HASH="$(sha256_file "$BACKEND_DEST" 2>/dev/null || true)"
     RECORDED_HASH="$(cat "$BACKEND_HASH_STATE" 2>/dev/null || true)"
-    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ]
+    MODEL_SOURCE_HASH="$(sha256_file "$BACKEND_MODEL_SOURCE" 2>/dev/null || true)"
+    MODEL_DEST_HASH="$(sha256_file "$BACKEND_MODEL_DEST" 2>/dev/null || true)"
+    MODEL_RECORDED_HASH="$(cat "$BACKEND_MODEL_HASH_STATE" 2>/dev/null || true)"
+    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ] && \
+        [ -n "$MODEL_SOURCE_HASH" ] && [ "$MODEL_SOURCE_HASH" = "$MODEL_DEST_HASH" ] && [ "$MODEL_DEST_HASH" = "$MODEL_RECORDED_HASH" ]
 }
 backend_include_ok(){
     [ -s "$BACKEND_CONFIG" ] || return 1
@@ -415,8 +440,12 @@ backend_uninstall_transition(){
         backend_destination_owned || return 1
         rm -f "$BACKEND_DEST"
     fi
+    if [ -e "$BACKEND_MODEL_DEST" ] || [ -L "$BACKEND_MODEL_DEST" ]; then
+        backend_model_destination_owned || return 1
+        rm -f "$BACKEND_MODEL_DEST"
+    fi
     remove_backend_bytecode
-    rm -f "$BACKEND_HASH_STATE"
+    rm -f "$BACKEND_HASH_STATE" "$BACKEND_MODEL_HASH_STATE"
 }
 run_moonraker_transition(){
     TRANSITION_FN="$1"
@@ -602,8 +631,8 @@ if [ "$MODE" = --status ]; then
         [ -e "$X" ] && echo "[OK] $X" || echo "[FAIL] $X"
     done
     grep -q 'AD5X_CUSTOM_POWER_ON_BEGIN' "$POWER_ON" && echo '[OK] power_on hook' || echo '[FAIL] power_on hook'
-    if backend_source_valid; then echo '[OK] backend source'; else echo '[FAIL] backend source'; fi
-    if backend_runtime_matches_source; then echo '[OK] backend runtime file'; else echo '[FAIL] backend runtime file'; fi
+    if backend_source_valid; then echo '[OK] backend source + IFS Manager model'; else echo '[FAIL] backend source + IFS Manager model'; fi
+    if backend_runtime_matches_source; then echo '[OK] backend runtime + IFS Manager model'; else echo '[FAIL] backend runtime + IFS Manager model'; fi
     if backend_include_ok; then echo '[OK] backend config include'; else echo '[FAIL] backend config include'; fi
     if klipper_bridge_source_valid; then echo '[OK] IFS Klipper bridge source'; else echo '[FAIL] IFS Klipper bridge source'; fi
     if klipper_bridge_runtime_matches_source; then echo '[OK] IFS Klipper bridge runtime file'; else echo '[FAIL] IFS Klipper bridge runtime file'; fi
@@ -645,6 +674,8 @@ if [ "$MODE" = --uninstall ]; then
     snapshot "$POWER_ON" power_on.sh
     snapshot "$BACKEND_DEST" backend-runtime.py
     snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+    snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py
+    snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256
     snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
     snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
     UNINSTALL_SUCCESS=0
@@ -660,6 +691,8 @@ if [ "$MODE" = --uninstall ]; then
         restore_snapshot "$POWER_ON" power_on.sh
         restore_snapshot "$BACKEND_DEST" backend-runtime.py
         restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+        restore_snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py
+        restore_snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256
         restore_snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
         restore_snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
         remove_backend_bytecode
@@ -690,7 +723,7 @@ if [ "$MODE" = --uninstall ]; then
     run_moonraker_transition backend_uninstall_transition verify_backend_absent || fail 'backend uninstall lifecycle failed'
     UNINSTALL_SUCCESS=1
     trap - EXIT HUP INT TERM
-    echo 'Интеграция отключена. Backend и IFS bridge удалены; исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
+    echo 'Интеграция отключена. Backend, IFS Manager model и IFS bridge удалены; исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
     exit 0
 fi
 
@@ -718,6 +751,8 @@ rollback_install(){
     restore_snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
     restore_snapshot "$BACKEND_DEST" backend-runtime.py
     restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+    restore_snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py
+    restore_snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256
     restore_snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
     restore_snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
     remove_backend_bytecode
@@ -748,6 +783,8 @@ snapshot "$GENERATED/notify.cfg" generated-notify.cfg
 snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
 snapshot "$BACKEND_DEST" backend-runtime.py
 snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py
+snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256
 snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
 snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.cfg "$B/upstream/notify.cfg"
@@ -794,6 +831,6 @@ run_moonraker_transition backend_install_transition verify_backend_runtime || fa
 SUCCESS=1
 trap - EXIT HUP INT TERM
 echo "AD5X Custom применён. Backup: $B"
-echo 'Plugins AD5X backend применён через managed copy и controlled Moonraker lifecycle.'
+echo 'Plugins AD5X backend + IFS Manager model применены через managed copy и controlled Moonraker lifecycle.'
 echo 'IFS Klipper bridge установлен managed-copy; он активируется при следующем firmware restart / включении принтера.'
 echo 'Для активации остальных camera/power-on изменений требуется полное выключение и включение принтера.'
