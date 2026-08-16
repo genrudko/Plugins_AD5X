@@ -25,6 +25,7 @@ on:
       - 'tests/test_plugins_ad5x_ifs_metadata_store.py'
       - 'tests/test_plugins_ad5x_ifs_model.py'
       - 'tests/test_plugins_ad5x_ifs_manager_contract.py'
+      - 'tests/test_plugins_ad5x_ifs_projection.py'
       - '.github/workflows/ad5x-ifs-bridge-preflight.yml'
   workflow_dispatch:
 
@@ -65,6 +66,7 @@ jobs:
           grep -Fq 'ad5x_ifs_manage.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
           grep -Fq 'ad5x_ifs_metadata.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
           grep -Fq '/server/plugins_ad5x/ifs/metadata' moonraker/components/plugins_ad5x.py
+          grep -Fq '/server/plugins_ad5x/ifs/job/preview' moonraker/components/plugins_ad5x.py
       - name: Run Plugins AD5X backend and IFS tests
         run: |
           python -m unittest -v \
@@ -74,6 +76,7 @@ jobs:
             tests.test_plugins_ad5x_ifs_metadata_store \
             tests.test_plugins_ad5x_ifs_model \
             tests.test_plugins_ad5x_ifs_manager_contract \
+            tests.test_plugins_ad5x_ifs_projection \
             tests.test_ad5x_ifs_bridge \
             tests.test_installer_backend_lifecycle \
             tests.test_installer_ifs_bridge_lifecycle \
