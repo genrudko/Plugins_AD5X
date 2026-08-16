@@ -3,14 +3,15 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** PRE-MOTION / NOT YET COMPLETE  
+**Status:** PRE-MOTION / PREFLIGHT COMPLETE  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
 
 - run_id: `gate-c-001-ambient-back-to-back-2026-08-17`
 - condition class: short-term/back-to-back ambient repeatability
-- hardware context: same post-adjustment AD5X setup as Gate A and Gate B run 001 unless a later section records a physical change
+- Plugins AD5X repository SHA at preflight: `9f32e19c883d605853b7c928925cab661a87f935`
+- hardware context: same post-adjustment AD5X setup as Gate A and Gate B run 001; no physical change was reported before this preflight
 - Z-Mod: `1.7.2-5`, branch `1.7`, checkout `2e32155d00e464094b8c7197e23783ec821a112c`
 - Klipper runtime: `v0.13.0-753-g0df153f7-ZMOD-20260816`
 - Klipper inspected checkout: `6bd8fca222811d465b4be3b0ed862915d6caf59e`
@@ -35,6 +36,60 @@ cleanup confirmed       = true
 
 This Gate C run must produce an independent series with its own fresh homing/tare path. The previous series is not reused as current measurement data.
 
+## Pre-motion snapshot
+
+Source: owner-provided read-only Moonraker object query immediately before the repeatability run.
+
+### Runtime state
+
+```text
+print_stats.state          = standby
+print_stats.filename       = ""
+toolhead.homed_axes        = xyz
+toolhead.position          = [107.5, 107.5, 5.0, 0.0]
+gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
+gcode_move.position        = [107.5, 107.5, 6.925833, 0.0]
+gcode_move.gcode_position  = [107.5, 107.5, 6.925833, 0.0]
+```
+
+Interpretation:
+
+- printer remains idle/standby;
+- all axes remain homed from the previous run, but Gate C intentionally requires a fresh `G28` for independent path repeatability;
+- standard Klipper effective Z offset remains `0.0 mm` (`homing_origin[2]`);
+- the `6.925833` G-code Z with physical/toolhead Z `5.0` is the expected active-mesh transform at the center and is not a new standard Z offset.
+
+### Active/saved mesh state
+
+```text
+bed_mesh.profile_name = auto
+mesh_min              = [0.0, 0.0]
+mesh_max              = [215.0, 215.0]
+```
+
+The raw `auto` profile supplied by the live object query matches the Gate-A/Gate-B matrix. `MESH_DATA` and `auto` remain present in the saved profile map.
+
+### Thermal state
+
+```text
+heater_bed.temperature = 25.79 C
+heater_bed.target      = 0.0 C
+extruder.temperature   = 26.55 C
+extruder.target        = 0.0 C
+```
+
+This is a second ambient/cold observation immediately following Gate B, suitable for short-term/back-to-back repeatability evidence.
+
+### Persistence guard
+
+Pre-run `/opt/config/printer.cfg` SHA-256:
+
+```text
+eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
+```
+
+This exactly matches the Gate-B pre/post hash. Post-run evidence must compare it again.
+
 ## Planned semantics
 
 ```text
@@ -53,9 +108,6 @@ No `SAVE_CONFIG`, persistent user-trim mutation, saved-mesh overwrite/delete, Pl
 
 ## Pending
 
-- exact Plugins AD5X repository SHA at preflight: PENDING
-- exact thermal/pre-motion state: PENDING
-- pre-run `printer.cfg` hash: PENDING
 - fresh homing result: PENDING
 - tare observation: PENDING
 - raw 10-sample reference series: PENDING
