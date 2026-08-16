@@ -8,20 +8,28 @@ on:
       - 'moonraker/components/plugins_ad5x_zactions.py'
       - 'moonraker/components/plugins_ad5x_zpolicy.py'
       - 'moonraker/components/plugins_ad5x_zorchestrator.py'
+      - 'moonraker/components/plugins_ad5x_zcleanup_safety.py'
+      - 'moonraker/components/plugins_ad5x_zevidence.py'
       - 'tests/test_z_calibration_actions.py'
       - 'tests/test_z_calibration_policy_gate.py'
       - 'tests/test_z_calibration_orchestrator.py'
       - 'tests/test_z_calibration_orchestrator_atomicity.py'
+      - 'tests/test_z_calibration_cleanup_safety.py'
+      - 'tests/test_z_calibration_hardware_evidence.py'
       - '.github/workflows/z-calibration-actions.yml'
   pull_request:
     paths:
       - 'moonraker/components/plugins_ad5x_zactions.py'
       - 'moonraker/components/plugins_ad5x_zpolicy.py'
       - 'moonraker/components/plugins_ad5x_zorchestrator.py'
+      - 'moonraker/components/plugins_ad5x_zcleanup_safety.py'
+      - 'moonraker/components/plugins_ad5x_zevidence.py'
       - 'tests/test_z_calibration_actions.py'
       - 'tests/test_z_calibration_policy_gate.py'
       - 'tests/test_z_calibration_orchestrator.py'
       - 'tests/test_z_calibration_orchestrator_atomicity.py'
+      - 'tests/test_z_calibration_cleanup_safety.py'
+      - 'tests/test_z_calibration_hardware_evidence.py'
       - '.github/workflows/z-calibration-actions.yml'
   workflow_dispatch:
 
@@ -44,9 +52,13 @@ jobs:
           moonraker/components/plugins_ad5x_zorchestrator.py
           moonraker/components/plugins_ad5x_zpolicy.py
           moonraker/components/plugins_ad5x_zactions.py
+          moonraker/components/plugins_ad5x_zcleanup_safety.py
+          moonraker/components/plugins_ad5x_zevidence.py
           tests/test_z_calibration_orchestrator.py
           tests/test_z_calibration_orchestrator_atomicity.py
           tests/test_z_calibration_policy_gate.py
           tests/test_z_calibration_actions.py
+          tests/test_z_calibration_cleanup_safety.py
+          tests/test_z_calibration_hardware_evidence.py
       - name: Run complete repository suite
         run: python -m unittest discover -s tests -p 'test_*.py' -v
