@@ -32,6 +32,8 @@ Z_DIAGNOSTIC_CAPACITY = 64
 Z_EFFECTIVE_OFFSET_TOLERANCE = 1e-6
 
 Z_REMOTE_JOB_START = "plugins_ad5x_z_job_start"
+Z_HOOK_OBJECT = "gcode_macro _USER_START_PRINT"
+Z_HOOK_MARKER = "plugins_ad5x_z_hook"
 _Z_TERMINAL_JOB_EVENTS = {"complete", "cancelled", "error", "standby"}
 _Z_START_MODES = {"global", "job", "none"}
 
@@ -40,6 +42,7 @@ _Z_CAPABILITIES = [
     "diagnostic_history",
     "zmod_post_start_adoption",
     "job_lifecycle_cleanup",
+    "runtime_hook_detection",
 ]
 
 
@@ -56,6 +59,8 @@ class PluginsAD5X:
         self._z_runtime_signature: Optional[tuple[Any, ...]] = None
         self._z_last_error: Optional[str] = None
         self._z_last_actual: Optional[float] = None
+        self._z_hook_loaded = False
+        self._z_hook_status = "unknown"
         self._z_offsets = zcore.OffsetComposition() if zcore is not None else None
         self._z_diagnostics = (
             zcore.BoundedDiagnosticLog(Z_DIAGNOSTIC_CAPACITY)
@@ -170,7 +175,8 @@ class PluginsAD5X:
                 "calibration": {
                     "state": "idle",
                     "motion_actions_enabled": False,
-                    "offset_hook_enabled": False,
+                    "offset_hook_enabled": self._z_hook_loaded,
+                    "offset_hook_status": self._z_hook_status,
                     "offset_write_enabled": self._z_write_enabled,
                 },
                 "offset": offset_state,
@@ -242,11 +248,15 @@ class PluginsAD5X:
                 default=None,
             )
             actual, print_state, homed_axes = self._parse_klippy_z_state(status)
+            hook_loaded, hook_status = await self._detect_z_hook(klippy_apis)
             previous_external = self._z_offsets.external_unknown
+            previous_hook_status = self._z_hook_status
             self._z_offsets = self._z_offsets.reconcile_actual(
                 actual, tolerance=Z_EFFECTIVE_OFFSET_TOLERANCE
             )
             self._z_last_actual = actual
+            self._z_hook_loaded = hook_loaded
+            self._z_hook_status = hook_status
             self._z_runtime = {
                 "klippy": "ready",
                 "print_state": print_state,
@@ -264,12 +274,15 @@ class PluginsAD5X:
                 homed_axes,
                 round(actual, 9),
                 round(self._z_offsets.external_unknown, 9),
+                hook_loaded,
+                hook_status,
             )
             semantic_change = signature != self._z_runtime_signature
             self._z_runtime_signature = signature
             if self._z_diagnostics is not None and (
                 force_diagnostic
                 or semantic_change
+                or previous_hook_status != hook_status
                 or abs(previous_external - self._z_offsets.external_unknown)
                 > Z_EFFECTIVE_OFFSET_TOLERANCE
             ):
@@ -282,6 +295,7 @@ class PluginsAD5X:
                         "external_unknown": self._z_offsets.external_unknown,
                         "print_state": print_state,
                         "homed_axes": homed_axes,
+                        "offset_hook_status": hook_status,
                     },
                 )
         except Exception as exc:
@@ -290,6 +304,29 @@ class PluginsAD5X:
                 detail=type(exc).__name__,
                 force_diagnostic=force_diagnostic,
             )
+
+    async def _detect_z_hook(self, klippy_apis: Any) -> tuple[bool, str]:
+        """Detect the optional Klipper hook without degrading the whole module."""
+        try:
+            status = await klippy_apis.query_objects(
+                {Z_HOOK_OBJECT: [Z_HOOK_MARKER]},
+                default=None,
+            )
+        except Exception:
+            return False, "unknown"
+        if not isinstance(status, Mapping):
+            return False, "unknown"
+        macro = status.get(Z_HOOK_OBJECT)
+        if macro is None:
+            return False, "absent"
+        if not isinstance(macro, Mapping):
+            return False, "malformed"
+        marker = macro.get(Z_HOOK_MARKER)
+        if marker == 1:
+            return True, "loaded"
+        if marker is None:
+            return False, "absent"
+        return False, "incompatible"
 
     @staticmethod
     def _parse_klippy_z_state(status: Any) -> tuple[float, str, str]:
@@ -330,6 +367,8 @@ class PluginsAD5X:
         self._z_runtime_signature = signature
         self._z_last_error = reason
         self._z_last_actual = None
+        self._z_hook_loaded = False
+        self._z_hook_status = "unknown"
         self._z_runtime = {
             "klippy": "unavailable",
             "print_state": "unknown",
@@ -373,6 +412,10 @@ class PluginsAD5X:
                     "A different Z job lifecycle is already active", 409
                 )
             await self._refresh_z_runtime(force_diagnostic=True)
+            if not self._z_hook_loaded:
+                raise self._server_error(
+                    "Plugins AD5X Z lifecycle hook is not loaded", 409
+                )
             return {
                 "status": "already_applied",
                 "revision": self._revision,
@@ -382,6 +425,10 @@ class PluginsAD5X:
         await self._refresh_z_runtime(force_diagnostic=True)
         if self._z_runtime.get("klippy") != "ready" or self._z_last_actual is None:
             raise self._server_error("Klippy is not ready for Z adoption", 503)
+        if not self._z_hook_loaded:
+            raise self._server_error(
+                "Plugins AD5X Z lifecycle hook is not loaded", 409
+            )
         print_state = self._z_runtime.get("print_state")
         if print_state not in {"standby", "printing"}:
             raise self._server_error(
