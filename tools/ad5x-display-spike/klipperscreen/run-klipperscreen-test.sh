@@ -9,8 +9,8 @@ CONFIG="$APPROOT/KlipperScreen.conf"
 LOG=/tmp/KlipperScreen.log
 
 export PATH="$RUNTIME/bin${PATH:+:$PATH}"
-export LD_LIBRARY_PATH="$RUNTIME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export PYTHONPATH="$APPROOT/lib/python3.12/site-packages:$RUNTIME/lib/python3.12/site-packages:$APP${PYTHONPATH:+:$PYTHONPATH}"
+export LD_LIBRARY_PATH="$APPROOT/lib:$RUNTIME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PYTHONPATH="$APPROOT/lib/python3.12/lib-dynload:$APPROOT/lib/python3.12/site-packages:$RUNTIME/lib/python3.12/site-packages:$APP${PYTHONPATH:+:$PYTHONPATH}"
 export GI_TYPELIB_PATH="$RUNTIME/lib/girepository-1.0"
 export XDG_DATA_DIRS="$RUNTIME/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
 export FONTCONFIG_PATH="$RUNTIME/etc/fonts"
@@ -41,8 +41,12 @@ if [ ! -f "$CONFIG" ]; then
     echo "ERROR: missing Stage 4 config at $CONFIG" >&2
     exit 1
 fi
+if [ ! -d "$APPROOT/lib/python3.12/lib-dynload" ]; then
+    echo "ERROR: missing Stage 4 Python network delta" >&2
+    exit 1
+fi
 
-"$PYTHON" -c 'import gi, jinja2, requests, websocket, cairo; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk; print("KS_IMPORTS_OK", Gtk.get_major_version(), Gtk.get_minor_version(), jinja2.__version__, requests.__version__, websocket.__version__, cairo.version)'
+"$PYTHON" -c 'import cairo,gi,hashlib,jinja2,requests,ssl,websocket,zlib; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk; print("KS_IMPORTS_OK", Gtk.get_major_version(), Gtk.get_minor_version(), jinja2.__version__, requests.__version__, websocket.__version__, cairo.version, zlib.ZLIB_VERSION, ssl.OPENSSL_VERSION, hashlib.sha256(b"ad5x").hexdigest()[:12])'
 
 TOUCH_EVENT=""
 for namefile in /sys/class/input/event*/device/name; do
