@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** HEATED HOMING COMPLETE / CENTER MOVE PENDING  
+**Status:** HOT CENTER POSITION ESTABLISHED / TARE PENDING  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -134,11 +134,49 @@ Interpretation:
 - nozzle heater remained off while passive nozzle temperature rose further to `30.54 C`;
 - printer remained standby and no stop condition was observed.
 
+## Heated-condition controlled center/non-contact positioning
+
+Command path:
+
+```text
+G90
+G1 X107.5 Y107.5 F3000
+G1 Z5 F300
+M400
+```
+
+The command returned `ok`. Post-move live state:
+
+```text
+heater_bed.temperature     = 59.96 C
+heater_bed.target          = 60.0 C
+heater_bed.power           = 0.0612670134
+extruder.temperature       = 30.07 C
+extruder.target            = 0.0 C
+print_stats.state          = standby
+toolhead.homed_axes        = xyz
+toolhead.position          = [107.5, 107.5, 5.0, 0.0]
+gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
+gcode_move.position        = [107.5, 107.5, 5.0, 0.0]
+gcode_move.gcode_position  = [107.5, 107.5, 5.0, 0.0]
+bed_mesh.profile_name      = ""
+```
+
+Saved `MESH_DATA` and `auto` profiles remained present and unchanged in the live profile map.
+
+Interpretation:
+
+- the physical/toolhead and G-code coordinates agree at the controlled no-mesh center position;
+- standard Klipper effective Z offset remains `0.0 mm`;
+- runtime mesh remains cleared;
+- the bed remains effectively at the 60 C target condition (`59.96 C` actual);
+- the nozzle heater remains off, with passive nozzle temperature `30.07 C`;
+- printer remains standby and no stop condition is observed.
+
 ## Remaining planned path
 
 ```text
-X107.5/Y107.5/Z5
-→ fresh LOAD_CELL_TARE
+fresh LOAD_CELL_TARE
 → PROBE_ACCURACY SAMPLES=10
 → explicit Z5 retract
 → restore saved auto mesh at runtime
@@ -149,7 +187,6 @@ No `SAVE_CONFIG`, persistent trim mutation, saved-mesh overwrite/delete, Plugins
 
 ## Pending
 
-- controlled center/non-contact positioning: PENDING
 - tare observation: PENDING
 - raw 10-sample series: PENDING
 - descriptive statistics: PENDING
