@@ -1,0 +1,265 @@
+name: AD5X IFS job preview patch
+
+on:
+  push:
+    branches:
+      - feature/ifs-manager-v1
+    paths:
+      - '.github/workflows/ad5x-ifs-job-preview-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/ifs-manager-v1
+      - name: Patch backend and contracts
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              assert count == 1, f'{label}: expected 1 occurrence, found {count}'
+              return text.replace(old, new, 1)
+
+          backend_path = Path('moonraker/components/plugins_ad5x.py')
+          text = backend_path.read_text()
+          text = replace_once(text, 'BACKEND_VERSION = "0.1.5"', 'BACKEND_VERSION = "0.1.6"', 'backend version')
+          text = replace_once(
+              text,
+              'IFS_METADATA_ENDPOINT = "/server/plugins_ad5x/ifs/metadata"\n',
+              'IFS_METADATA_ENDPOINT = "/server/plugins_ad5x/ifs/metadata"\nIFS_JOB_PREVIEW_ENDPOINT = "/server/plugins_ad5x/ifs/job/preview"\n',
+              'job endpoint constant',
+          )
+          text = replace_once(
+              text,
+              'SAFE_FILAMENT_OP_PRINT_STATES = {"standby", "complete", "cancelled", "error"}\n',
+              'SAFE_FILAMENT_OP_PRINT_STATES = {"standby", "complete", "cancelled", "error"}\nSAFE_JOB_PREVIEW_PRINT_STATES = {"standby", "complete", "cancelled", "error"}\nIFS_JOB_PREVIEW_COMMAND = "AD5X_IFS_JOB_PREVIEW"\n',
+              'preview constants',
+          )
+          metadata_registration = '''        self.server.register_endpoint(
+            IFS_METADATA_ENDPOINT,
+            RequestType.POST,
+            self._handle_ifs_metadata,
+            transports=TransportType.HTTP | TransportType.WEBSOCKET,
+            auth_required=True,
+        )
+'''
+          text = replace_once(
+              text,
+              metadata_registration,
+              metadata_registration + '''        self.server.register_endpoint(
+            IFS_JOB_PREVIEW_ENDPOINT,
+            RequestType.POST,
+            self._handle_ifs_job_preview,
+            transports=TransportType.HTTP | TransportType.WEBSOCKET,
+            auth_required=True,
+        )
+''',
+              'preview endpoint registration',
+          )
+          insertion_point = '    async def _refresh_live_after_action(self, klippy_apis: Any) -> None:\n'
+          preview_methods = '''    @staticmethod
+    def _job_preview_rejection(filename: str, error: str) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "filename": filename,
+            "error": error,
+        }
+
+    @staticmethod
+    def _job_preview_filename_valid(filename: str) -> bool:
+        if not isinstance(filename, str):
+            return False
+        filename = filename.strip()
+        if (
+            not filename
+            or filename.startswith("/")
+            or "\\x00" in filename
+            or '"' in filename
+            or "\\n" in filename
+            or "\\r" in filename
+        ):
+            return False
+        parts = filename.replace("\\\\", "/").split("/")
+        return all(part not in ("", "..") for part in parts)
+
+    async def _handle_ifs_job_preview(self, web_request: Any) -> Dict[str, Any]:
+        try:
+            filename = web_request.get_str("filename").strip()
+        except Exception as exc:
+            return self._job_preview_rejection(
+                "", f"Invalid IFS job preview request: {exc}"
+            )
+
+        if not self._job_preview_filename_valid(filename):
+            return self._job_preview_rejection(filename, "Invalid IFS job preview filename")
+        if self._ifs_module is None or not self._ifs_module.get("available", False):
+            return self._job_preview_rejection(filename, "IFS bridge is not available")
+        if self._operation_state != "idle":
+            return self._job_preview_rejection(
+                filename, "IFS operation is already running"
+            )
+        if self._print_state not in SAFE_JOB_PREVIEW_PRINT_STATES:
+            return self._job_preview_rejection(
+                filename,
+                f"IFS job preview is blocked while print state is {self._print_state}",
+            )
+
+        command = f'{IFS_JOB_PREVIEW_COMMAND} FILENAME="{filename}"'
+        try:
+            klippy_apis = self.server.lookup_component("klippy_apis")
+            await klippy_apis.run_gcode(command)
+            status = await klippy_apis.query_objects({IFS_OBJECT: None}, default={})
+        except Exception as exc:
+            return self._job_preview_rejection(
+                filename, str(exc) or exc.__class__.__name__
+            )
+
+        payload = status.get(IFS_OBJECT) if isinstance(status, dict) else None
+        if isinstance(payload, dict):
+            self._ifs_raw.update(payload)
+            self._set_ifs_module(self._compose_ifs_module())
+
+        module = self._ifs_module if isinstance(self._ifs_module, dict) else {}
+        preview = module.get("job_preview")
+        if not isinstance(preview, dict) or not preview.get("available", False):
+            error = (
+                preview.get("error")
+                if isinstance(preview, dict)
+                else "job_preview_not_published"
+            )
+            return self._job_preview_rejection(
+                filename, f"Z-Mod job preview unavailable: {error or 'unknown'}"
+            )
+
+        return {
+            "ok": True,
+            "filename": filename,
+            "job_preview": dict(preview),
+            "snapshot": self.get_snapshot(),
+        }
+
+'''
+          text = replace_once(text, insertion_point, preview_methods + insertion_point, 'preview methods')
+          backend_path.write_text(text)
+
+          model_path = Path('moonraker/components/plugins_ad5x_ifs_model.py')
+          text = model_path.read_text()
+          text = replace_once(text, '            "manage": True,\n', '            "manage": True,\n            "preview_job": True,\n', 'model preview action')
+          text = replace_once(text, '        "slicer": False,\n', '        "slicer": True,\n', 'model slicer integration')
+          text = replace_once(
+              text,
+              '            "tool_to_slot": True,\n            "endless_spool": False,\n',
+              '            "tool_to_slot": True,\n            "preprint_preview": True,\n            "apply_preprint_mapping": False,\n            "endless_spool": False,\n',
+              'model mapping capabilities',
+          )
+          model_path.write_text(text)
+
+          version_path = Path('VERSION')
+          assert version_path.read_text().strip() == '0.1.5'
+          version_path.write_text('0.1.6\n')
+
+          component_test = Path('tests/test_plugins_ad5x_component.py')
+          text = component_test.read_text()
+          text = replace_once(
+              text,
+              '                component_module.IFS_METADATA_ENDPOINT,\n',
+              '                component_module.IFS_METADATA_ENDPOINT,\n                component_module.IFS_JOB_PREVIEW_ENDPOINT,\n',
+              'component endpoint set',
+          )
+          text = replace_once(
+              text,
+              '        metadata = endpoints[component_module.IFS_METADATA_ENDPOINT]\n        self.assertEqual(metadata["request_types"], RequestType.POST)\n\n        for endpoint in (snapshot, action, metadata):\n',
+              '        metadata = endpoints[component_module.IFS_METADATA_ENDPOINT]\n        self.assertEqual(metadata["request_types"], RequestType.POST)\n        preview = endpoints[component_module.IFS_JOB_PREVIEW_ENDPOINT]\n        self.assertEqual(preview["request_types"], RequestType.POST)\n\n        for endpoint in (snapshot, action, metadata, preview):\n',
+              'component endpoint method',
+          )
+          text = replace_once(
+              text,
+              '        metadata_rpc = metadata["endpoint"].strip("/").replace("/", ".")\n        self.assertEqual(snapshot_rpc, "server.plugins_ad5x.snapshot")\n        self.assertEqual(action_rpc, "server.plugins_ad5x.ifs.action")\n        self.assertEqual(metadata_rpc, "server.plugins_ad5x.ifs.metadata")\n',
+              '        metadata_rpc = metadata["endpoint"].strip("/").replace("/", ".")\n        preview_rpc = preview["endpoint"].strip("/").replace("/", ".")\n        self.assertEqual(snapshot_rpc, "server.plugins_ad5x.snapshot")\n        self.assertEqual(action_rpc, "server.plugins_ad5x.ifs.action")\n        self.assertEqual(metadata_rpc, "server.plugins_ad5x.ifs.metadata")\n        self.assertEqual(preview_rpc, "server.plugins_ad5x.ifs.job.preview")\n',
+              'component endpoint rpc',
+          )
+          component_test.write_text(text)
+
+          model_test = Path('tests/test_plugins_ad5x_ifs_model.py')
+          text = model_test.read_text()
+          text = replace_once(
+              text,
+              '        self.assertTrue(capabilities["actions"]["unload_slot"])\n',
+              '        self.assertTrue(capabilities["actions"]["unload_slot"])\n        self.assertTrue(capabilities["actions"]["preview_job"])\n',
+              'model test preview action',
+          )
+          text = replace_once(
+              text,
+              '        self.assertFalse(capabilities["integrations"]["spoolman"])\n        self.assertFalse(capabilities["metadata"]["rfid"])\n        self.assertFalse(capabilities["mapping"]["endless_spool"])\n',
+              '        self.assertFalse(capabilities["integrations"]["spoolman"])\n        self.assertTrue(capabilities["integrations"]["slicer"])\n        self.assertFalse(capabilities["metadata"]["rfid"])\n        self.assertTrue(capabilities["mapping"]["preprint_preview"])\n        self.assertFalse(capabilities["mapping"]["apply_preprint_mapping"])\n        self.assertFalse(capabilities["mapping"]["endless_spool"])\n',
+              'model test integration capability',
+          )
+          model_test.write_text(text)
+
+          contract_test = Path('tests/test_plugins_ad5x_ifs_manager_contract.py')
+          text = contract_test.read_text()
+          text = replace_once(
+              text,
+              '        self.assertFalse(caps["integrations"]["slicer"])\n',
+              '        self.assertTrue(caps["integrations"]["slicer"])\n',
+              'contract slicer integration',
+          )
+          text = replace_once(
+              text,
+              '        self.assertFalse(caps["mapping"]["endless_spool"])\n',
+              '        self.assertTrue(caps["mapping"]["preprint_preview"])\n        self.assertFalse(caps["mapping"]["apply_preprint_mapping"])\n        self.assertFalse(caps["mapping"]["endless_spool"])\n',
+              'contract mapping preview',
+          )
+          contract_test.write_text(text)
+
+          workflow = Path('.github/workflows/ad5x-ifs-bridge-preflight.yml')
+          text = workflow.read_text()
+          text = replace_once(
+              text,
+              "      - 'tests/test_plugins_ad5x_ifs_backend.py'\n",
+              "      - 'tests/test_plugins_ad5x_ifs_backend.py'\n      - 'tests/test_plugins_ad5x_ifs_job_preview.py'\n",
+              'preflight path',
+          )
+          text = replace_once(
+              text,
+              '            tests.test_plugins_ad5x_ifs_backend \\\n',
+              '            tests.test_plugins_ad5x_ifs_backend \\\n            tests.test_plugins_ad5x_ifs_job_preview \\\n',
+              'preflight test suite',
+          )
+          workflow.write_text(text)
+          PY
+
+          python3 -m py_compile \
+            klipper/extras/ad5x_ifs.py \
+            moonraker/components/plugins_ad5x.py \
+            moonraker/components/plugins_ad5x_ifs_model.py \
+            tests/test_plugins_ad5x_ifs_job_preview.py
+          git diff --check
+          python3 -m unittest -v \
+            tests.test_ad5x_ifs_bridge \
+            tests.test_plugins_ad5x_component \
+            tests.test_plugins_ad5x_ifs_backend \
+            tests.test_plugins_ad5x_ifs_job_preview \
+            tests.test_plugins_ad5x_ifs_model \
+            tests.test_plugins_ad5x_ifs_manager_contract
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add VERSION \
+            moonraker/components/plugins_ad5x.py \
+            moonraker/components/plugins_ad5x_ifs_model.py \
+            tests/test_plugins_ad5x_component.py \
+            tests/test_plugins_ad5x_ifs_model.py \
+            tests/test_plugins_ad5x_ifs_manager_contract.py \
+            .github/workflows/ad5x-ifs-bridge-preflight.yml
+          git commit -m 'feat(ifs): expose Z-Mod delegated job preview API'
+          git push origin HEAD:feature/ifs-manager-v1
