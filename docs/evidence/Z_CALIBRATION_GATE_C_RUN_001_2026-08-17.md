@@ -18,91 +18,41 @@
 - Moonraker API: `1.5.0`, inspected checkout `a5ac2593f5937a0b5fea6d2aeb1fab8c241b0a8e`
 - command transport: SSH → Z-Mod chroot → local Moonraker → ordinary Klipper/Z-Mod G-code path
 
-## Previous accepted evidence context
-
-Gate B run 001 completed cleanly immediately before this run:
-
-```text
-reference average       = -1.985500 mm
-reference median        = -1.986250 mm
-reference range         =  0.017500 mm
-first-to-last drift     = +0.010000 mm
-saved auto center       = -1.925833 mm
-current-minus-saved     = -0.059667 mm
-persistent state change = false
-saved mesh change       = false
-cleanup confirmed       = true
-```
-
-This Gate C run produced an independent series with its own fresh homing/tare path. The previous series was not reused as current measurement data.
-
-## Pre-motion snapshot
-
-Source: owner-provided read-only Moonraker object query immediately before the repeatability run.
-
-### Runtime state
+## Pre-motion / persistence baseline
 
 ```text
 print_stats.state          = standby
-print_stats.filename       = ""
 toolhead.homed_axes        = xyz
 toolhead.position          = [107.5, 107.5, 5.0, 0.0]
 gcode_move.homing_origin   = [0.0, 0.0, 0.0, 0.0]
-gcode_move.position        = [107.5, 107.5, 6.925833, 0.0]
-gcode_move.gcode_position  = [107.5, 107.5, 6.925833, 0.0]
+bed_mesh.profile_name      = auto
+heater_bed.temperature     = 25.79 C
+heater_bed.target          = 0.0 C
+extruder.temperature       = 26.55 C
+extruder.target            = 0.0 C
+printer.cfg SHA-256        = eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
 ```
 
-Interpretation:
+The active `auto` raw matrix matched Gate A/Gate B and both saved profiles `auto` and `MESH_DATA` remained present.
 
-- printer remained idle/standby;
-- all axes were homed from the previous run, but Gate C intentionally performed a fresh `G28` for independent path repeatability;
-- standard Klipper effective Z offset remained `0.0 mm` (`homing_origin[2]`);
-- the `6.925833` G-code Z with physical/toolhead Z `5.0` was the expected active-mesh transform at the center and was not a new standard Z offset.
-
-### Active/saved mesh state
-
-```text
-bed_mesh.profile_name = auto
-mesh_min              = [0.0, 0.0]
-mesh_max              = [215.0, 215.0]
-```
-
-The raw `auto` profile supplied by the live object query matched the Gate-A/Gate-B matrix. `MESH_DATA` and `auto` remained present in the saved profile map.
-
-### Thermal state
-
-```text
-heater_bed.temperature = 25.79 C
-heater_bed.target      = 0.0 C
-extruder.temperature   = 26.55 C
-extruder.target        = 0.0 C
-```
-
-This was a second ambient/cold observation immediately following Gate B, suitable for short-term/back-to-back repeatability evidence.
-
-### Persistence guard
-
-Pre-run `/opt/config/printer.cfg` SHA-256:
-
-```text
-eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
-```
-
-This exactly matched the Gate-B pre/post hash.
-
-## Controlled path evidence
-
-### Runtime mesh clear + fresh ordinary homing
-
-Commands:
+## Controlled path
 
 ```text
 BED_MESH_CLEAR
-G28
-M400
+→ fresh G28
+→ G90 / X107.5 Y107.5 / Z5
+→ LOAD_CELL_TARE
+→ PROBE_ACCURACY SAMPLES=10
+→ explicit G1 Z5 retract
+→ BED_MESH_PROFILE LOAD=auto
+→ post-state/hash verification
 ```
 
-Post-G28 live state:
+No `SAVE_CONFIG`, persistent user-trim mutation, saved-mesh overwrite/delete, Plugins AD5X Z-offset write, or production Plugins AD5X motion adapter was used.
+
+### Fresh homing
+
+Post-G28:
 
 ```text
 print_stats.state        = standby
@@ -112,41 +62,9 @@ gcode_move.homing_origin = [0.0, 0.0, 0.0, 0.0]
 bed_mesh.profile_name    = ""
 ```
 
-Saved `MESH_DATA` and `auto` profiles remained present. Owner reported homing visually normal.
+Owner reported homing visually normal.
 
-### Controlled center/non-contact positioning
-
-Command path:
-
-```text
-G90
-G1 X107.5 Y107.5 F3000
-G1 Z5 F300
-M400
-```
-
-Post-move live state:
-
-```text
-print_stats.state        = standby
-toolhead.homed_axes      = xyz
-toolhead.position        = [107.5, 107.5, 5.0, 0.0]
-gcode_move.homing_origin = [0.0, 0.0, 0.0, 0.0]
-gcode_move.position      = [107.5, 107.5, 5.0, 0.0]
-bed_mesh.profile_name    = ""
-```
-
-No runtime mesh was active and no standard Klipper Z offset was introduced.
-
-### Fresh load-cell tare
-
-Command:
-
-```text
-LOAD_CELL_TARE
-```
-
-Observed Z-Mod responses:
+### Fresh tare
 
 ```text
 H1 > command H1 ok. 8425884
@@ -154,24 +72,9 @@ N 1. Вес: 0.0
 Сброс тензодатчка: ОК. Вес: 0.0->0.0
 ```
 
-Interpretation: this independent run's tare succeeded on the first reported attempt with residual `0.0 g`. This is retained as descriptive H7/tare evidence only.
+Tare succeeded on the first reported attempt with residual `0.0 g`.
 
-### Independent repeated reference series
-
-Command:
-
-```text
-PROBE_ACCURACY SAMPLES=10
-```
-
-Klipper/Z-Mod reported:
-
-```text
-PROBE_ACCURACY at X:107.500 Y:107.500 Z:5.000
-samples=10 retract=2.000 speed=2.0 lift_speed=5.0
-```
-
-User-facing contact estimates, in acquisition order:
+### Independent 10-sample reference series
 
 ```text
 -1.982500
@@ -186,8 +89,6 @@ User-facing contact estimates, in acquisition order:
 -1.977500
 ```
 
-Descriptive statistics reported/derived:
-
 ```text
 maximum             = -1.960000 mm
 minimum             = -1.982500 mm
@@ -198,21 +99,9 @@ standard deviation  =  0.007730 mm
 first→last drift    = +0.005000 mm
 ```
 
-The corresponding raw probe-Z messages remained exactly `0.250000 mm` lower than each user-facing contact estimate, consistent with the configured `[probe] z_offset=-0.25` semantics already established in reverse engineering. These coordinate forms are not mixed in the reference dataset.
+The corresponding raw probe-Z messages remained exactly `0.250000 mm` lower than the user-facing contact estimates, consistent with the already-established configured `[probe] z_offset=-0.25` semantics.
 
-Post-probe state before explicit cleanup:
-
-```text
-print_stats.state        = standby
-toolhead.homed_axes      = xyz
-toolhead.position        = [107.5, 107.5, -0.2275, 0.0]
-gcode_move.homing_origin = [0.0, 0.0, 0.0, 0.0]
-bed_mesh.profile_name    = ""
-```
-
-No standard Klipper Z offset was introduced by the measurement.
-
-## Short-term comparison with Gate B run 001
+## Comparison with Gate B run 001
 
 ```text
                          Gate B run 001      Gate C run 001      C - B
@@ -225,24 +114,15 @@ first→last drift         +0.010000 mm        +0.005000 mm        -0.005000 mm
 
 Descriptive interpretation only:
 
-- the independently homed/tared second ambient series remained tightly clustered and showed no large monotonic drift or old-style transient;
-- its mean was `+0.012500 mm` higher (less negative) than Gate B run 001;
-- both series remained close on the scale of the historical anomalies, but **no acceptance band or motion/search threshold is inferred from two runs**;
-- the saved `auto` center remained `-1.925833 mm`; Gate-C mean minus that saved center is `-0.047167 mm`, retained as observation only and not applied.
+- the independently homed/tared second ambient series remained tightly clustered;
+- no large monotonic drift or historical old-style transient was observed;
+- mean-to-mean difference was `+0.012500 mm`;
+- saved `auto` center remained `-1.925833 mm`; this run's mean minus saved center was `-0.047167 mm`;
+- **no acceptance band, correction threshold or motion/search threshold is inferred from these two ambient runs**.
 
 ## Cleanup / persistence verification
 
-Cleanup command path:
-
-```text
-G90
-G1 Z5 F300
-M400
-BED_MESH_PROFILE LOAD=auto
-M400
-```
-
-Post-cleanup live state:
+Post-cleanup:
 
 ```text
 print_stats.state          = standby
@@ -254,13 +134,9 @@ gcode_move.gcode_position  = [107.5, 107.5, 6.925833, 0.0]
 bed_mesh.profile_name      = auto
 ```
 
-Interpretation:
+The `6.925833` G-code Z with physical/toolhead Z `5.0` is the expected saved-mesh transform at the center, not a standard Z offset.
 
-- explicit retract returned physical/toolhead Z to `5.0 mm`;
-- saved `auto` was restored as the active runtime profile;
-- `homing_origin.z` remained exactly `0.0 mm`;
-- the post-load G-code Z `6.925833` again differs from physical Z by the saved center mesh transform and is not a persistent/user offset;
-- raw `auto` matrix and saved profile map remained unchanged in the live query.
+The raw `auto` matrix and saved profile map remained unchanged.
 
 Post-run `/opt/config/printer.cfg` SHA-256:
 
@@ -268,7 +144,7 @@ Post-run `/opt/config/printer.cfg` SHA-256:
 eeb58320516f538d2dcc3990a99c0da30e3b60dd11445d55e743781d3c8b1891
 ```
 
-It exactly matches the pre-run, Gate-B pre-run and Gate-B post-run hashes.
+It exactly matched the pre-run and Gate-B hashes.
 
 ## Run disposition
 
@@ -281,14 +157,12 @@ saved mesh changed            = false
 stop condition observed       = false
 ```
 
-Therefore `gate-c-001-ambient-back-to-back-2026-08-17` is **structurally complete and suitable for later policy review as repeatability evidence**.
+Therefore `gate-c-001-ambient-back-to-back-2026-08-17` is structurally complete and suitable for later policy review as repeatability evidence.
 
 It does **not** by itself authorize a motion policy, search envelope, correction limit, production adapter or gate opening.
 
-## Dataset note after first repeatability run
+## Dataset note / next condition
 
-The evidence set now contains one clean Gate-B controlled measurement and one clean Gate-C repeatability run under near-identical ambient conditions. This is useful evidence of short-term repeatability, but it is intentionally insufficient to freeze numeric policy because condition diversity is still missing.
+The evidence set now contains one clean Gate-B controlled measurement and one clean Gate-C repeatability run under near-identical ambient conditions. That establishes useful short-term repeatability evidence, but condition diversity is still missing.
 
-## Next evidence condition
-
-Do not spend additional runs on identical immediate ambient repetition unless a later observation creates a reason to do so. The next useful Gate-C condition should be a distinct recorded condition such as the owner's representative PLA bed temperature, followed later by representative higher-bed temperature, reboot/power-cycle and time-separated evidence.
+Do not spend more immediate runs on the identical ambient condition unless a later observation creates a reason. The next useful Gate-C run should use the owner's **actual representative PLA bed temperature**, followed later by representative higher-bed temperature, reboot/power-cycle and time-separated evidence.
