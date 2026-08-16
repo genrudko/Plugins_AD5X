@@ -13,8 +13,6 @@ from ..common import RequestType, TransportType
 try:
     from . import plugins_ad5x_zcalibration as zcore
 except Exception as exc:  # pragma: no cover - deployment/lifecycle coverage
-    # Keep the platform component loadable before the installer deploys the
-    # optional helper as part of the managed runtime artifact set.
     zcore = None  # type: ignore[assignment]
     _ZCORE_IMPORT_ERROR: Optional[str] = type(exc).__name__
 else:
@@ -48,6 +46,12 @@ _Z_CAPABILITIES = [
 class PluginsAD5X:
     def __init__(self, config: Any) -> None:
         self.server = config.get_server()
+        getboolean = getattr(config, "getboolean", None)
+        self._z_write_enabled = (
+            bool(getboolean("z_offset_writes_enabled", False))
+            if callable(getboolean)
+            else False
+        )
         self._revision = 1
         self._z_runtime_signature: Optional[tuple[Any, ...]] = None
         self._z_last_error: Optional[str] = None
@@ -144,9 +148,7 @@ class PluginsAD5X:
                 "live_adjustment": self._z_offsets.live_adjustment,
                 "external_unknown": self._z_offsets.external_unknown,
                 "known_total": self._z_offsets.known_total,
-                "effective": (
-                    self._z_offsets.effective if runtime_available else None
-                ),
+                "effective": self._z_offsets.effective if runtime_available else None,
                 "provenance_status": (
                     "external_unknown"
                     if runtime_available
@@ -167,11 +169,9 @@ class PluginsAD5X:
             "state": {
                 "calibration": {
                     "state": "idle",
-                    # B2 still does not expose calibration motion. The only write
-                    # seam is the internal post-START_PRINT offset composition
-                    # hook, which is not installed by the current installer.
                     "motion_actions_enabled": False,
                     "offset_hook_enabled": False,
+                    "offset_write_enabled": self._z_write_enabled,
                 },
                 "offset": offset_state,
                 "job": dict(self._z_job),
@@ -198,12 +198,8 @@ class PluginsAD5X:
         return self.get_snapshot()
 
     async def _handle_z_reconcile(self, _web_request: Any) -> Dict[str, Any]:
-        """Read actual Klipper offset and classify provenance without mutating it."""
         await self._refresh_z_runtime(force_diagnostic=True)
-        return {
-            "revision": self._revision,
-            "module": self._z_module_snapshot(),
-        }
+        return {"revision": self._revision, "module": self._z_module_snapshot()}
 
     async def _handle_z_diagnostics(self, _web_request: Any) -> Dict[str, Any]:
         events = []
@@ -229,15 +225,12 @@ class PluginsAD5X:
                 force_diagnostic=force_diagnostic,
             )
             return
-
         lookup_component = getattr(self.server, "lookup_component", None)
         if not callable(lookup_component):
             self._set_z_runtime_unavailable(
-                "klippy_api_unavailable",
-                force_diagnostic=force_diagnostic,
+                "klippy_api_unavailable", force_diagnostic=force_diagnostic
             )
             return
-
         try:
             klippy_apis = lookup_component("klippy_apis")
             status = await klippy_apis.query_objects(
@@ -251,8 +244,7 @@ class PluginsAD5X:
             actual, print_state, homed_axes = self._parse_klippy_z_state(status)
             previous_external = self._z_offsets.external_unknown
             self._z_offsets = self._z_offsets.reconcile_actual(
-                actual,
-                tolerance=Z_EFFECTIVE_OFFSET_TOLERANCE,
+                actual, tolerance=Z_EFFECTIVE_OFFSET_TOLERANCE
             )
             self._z_last_actual = actual
             self._z_runtime = {
@@ -260,8 +252,6 @@ class PluginsAD5X:
                 "print_state": print_state,
                 "homed_axes": homed_axes,
             }
-            # A successful query clears transport/query errors, but an explicit
-            # apply failure remains sticky until the next safe lifecycle reset.
             if self._z_last_error in {
                 "klippy_disconnected",
                 "klippy_query_failed",
@@ -314,14 +304,12 @@ class PluginsAD5X:
             raise ValueError("missing print_stats status")
         if not isinstance(toolhead, Mapping):
             raise ValueError("missing toolhead status")
-
         origin = gcode_move.get("homing_origin")
         if not isinstance(origin, (list, tuple)) or len(origin) < 3:
             raise ValueError("invalid gcode_move.homing_origin")
         actual = float(origin[2])
         if zcore is not None:
             actual = zcore._finite(actual, "actual_effective")
-
         print_state = print_stats.get("state")
         homed_axes = toolhead.get("homed_axes")
         if not isinstance(print_state, str) or not print_state:
@@ -364,18 +352,11 @@ class PluginsAD5X:
         return RuntimeError(message)
 
     async def _remote_z_job_start(
-        self,
-        mode: str = "none",
-        z_offset: float = 99.0,
+        self, mode: str = "none", z_offset: float = 99.0
     ) -> Dict[str, Any]:
-        """Adopt Z-Mod's completed START_PRINT offset and add owned deltas once.
-
-        Milestone C will install the matching _USER_START_PRINT hook. Until then
-        this remote method is dormant on the printer.
-        """
+        """Adopt Z-Mod's completed START_PRINT offset and add owned deltas once."""
         if zcore is None or self._z_offsets is None:
             raise self._server_error("Z calibration core is unavailable", 503)
-
         mode = str(mode).strip().lower()
         if mode not in _Z_START_MODES:
             raise self._server_error(f"Unsupported Z start mode: {mode}", 400)
@@ -391,8 +372,6 @@ class PluginsAD5X:
                 raise self._server_error(
                     "A different Z job lifecycle is already active", 409
                 )
-            # Idempotent retry: observe only. Never adopt the already-composed
-            # value as a fresh baseline, which would double-apply Auto-Z.
             await self._refresh_z_runtime(force_diagnostic=True)
             return {
                 "status": "already_applied",
@@ -401,12 +380,8 @@ class PluginsAD5X:
             }
 
         await self._refresh_z_runtime(force_diagnostic=True)
-        if (
-            self._z_runtime.get("klippy") != "ready"
-            or self._z_last_actual is None
-        ):
+        if self._z_runtime.get("klippy") != "ready" or self._z_last_actual is None:
             raise self._server_error("Klippy is not ready for Z adoption", 503)
-
         print_state = self._z_runtime.get("print_state")
         if print_state not in {"standby", "printing"}:
             raise self._server_error(
@@ -415,10 +390,7 @@ class PluginsAD5X:
 
         baseline = self._z_last_actual
         previous = self._z_offsets
-
         if mode == "global":
-            # Z-Mod LOAD_GCODE_OFFSET owns this baseline. Do not falsely claim
-            # it as Plugins persistent_user until a later explicit migration.
             if abs(previous.persistent_user) > Z_EFFECTIVE_OFFSET_TOLERANCE:
                 raise self._server_error(
                     "Plugins persistent trim conflicts with Z-Mod global offset ownership",
@@ -438,8 +410,7 @@ class PluginsAD5X:
                 )
             if abs(baseline - source_z) > Z_EFFECTIVE_OFFSET_TOLERANCE:
                 raise self._server_error(
-                    "Observed Z-Mod job offset does not match START_PRINT Z_OFFSET",
-                    409,
+                    "Observed Z-Mod job offset does not match START_PRINT Z_OFFSET", 409
                 )
             adopted = zcore.OffsetComposition(
                 auto_alignment=previous.auto_alignment,
@@ -463,10 +434,27 @@ class PluginsAD5X:
 
         target = adopted.effective
         fallback_target = 0.0 if mode == "job" else baseline
-        self._z_offsets = adopted
+        needs_write = abs(target - baseline) > Z_EFFECTIVE_OFFSET_TOLERANCE
+        if needs_write and not self._z_write_enabled:
+            self._z_last_error = "offset_write_gate_closed"
+            if self._z_diagnostics is not None:
+                self._z_diagnostics.emit(
+                    "offset_write_blocked",
+                    correlation_id="job",
+                    payload={
+                        "mode": mode,
+                        "baseline_effective": baseline,
+                        "requested_target": target,
+                    },
+                )
+            raise self._server_error(
+                "Plugins AD5X Z-offset writes are disabled pending hardware acceptance",
+                409,
+            )
 
+        self._z_offsets = adopted
         try:
-            if abs(target - baseline) > Z_EFFECTIVE_OFFSET_TOLERANCE:
+            if needs_write:
                 klippy_apis = self.server.lookup_component("klippy_apis")
                 script = f"SET_GCODE_OFFSET Z={target:.9f} MOVE=0"
                 await klippy_apis.run_gcode(script)
@@ -487,7 +475,6 @@ class PluginsAD5X:
                     > Z_EFFECTIVE_OFFSET_TOLERANCE
                 ):
                     raise RuntimeError("offset_apply_verification_failed")
-
             self._z_job = {
                 "phase": "active",
                 "mode": mode,
@@ -519,9 +506,7 @@ class PluginsAD5X:
             }
         except Exception as exc:
             await self._best_effort_z_rollback(
-                fallback_target,
-                previous=previous,
-                reason=type(exc).__name__,
+                fallback_target, previous=previous, reason=type(exc).__name__
             )
             raise self._server_error(
                 "Z offset composition failed; fallback/reconciliation was attempted",
@@ -529,11 +514,7 @@ class PluginsAD5X:
             )
 
     async def _best_effort_z_rollback(
-        self,
-        target: float,
-        *,
-        previous: Any,
-        reason: str,
+        self, target: float, *, previous: Any, reason: str
     ) -> None:
         rollback_ok = False
         try:
@@ -549,7 +530,6 @@ class PluginsAD5X:
             )
         except Exception:
             rollback_ok = False
-
         self._z_offsets = previous.clear_transient()
         self._z_job = {
             "phase": "idle",
@@ -598,8 +578,6 @@ class PluginsAD5X:
 
     def _clear_z_job_transients(self, reason: str) -> None:
         if self._z_offsets is not None:
-            # clear_transient intentionally removes Auto-Z/job/live/external and
-            # keeps only explicit persistent user trim.
             self._z_offsets = self._z_offsets.clear_transient()
         self._z_job = {
             "phase": "idle",
@@ -618,8 +596,6 @@ class PluginsAD5X:
         self.invalidate_snapshot()
 
     def _handle_klippy_disconnect(self, *_args: Any) -> None:
-        # A disconnect must never leave a job-scoped correction armed for an
-        # automatic retry after reconnect.
         if self._z_job.get("phase") == "active":
             self._clear_z_job_transients("klippy_disconnect")
         self._set_z_runtime_unavailable("klippy_disconnected")
@@ -632,11 +608,9 @@ class PluginsAD5X:
             self.invalidate_snapshot()
 
     def invalidate_snapshot(self) -> int:
-        """Mark the current snapshot stale after a semantic state change."""
         self._revision += 1
         self.server.send_event(
-            SNAPSHOT_CHANGED_EVENT,
-            {"revision": self._revision},
+            SNAPSHOT_CHANGED_EVENT, {"revision": self._revision}
         )
         return self._revision
 
