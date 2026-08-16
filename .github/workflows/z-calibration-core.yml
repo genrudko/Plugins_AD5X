@@ -7,6 +7,7 @@ on:
     paths:
       - 'moonraker/components/plugins_ad5x.py'
       - 'moonraker/components/plugins_ad5x_zcalibration.py'
+      - 'moonraker/components/plugins_ad5x_zorchestrator.py'
       - 'plugins_ad5x.moonraker.conf'
       - 'ad5x_custom.cfg'
       - 'z_calibration.cfg'
@@ -14,6 +15,7 @@ on:
       - 'installer/z_calibration_runtime.sh'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_z_calibration_core.py'
+      - 'tests/test_z_calibration_orchestrator.py'
       - 'tests/test_installer_backend_lifecycle.py'
       - 'tests/test_z_calibration_lifecycle_assets.py'
       - '.github/workflows/z-calibration-core.yml'
@@ -21,6 +23,7 @@ on:
     paths:
       - 'moonraker/components/plugins_ad5x.py'
       - 'moonraker/components/plugins_ad5x_zcalibration.py'
+      - 'moonraker/components/plugins_ad5x_zorchestrator.py'
       - 'plugins_ad5x.moonraker.conf'
       - 'ad5x_custom.cfg'
       - 'z_calibration.cfg'
@@ -28,6 +31,7 @@ on:
       - 'installer/z_calibration_runtime.sh'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_z_calibration_core.py'
+      - 'tests/test_z_calibration_orchestrator.py'
       - 'tests/test_installer_backend_lifecycle.py'
       - 'tests/test_z_calibration_lifecycle_assets.py'
       - '.github/workflows/z-calibration-core.yml'
@@ -50,8 +54,10 @@ jobs:
           python -m py_compile
           moonraker/components/plugins_ad5x.py
           moonraker/components/plugins_ad5x_zcalibration.py
+          moonraker/components/plugins_ad5x_zorchestrator.py
           tests/test_plugins_ad5x_component.py
           tests/test_z_calibration_core.py
+          tests/test_z_calibration_orchestrator.py
           tests/test_z_calibration_lifecycle_assets.py
       - name: Check shell syntax
         run: sh -n install.sh installer/z_calibration_runtime.sh
