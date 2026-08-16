@@ -133,6 +133,19 @@ class IFSManagerModelTests(unittest.TestCase):
         self.assertFalse(slot["permissions"]["load_slot"])
         self.assertEqual(slot["permissions"]["blocked_reason"], "slot_empty")
 
+    def test_finish_only_metadata_is_not_lost(self):
+        slot = model.normalize_slot(
+            {"slot": 4, "present": False, "stall": False},
+            {"appearance": {"finish": "silk"}},
+            active_slot=1,
+            filament_at_toolhead=False,
+            module_state="ready",
+            print_state="standby",
+            operation_state="idle",
+        )
+        self.assertEqual(slot["appearance"]["finish"], "silk")
+        self.assertEqual(slot["metadata_status"], "stale")
+
     def test_permissions_are_backend_owned_and_fail_closed(self):
         active = model.compute_slot_permissions(
             slot=1,
@@ -198,6 +211,8 @@ class IFSManagerModelTests(unittest.TestCase):
         self.assertFalse(capabilities["actions"]["recovery"])
         self.assertTrue(capabilities["metadata"]["multi_color"])
         self.assertTrue(capabilities["metadata"]["finish"])
+        self.assertTrue(capabilities["integrations"]["manual_store"])
+        self.assertFalse(capabilities["integrations"]["spoolman"])
         self.assertFalse(capabilities["metadata"]["rfid"])
         self.assertFalse(capabilities["mapping"]["endless_spool"])
 
