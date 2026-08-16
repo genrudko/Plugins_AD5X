@@ -425,6 +425,13 @@ class PluginsAD5X:
                         slot_data["material"] = material
                     if isinstance(color, str) and color:
                         slot_data["color"] = color
+                    zmod_compat: Dict[str, Any] = {}
+                    if isinstance(material, str) and material:
+                        zmod_compat["material"] = material
+                    if isinstance(color, str) and color:
+                        zmod_compat["color"] = color
+                    if zmod_compat:
+                        slot_data["zmod_compat"] = zmod_compat
                     if slot_data:
                         slots[slot] = slot_data
                 if slots:

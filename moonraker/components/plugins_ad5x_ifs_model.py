@@ -25,6 +25,7 @@ FINISHES = {
     "other",
 }
 METADATA_SOURCES = {"manual", "flashforge", "spoolman", "slicer", "rfid", "unknown"}
+ZMOD_COMPAT_MATERIALS = ("PLA", "ABS", "PETG", "TPU", "PLA-CF", "PETG-CF", "SILK")
 
 
 def _normalize_hex_color(value: Any) -> Optional[str]:
@@ -195,6 +196,10 @@ def get_ifs_capabilities() -> Dict[str, Any]:
             "apply_preprint_mapping": False,
             "endless_spool": False,
         },
+        "compatibility": {
+            "zmod_projection_preview": True,
+            "zmod_projection_write": False,
+        },
     }
 
 
@@ -319,6 +324,14 @@ def normalize_slot(
         print_state=print_state,
         operation_state=operation_state,
     )
+    result["compatibility"] = {
+        "zmod": build_zmod_compat_projection(
+            slot=slot,
+            spool=spool,
+            appearance=appearance,
+            current=metadata.get("zmod_compat"),
+        )
+    }
     return result
 
 
@@ -410,3 +423,82 @@ def normalize_module(
         "runtime_active_slot": module.get("runtime_active_slot", runtime_active_slot),
     }
     return module
+
+
+def build_zmod_compat_projection(
+    slot: int,
+    spool: Optional[Dict[str, Any]],
+    appearance: Optional[Dict[str, Any]],
+    current: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build a read-only lossy projection into Z-Mod's TYPE + primary RGB model.
+
+    This function deliberately does not emit G-code or infer rich finish semantics.
+    In particular PLA+Silk stays TYPE=PLA unless the rich material is explicitly SILK.
+    """
+
+    spool = normalize_spool_metadata(spool)
+    appearance = normalize_appearance(None, appearance)
+    current = current if isinstance(current, dict) else {}
+
+    material = spool.get("material", "").strip().upper()
+    desired_material = material if material in ZMOD_COMPAT_MATERIALS else ""
+    colors = appearance.get("colors") if isinstance(appearance.get("colors"), list) else []
+    primary = _normalize_hex_color(colors[0]) if colors else None
+    desired_color = primary or ""
+
+    current_material = current.get("material")
+    if not isinstance(current_material, str):
+        current_material = ""
+    current_material = current_material.strip().upper()
+    current_color = _normalize_hex_color(current.get("color")) or ""
+
+    blockers = []
+    if not material:
+        blockers.append("missing_material")
+    elif not desired_material:
+        blockers.append("unsupported_material")
+    if not desired_color:
+        blockers.append("missing_primary_color")
+
+    omitted = []
+    for key in ("brand", "series", "name", "variant"):
+        if spool.get(key):
+            omitted.append(f"spool.{key}")
+    if spool.get("spoolman_id") is not None:
+        omitted.append("spool.spoolman_id")
+    if spool.get("remaining_g") is not None:
+        omitted.append("spool.remaining_g")
+    if len(colors) > 1:
+        omitted.append("appearance.colors[1:]")
+    if appearance.get("finish") not in (None, "", "standard"):
+        omitted.append("appearance.finish")
+    if appearance.get("color_mode") not in (None, "", "solid"):
+        omitted.append("appearance.color_mode")
+
+    write_ready = not blockers
+    if not write_ready:
+        sync_state = "unsupported"
+    elif not current_material and not current_color:
+        sync_state = "unknown"
+    elif current_material == desired_material and current_color == desired_color:
+        sync_state = "in_sync"
+    else:
+        sync_state = "diverged"
+
+    return {
+        "slot": int(slot) if isinstance(slot, int) and not isinstance(slot, bool) else 0,
+        "write_ready": write_ready,
+        "sync_state": sync_state,
+        "desired": {
+            "material": desired_material,
+            "color": desired_color,
+        },
+        "current": {
+            "material": current_material,
+            "color": current_color,
+        },
+        "lossy": bool(omitted),
+        "omitted_fields": omitted,
+        "write_blockers": blockers,
+    }
