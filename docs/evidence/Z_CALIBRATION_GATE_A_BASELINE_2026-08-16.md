@@ -7,13 +7,106 @@
 
 ## Provenance
 
-- Plugins AD5X repository source context before this evidence artifact: `439c795a75531a75d273a1e14f3bb01829a7aaf5`.
+- Plugins AD5X repository source context before the first evidence artifact: `439c795a75531a75d273a1e14f3bb01829a7aaf5`.
 - Source 1: owner-provided screenshot of the live bed-mesh UI after current mechanical adjustment.
-- Source 2: owner-provided live `/usr/data/config/printer.cfg` excerpt containing Klipper `SAVE_CONFIG` bed-mesh profiles.
+- Source 2: owner-provided live `printer.cfg` `SAVE_CONFIG` excerpt containing Klipper bed-mesh profiles.
+- Source 3: owner-provided read-only Z-Mod chroot configuration inspection under `/opt/config`.
 - Physical context reported by owner immediately before this baseline: head-belt tightening and bed screws/fasteners tightening.
 - Mesh geometry: 5 × 5 measured points, X 0..215 mm, Y 0..215 mm, bicubic interpolation, `mesh_x_pps=5`, `mesh_y_pps=5`, tension 0.2.
 - The Plugins AD5X CALIBRATION-SUBSYSTEM-002 motion/write path was not deployed or used for this measurement.
-- Exact live Z-Mod/Klipper/Moonraker versions, active probe definition and Z travel bounds are not present in the supplied excerpt and remain pending Gate-A provenance fields.
+- Z-Mod chroot used for configuration inspection: `/usr/data/.mod/.zmod`; active configuration namespace inside the chroot: `/opt/config`.
+- Exact live Z-Mod/Klipper/Moonraker versions remain pending Gate-A provenance fields.
+
+## Active include context
+
+The live `/opt/config/mod_data/plugins.cfg` supplied by the owner includes:
+
+```ini
+[include plugins/recommend/recommend.cfg]
+[include plugins/dryer/ru/dryer.cfg]
+[include plugins/ad5x_custom/ad5x_custom.cfg]
+[include ad5x_custom/generated/notify.cfg]
+[include ad5x_custom/generated/timelapse.cfg]
+[include plugins/calibration_center/calibration_center/calibration_center.cfg]
+```
+
+Ownership/interpretation for this evidence record:
+
+- `recommend` is the active Z-Mod recommendation override and contributes the runtime probe/bed-mesh overrides described below;
+- `ad5x_custom` is the existing Plugins AD5X customization contour;
+- `calibration_center` is the project's existing unfinished/legacy Calibration Center contour, not an unknown third-party plugin and not evidence of a second independent probe owner;
+- the active-file scan found no `[stepper_z]` override in the active include set; the effective Z-stepper values therefore come from `/opt/config/printer.base.cfg` on the supplied configuration evidence;
+- the active `recommend` file contains `[probe]` overrides for `speed` and `lift_speed`, which merge with the base `[probe]` definition rather than replacing the complete probe contract.
+
+## Effective current Z/probe configuration from supplied active sources
+
+### `stepper_z`
+
+Base owner: `/opt/config/printer.base.cfg`.
+
+```ini
+[stepper_z]
+position_endstop: 220
+step_pin: PC7
+dir_pin: PC8
+enable_pin: !PB14
+microsteps: 16
+rotation_distance: 8
+endstop_pin: PD2
+position_max: 230
+position_min: -10
+homing_speed: 20
+homing_retract_dist: 5
+homing_retract_speed: 10
+```
+
+No active `[stepper_z]` override was observed in the supplied active include set, so these are the current merged values on the available evidence.
+
+### `probe`
+
+Base owner: `/opt/config/printer.base.cfg`:
+
+```ini
+[probe]
+pin: !PB3
+z_offset: -0.25
+samples_result: average
+speed: 5
+samples: 3
+samples_tolerance: 0.1
+samples_tolerance_retries: 4
+```
+
+Active Z-Mod `recommend` override: `/opt/config/mod_data/plugins/recommend/recommend.cfg`:
+
+```ini
+[probe]
+speed: 2
+lift_speed: 5
+```
+
+Effective merged probe facts on the supplied configuration evidence:
+
+```text
+pin                         = !PB3
+z_offset                    = -0.25 mm
+samples_result              = average
+samples                     = 3
+samples_tolerance           = 0.1 mm
+samples_tolerance_retries   = 4
+speed                       = 2 mm/s   (recommend override)
+lift_speed                  = 5 mm/s   (recommend override/addition)
+```
+
+### Active `recommend` bed-mesh overrides
+
+```ini
+[bed_mesh]
+move_check_distance: 5
+horizontal_move_z: 2
+```
+
+These values are recorded as current runtime configuration facts only. In particular, `position_min=-10`, `horizontal_move_z=2`, probe speed `2`, and lift speed `5` are **not** automatically accepted as Plugins AD5X Auto-Z safety/search/motion thresholds. The v2 production motion policy still requires separate repeated hardware evidence, margin rationale and explicit owner acceptance.
 
 ## Fresh active profile — `auto`
 
@@ -80,6 +173,14 @@ This observation is qualitative and must not be converted into a calibration acc
 
 ## Gate-A status
 
-This artifact records the fresh bed-mesh baseline after the reported mechanical adjustment. It remains a **partial Gate-A record** until exact live software versions and the active probe/Z-limit ownership are captured from the included configuration sources.
+This artifact now records:
+
+- the fresh bed-mesh baseline after the reported mechanical adjustment;
+- the active configuration include context;
+- the current base `stepper_z` contract;
+- the merged base + active-Z-Mod-`recommend` probe contract;
+- the active `recommend` bed-mesh overrides.
+
+It remains a **partial Gate-A record** only because exact live Z-Mod/Klipper/Moonraker versions (and any desired live standard-Klipper effective-offset snapshot) have not yet been captured into this artifact.
 
 No `owner_accepted`, `ready_for_motion`, search margin, approach speed, contact speed, retract distance, Auto-Z correction limit or release threshold is established by this record.
