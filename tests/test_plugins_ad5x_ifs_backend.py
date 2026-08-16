@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import pathlib
 import sys
+import tempfile
 import types
 import unittest
 from enum import Flag, auto
@@ -169,6 +171,116 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         self.assertFalse(module["available"])
         self.assertEqual(module["reason"], "klippy_disconnected")
         self.assertEqual(component.get_snapshot()["revision"], revision + 1)
+
+    def test_metadata_enriches_slots_active_slot_and_tool_mapping(self):
+        old_ffconfig = component_module.FFCONFIG_PATH
+        old_mapping = component_module.FILE_MAPPING_PATH
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                root = pathlib.Path(td)
+                ffconfig = root / "Adventurer5M.json"
+                mapping = root / "file.json"
+                ffconfig.write_text(
+                    json.dumps(
+                        {
+                            "FFMInfo": {
+                                "channel": 3,
+                                "ffmType1": "PETG",
+                                "ffmColor1": "#161616",
+                                "ffmType2": "PLA",
+                                "ffmColor2": "#161616",
+                                "ffmType3": "PLA",
+                                "ffmColor3": "#F330F9",
+                                "ffmType4": "TPU",
+                                "ffmColor4": "#161616",
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                mapping.write_text(json.dumps([1, 1, 1, 4]), encoding="utf-8")
+                component_module.FFCONFIG_PATH = str(ffconfig)
+                component_module.FILE_MAPPING_PATH = str(mapping)
+
+                component, server, _api = self.make_component(
+                    objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
+                )
+                asyncio.run(server.handlers["server:klippy_ready"]())
+                module = component.get_snapshot()["modules"]["ifs"]
+
+                self.assertEqual(module["runtime_active_slot"], 1)
+                self.assertEqual(module["active_slot"], 3)
+                self.assertEqual(module["tool_mapping"], [1, 1, 1, 4])
+                self.assertEqual(module["slots"][0]["material"], "PETG")
+                self.assertEqual(module["slots"][2]["color"], "#F330F9")
+                self.assertFalse(module["slots"][3]["present"])
+                self.assertEqual(module["slots"][3]["material"], "TPU")
+        finally:
+            component_module.FFCONFIG_PATH = old_ffconfig
+            component_module.FILE_MAPPING_PATH = old_mapping
+
+    def test_snapshot_request_refreshes_metadata_without_polling(self):
+        old_ffconfig = component_module.FFCONFIG_PATH
+        old_mapping = component_module.FILE_MAPPING_PATH
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                root = pathlib.Path(td)
+                ffconfig = root / "Adventurer5M.json"
+                mapping = root / "file.json"
+                ffconfig.write_text(
+                    json.dumps(
+                        {
+                            "FFMInfo": {
+                                "channel": 1,
+                                "ffmType1": "PLA",
+                                "ffmColor1": "#111111",
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                mapping.write_text(json.dumps([1]), encoding="utf-8")
+                component_module.FFCONFIG_PATH = str(ffconfig)
+                component_module.FILE_MAPPING_PATH = str(mapping)
+
+                component, server, _api = self.make_component(
+                    objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
+                )
+                asyncio.run(server.handlers["server:klippy_ready"]())
+                revision = component.get_snapshot()["revision"]
+
+                data = json.loads(ffconfig.read_text(encoding="utf-8"))
+                data["FFMInfo"]["ffmType1"] = "ABS"
+                ffconfig.write_text(json.dumps(data), encoding="utf-8")
+
+                snapshot = asyncio.run(component._handle_snapshot(None))
+                self.assertEqual(snapshot["modules"]["ifs"]["slots"][0]["material"], "ABS")
+                self.assertEqual(snapshot["revision"], revision + 1)
+        finally:
+            component_module.FFCONFIG_PATH = old_ffconfig
+            component_module.FILE_MAPPING_PATH = old_mapping
+
+    def test_invalid_metadata_fails_soft_and_preserves_live_state(self):
+        old_ffconfig = component_module.FFCONFIG_PATH
+        old_mapping = component_module.FILE_MAPPING_PATH
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                root = pathlib.Path(td)
+                ffconfig = root / "Adventurer5M.json"
+                mapping = root / "file.json"
+                ffconfig.write_text("not-json", encoding="utf-8")
+                mapping.write_text(json.dumps([0, 99]), encoding="utf-8")
+                component_module.FFCONFIG_PATH = str(ffconfig)
+                component_module.FILE_MAPPING_PATH = str(mapping)
+
+                component, server, _api = self.make_component(
+                    objects=["ad5x_ifs"], initial={"ad5x_ifs": READY}
+                )
+                asyncio.run(server.handlers["server:klippy_ready"]())
+                self.assertEqual(component.get_snapshot()["modules"]["ifs"], READY)
+        finally:
+            component_module.FFCONFIG_PATH = old_ffconfig
+            component_module.FILE_MAPPING_PATH = old_mapping
 
 
 if __name__ == "__main__":
