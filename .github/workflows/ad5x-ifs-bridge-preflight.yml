@@ -3,6 +3,7 @@ name: AD5X IFS bridge preflight
 on:
   pull_request:
     paths:
+      - 'VERSION'
       - 'ad5x_custom.cfg'
       - 'install.sh'
       - 'klipper/extras/ad5x_ifs.py'
