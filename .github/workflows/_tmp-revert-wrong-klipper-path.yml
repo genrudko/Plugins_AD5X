@@ -1,0 +1,52 @@
+name: Temporary revert wrong Klipper path
+
+on:
+  push:
+    branches:
+      - ad5x-klipperscreen-spike
+    paths:
+      - '.github/workflows/_tmp-revert-wrong-klipper-path.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ad5x-klipperscreen-spike
+          fetch-depth: 0
+      - name: Restore documented AD5X Klipper path and tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('install.sh')
+          t = p.read_text(encoding='utf-8')
+          old = '/root/klipper-env/klippy/extras/ad5x_ifs.py'
+          new = '/usr/prog/klipper/klippy/extras/ad5x_ifs.py'
+          if t.count(old) != 1:
+              raise SystemExit(f'install.sh expected one wrong path, found {t.count(old)}')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('tests/test_installer_ifs_bridge_lifecycle.py')
+          t = p.read_text(encoding='utf-8')
+          count = t.count(old)
+          if count < 2:
+              raise SystemExit(f'test expected wrong path at least twice, found {count}')
+          t = t.replace(old, new)
+          t = t.replace('test_default_destination_matches_zmod_klipper_runtime_entrypoint', 'test_default_destination_matches_ad5x_stock_klipper_runtime')
+          p.write_text(t, encoding='utf-8')
+          PY
+          sh -n install.sh
+          python -m unittest -v tests.test_installer_backend_lifecycle tests.test_installer_ifs_bridge_lifecycle
+      - name: Commit and remove temporary workflow
+        run: |
+          git config user.name 'genrudko'
+          git config user.email '54811999+genrudko@users.noreply.github.com'
+          git rm .github/workflows/_tmp-revert-wrong-klipper-path.yml
+          git add install.sh tests/test_installer_ifs_bridge_lifecycle.py
+          git commit -m 'fix(installer): restore AD5X stock Klipper extras path'
+          git push origin HEAD:ad5x-klipperscreen-spike
