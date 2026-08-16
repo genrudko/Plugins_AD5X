@@ -79,9 +79,9 @@ def normalize_appearance(
 ) -> Dict[str, Any]:
     """Return a stable appearance object without making color an identifier.
 
-    Existing Flashforge/Z-Mod metadata exposes one RGB value.  It is preserved as
-    the first color of a solid appearance.  Richer sources may provide multiple
-    colors plus a finish.  Unknown/invalid values fail soft to a neutral object.
+    Existing Flashforge/Z-Mod metadata exposes one RGB value. It is preserved as
+    the first color of a solid appearance. Richer sources may provide multiple
+    colors plus a finish. Unknown/invalid values fail soft to a neutral object.
     """
 
     appearance = appearance if isinstance(appearance, dict) else {}
@@ -123,11 +123,15 @@ def normalize_spool_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, An
         return value.strip() if isinstance(value, str) else ""
 
     spoolman_id = metadata.get("spoolman_id")
-    if not isinstance(spoolman_id, int) or spoolman_id <= 0:
+    if isinstance(spoolman_id, bool) or not isinstance(spoolman_id, int) or spoolman_id <= 0:
         spoolman_id = None
 
     remaining_g = metadata.get("remaining_g")
-    if not isinstance(remaining_g, (int, float)) or remaining_g < 0:
+    if (
+        isinstance(remaining_g, bool)
+        or not isinstance(remaining_g, (int, float))
+        or remaining_g < 0
+    ):
         remaining_g = None
 
     return {
@@ -143,7 +147,11 @@ def normalize_spool_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, An
 
 
 def get_ifs_capabilities() -> Dict[str, Any]:
-    """Capabilities describe implementation support, not current permission."""
+    """Describe implemented schema/features separately from integrations.
+
+    A field being representable in the schema does not mean that the matching
+    external integration (Spoolman, slicer, RFID) is already implemented.
+    """
 
     return {
         "schema_version": IFS_SCHEMA_VERSION,
@@ -156,11 +164,16 @@ def get_ifs_capabilities() -> Dict[str, Any]:
             "recovery": False,
             "manage": True,
         },
-        "metadata": {
+        "metadata_schema": {
+            "spool_fields": True,
             "multi_color": True,
             "finish": True,
-            "spoolman": True,
-            "slicer": True,
+        },
+        "integrations": {
+            "flashforge": True,
+            "manual_store": False,
+            "spoolman": False,
+            "slicer": False,
             "rfid": False,
         },
         "mapping": {
@@ -170,7 +183,7 @@ def get_ifs_capabilities() -> Dict[str, Any]:
     }
 
 
-def _global_write_block_reason(
+def global_write_block_reason(
     module_state: str,
     print_state: str,
     operation_state: str,
@@ -195,7 +208,7 @@ def compute_slot_permissions(
 ) -> Dict[str, Any]:
     """Centralize per-slot action permission so frontends do not own safety logic."""
 
-    blocked = _global_write_block_reason(module_state, print_state, operation_state)
+    blocked = global_write_block_reason(module_state, print_state, operation_state)
     if blocked:
         return {
             "select_slot": False,
@@ -233,7 +246,7 @@ def normalize_slot(
     metadata = metadata if isinstance(metadata, dict) else {}
 
     slot = raw_slot.get("slot", 0)
-    if not isinstance(slot, int):
+    if isinstance(slot, bool) or not isinstance(slot, int):
         slot = 0
     present = bool(raw_slot.get("present", False))
     stall = bool(raw_slot.get("stall", False))
@@ -271,8 +284,9 @@ def normalize_slot(
     # Legacy flat keys are retained during migration for existing frontends.
     if isinstance(legacy_material, str) and legacy_material:
         result["material"] = legacy_material
-    if _normalize_hex_color(legacy_color):
-        result["color"] = _normalize_hex_color(legacy_color)
+    normalized_legacy_color = _normalize_hex_color(legacy_color)
+    if normalized_legacy_color:
+        result["color"] = normalized_legacy_color
 
     result["spool"] = spool
     result["appearance"] = appearance
@@ -290,3 +304,93 @@ def normalize_slot(
         operation_state=operation_state,
     )
     return result
+
+
+def normalize_module(
+    raw_module: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]],
+    print_state: str,
+    filament_at_toolhead: Optional[bool],
+    operation: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build the additive IFS Manager module while preserving legacy fields."""
+
+    module = dict(raw_module) if isinstance(raw_module, dict) else {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    operation = dict(operation) if isinstance(operation, dict) else {
+        "state": "idle",
+        "action": "",
+        "slot": 0,
+        "error": "",
+    }
+
+    configured_active_slot = metadata.get("active_slot")
+    runtime_active_slot = module.get("active_slot", 0)
+    if (
+        isinstance(configured_active_slot, int)
+        and not isinstance(configured_active_slot, bool)
+        and 1 <= configured_active_slot <= SLOT_COUNT
+    ):
+        module["runtime_active_slot"] = runtime_active_slot
+        module["active_slot"] = configured_active_slot
+
+    active_slot = module.get("active_slot", 0)
+    if isinstance(active_slot, bool) or not isinstance(active_slot, int):
+        active_slot = 0
+
+    module_state = module.get("state") if isinstance(module.get("state"), str) else "unknown"
+    operation_state = (
+        operation.get("state") if isinstance(operation.get("state"), str) else "idle"
+    )
+
+    slot_meta = metadata.get("slots", {})
+    if not isinstance(slot_meta, dict):
+        slot_meta = {}
+    normalized_slots: List[Dict[str, Any]] = []
+    for raw_slot in module.get("slots") or []:
+        if not isinstance(raw_slot, dict):
+            continue
+        slot_number = raw_slot.get("slot")
+        normalized_slots.append(
+            normalize_slot(
+                raw_slot=raw_slot,
+                metadata=slot_meta.get(slot_number),
+                active_slot=active_slot,
+                filament_at_toolhead=filament_at_toolhead,
+                module_state=module_state,
+                print_state=print_state,
+                operation_state=operation_state,
+            )
+        )
+    module["slots"] = normalized_slots
+
+    mapping = metadata.get("tool_mapping")
+    if isinstance(mapping, list):
+        module["tool_mapping"] = list(mapping)
+
+    module["print_state"] = print_state
+    module["filament_at_toolhead"] = filament_at_toolhead
+    module["operation"] = operation
+    module["capabilities"] = get_ifs_capabilities()
+    module["write_blocked_reason"] = global_write_block_reason(
+        module_state, print_state, operation_state
+    )
+
+    # Compatibility bridge for the already hardware-proven KlipperScreen proof.
+    # New frontends should consume capabilities + slot.permissions instead.
+    module["operations"] = {
+        "select_slot": True,
+        "load_slot": True,
+        "unload_slot": True,
+        "manage": True,
+    }
+
+    module["diagnostics"] = {
+        "silk_mask": module.get("silk_mask", 0),
+        "raw_channel": module.get("raw_channel", 0),
+        "insert_slot": module.get("insert_slot", 0),
+        "need_insert": bool(module.get("need_insert", False)),
+        "stall_mask": module.get("stall_mask", 0),
+        "runtime_active_slot": module.get("runtime_active_slot", runtime_active_slot),
+    }
+    return module
