@@ -153,7 +153,7 @@ jobs:
               | tee out/klipperscreen/qemu-ifs-ui-smoke.txt
 
           grep -q '^QEMU_AD5X_IFS_PANEL_CONSTRUCT_OK 17$' out/klipperscreen/qemu-ifs-ui-smoke.txt
-          grep -q '^QEMU_AD5X_IFS_MANAGER_CONTRACT_UI_OK 2$' out/klipperscreen/qemu-ifs-ui-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_MANAGER_CONTRACT_UI_OK 3$' out/klipperscreen/qemu-ifs-ui-smoke.txt
           grep -q '^QEMU_AD5X_IFS_ACTION_GATES_OK$' out/klipperscreen/qemu-ifs-ui-smoke.txt
           grep -q '^QEMU_AD5X_IFS_MANAGE_PANEL_OK 17$' out/klipperscreen/qemu-ifs-ui-smoke.txt
           grep -q '^QEMU_AD5X_IFS_METADATA_PANEL_OK 3$' out/klipperscreen/qemu-ifs-ui-smoke.txt
