@@ -227,7 +227,7 @@ assert panel._selected_slot == 1
 assert panel._slot_widgets[1]["material"].get_text() == "PETG"
 assert "Активный филамент" in panel._slot_widgets[1]["state"].get_text()
 assert panel._slot_widgets[2]["material"].get_text() == "Red Blue Dual"
-assert panel._slot_widgets[2]["detail"].get_text() == "Silk • Silk • 2 цвета"
+assert panel._slot_widgets[2]["detail"].get_text() == "Silk • 2 цвета"
 assert panel._slot_widgets[3]["material"].get_text() == "Triple Color"
 assert "3 цвета" in panel._slot_widgets[3]["detail"].get_text()
 assert len(panel._slot_widgets[3]["swatch"].get_children()) == 3
