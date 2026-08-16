@@ -18,13 +18,17 @@ BR2_TOOLCHAIN_EXTERNAL_FORTRAN=y
 # BR2_TOOLCHAIN_EXTERNAL_OPENMP is not set
 # BR2_TOOLCHAIN_EXTERNAL_INET_RPC is not set
 
-# Stage 4 network-capable Python delta. Z-Mod continues to own /bin/python3;
-# this build contributes only optional CPython extension modules and their
-# private non-glibc dependencies under /opt/ad5x-klipperscreen.
+# Stage 4 Python/runtime delta. Z-Mod continues to own /bin/python3 and the
+# hardware-proven Stage 3 GTK/X11 libraries. This build contributes only the
+# optional CPython network extensions plus a PyGObject build with cairo foreign
+# marshalling enabled (Buildroot disables that bridge by default).
 BR2_PACKAGE_PYTHON3=y
 BR2_PACKAGE_PYTHON3_ZLIB=y
 BR2_PACKAGE_PYTHON3_SSL=y
 BR2_PACKAGE_PYTHON3_UNICODEDATA=y
+BR2_PACKAGE_GOBJECT_INTROSPECTION=y
+BR2_PACKAGE_PYTHON_PYCAIRO=y
+BR2_PACKAGE_PYTHON_GOBJECT=y
 
 BR2_TARGET_ROOTFS_TAR=y
 BR2_TARGET_ROOTFS_TAR_GZIP=y
