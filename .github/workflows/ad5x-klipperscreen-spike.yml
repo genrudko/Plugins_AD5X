@@ -11,6 +11,7 @@ on:
       - "tools/ad5x-display-spike/klipperscreen/requirements-startup.txt"
       - "tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf"
       - "tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh"
+      - "tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py"
 
 permissions:
   contents: read
@@ -128,7 +129,7 @@ jobs:
           test -e "$APPROOT/lib/libcrypto.so.3"
           echo "KS_NETWORK_DELTA_READY"
 
-      - name: MIPS QEMU startup import and PNG proof
+      - name: MIPS QEMU startup import, IFS panel and PNG proof
         run: |
           set -euo pipefail
           TARGET="$PWD/out/stage3/rootfs"
@@ -138,6 +139,7 @@ jobs:
           APP="$APPROOT/app"
           ICON="$APP/styles/icon.png"
           test -f "$ICON"
+          test -f "$APP/panels/ad5x_ifs.py"
           env \
             QEMU_LD_PREFIX="$TARGET" \
             PYTHONHOME="$TARGET/usr" \
@@ -145,9 +147,10 @@ jobs:
             LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \
             GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
             qemu-mipsel "$TARGET/usr/bin/python3" -c \
-            'import cairo,gi,hashlib,jinja2,requests,ssl,websocket,zlib,sys; gi.require_version("Gtk","3.0"); gi.require_version("GdkPixbuf","2.0"); from gi.repository import Gtk,GdkPixbuf; import screen; p=GdkPixbuf.Pixbuf.new_from_file(sys.argv[1]); print("QEMU_KLIPPERSCREEN_IMPORT_OK", sys.version.split()[0], Gtk.get_major_version(), Gtk.get_minor_version(), jinja2.__version__, requests.__version__, websocket.__version__, zlib.ZLIB_VERSION, ssl.OPENSSL_VERSION, hashlib.sha256(b"ad5x").hexdigest()[:12], p.get_width(), p.get_height())' "$ICON" \
+            'import cairo,gi,hashlib,jinja2,requests,ssl,websocket,zlib,sys; gi.require_version("Gtk","3.0"); gi.require_version("GdkPixbuf","2.0"); from gi.repository import Gtk,GdkPixbuf; import screen; import panels.ad5x_ifs as ad5x_ifs; p=GdkPixbuf.Pixbuf.new_from_file(sys.argv[1]); print("QEMU_KLIPPERSCREEN_IMPORT_OK", sys.version.split()[0], Gtk.get_major_version(), Gtk.get_minor_version(), jinja2.__version__, requests.__version__, websocket.__version__, zlib.ZLIB_VERSION, ssl.OPENSSL_VERSION, hashlib.sha256(b"ad5x").hexdigest()[:12], p.get_width(), p.get_height(), ad5x_ifs.SNAPSHOT_METHOD)' "$ICON" \
             | tee out/klipperscreen/qemu-klipperscreen-import.txt
           grep -q 'QEMU_KLIPPERSCREEN_IMPORT_OK 3.12.9 3 24 3.1.6 2.34.2 1.9.0 1.3.1 OpenSSL 3.4.1' out/klipperscreen/qemu-klipperscreen-import.txt
+          grep -q 'server.plugins_ad5x.snapshot' out/klipperscreen/qemu-klipperscreen-import.txt
 
       - name: MIPS QEMU full KlipperScreen X11 startup smoke
         run: |
@@ -217,6 +220,9 @@ jobs:
 
           test -x "$APPROOT/run-klipperscreen-test.sh"
           test -f "$APPROOT/PYTHON_NETWORK_BUILDINFO.txt"
+          test -f "$APPROOT/app/panels/ad5x_ifs.py"
+          grep -Fqx 'panel: ad5x_ifs' "$APPROOT/KlipperScreen.conf"
+          grep -Fqx 'icon: extrude' "$APPROOT/KlipperScreen.conf"
           test ! -e "$BUNDLE_ROOT/usr"
           test ! -e "$BUNDLE_ROOT/lib"
           test ! -e "$BUNDLE_ROOT/bin"
@@ -243,6 +249,7 @@ jobs:
           fi
 
           grep -q '^opt/ad5x-klipperscreen/app/screen.py$' out/klipperscreen/bundle-files.txt
+          grep -q '^opt/ad5x-klipperscreen/app/panels/ad5x_ifs.py$' out/klipperscreen/bundle-files.txt
           grep -q '^opt/ad5x-klipperscreen/run-klipperscreen-test.sh$' out/klipperscreen/bundle-files.txt
           grep -q '^opt/ad5x-klipperscreen/lib/python3.12/lib-dynload/_ssl' out/klipperscreen/bundle-files.txt
           echo "STAGE4_DEPLOY_BUNDLE_OK"
