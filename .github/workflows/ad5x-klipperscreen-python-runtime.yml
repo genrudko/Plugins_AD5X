@@ -74,9 +74,50 @@ jobs:
               apt-get install -y --no-install-recommends cpio unzip rsync bc file python3
               rm -rf /var/lib/apt/lists/*
 
+              # The pinned AD5X image exports target tools globally. Buildroot owns
+              # target selection itself, so keep the toolchain on PATH but clear the
+              # inherited compiler variables exactly as in the accepted Stage 3 job.
               unset CROSS_COMPILE CC CXX AR STRIP RANLIB LD TARGET_CFLAGS TARGET_LDFLAGS
 
-              DEFCONFIG=/work/tools/ad5x-display-spike/klipperscreen/ad5x_ks_python_network_defconfig
+              BASE_DEFCONFIG=/work/tools/ad5x-display-spike/klipperscreen/ad5x_ks_python_network_defconfig
+              DEFCONFIG=/work/out/ks-python/ad5x_ks_python_network_generated_defconfig
+              cp "$BASE_DEFCONFIG" "$DEFCONFIG"
+              : > out/ks-python/toolchain-features.txt
+
+              # External-toolchain validation rejects a config that understates
+              # features exposed by the compiler. Probe the exact pinned AD5X
+              # toolchain before defconfig, as already proven by Stage 3.
+              if printf "program hello\nend program hello\n" | \
+                   mipsel-buildroot-linux-gnu-gfortran -x f95 -ffree-form \
+                   -o /tmp/br-fortran-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_FORTRAN=y >> "$DEFCONFIG"
+                echo "toolchain feature: Fortran=yes" | tee -a out/ks-python/toolchain-features.txt
+              else
+                echo "toolchain feature: Fortran=no" | tee -a out/ks-python/toolchain-features.txt
+              fi
+              rm -f /tmp/br-fortran-test
+
+              if printf "import std.stdio;\nvoid main() {}\n" | \
+                   mipsel-buildroot-linux-gnu-gdc -x d \
+                   -o /tmp/br-dlang-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_DLANG=y >> "$DEFCONFIG"
+                echo "toolchain feature: D=yes" | tee -a out/ks-python/toolchain-features.txt
+              else
+                echo "toolchain feature: D=no" | tee -a out/ks-python/toolchain-features.txt
+              fi
+              rm -f /tmp/br-dlang-test
+
+              if printf "#include <omp.h>\nint main(void) { return omp_get_thread_num(); }\n" | \
+                   mipsel-buildroot-linux-gnu-gcc -fopenmp -x c \
+                   -o /tmp/br-openmp-test - >/dev/null 2>&1; then
+                echo BR2_TOOLCHAIN_EXTERNAL_OPENMP=y >> "$DEFCONFIG"
+                echo "toolchain feature: OpenMP=yes" | tee -a out/ks-python/toolchain-features.txt
+              else
+                echo "toolchain feature: OpenMP=no" | tee -a out/ks-python/toolchain-features.txt
+              fi
+              rm -f /tmp/br-openmp-test
+
+              cp "$DEFCONFIG" out/ks-python/generated-defconfig.txt
               make -C .ci/buildroot BR2_DEFCONFIG="$DEFCONFIG" defconfig \
                 2>&1 | tee out/ks-python/defconfig.log
               cp .ci/buildroot/.config out/ks-python/buildroot.config
@@ -235,6 +276,8 @@ jobs:
             out/ks-python/build.log
             out/ks-python/buildroot.config
             out/ks-python/defconfig.log
+            out/ks-python/generated-defconfig.txt
+            out/ks-python/toolchain-features.txt
             out/ks-python/*.elf.txt
             out/ks-python/*.attributes.txt
             out/ks-python/needed.txt
