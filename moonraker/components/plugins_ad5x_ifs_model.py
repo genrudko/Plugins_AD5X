@@ -162,7 +162,7 @@ def get_ifs_capabilities() -> Dict[str, Any]:
         "flashforge": True,
         "manual_store": True,
         "spoolman": False,
-        "slicer": False,
+        "slicer": True,
         "rfid": False,
     }
     return {
@@ -175,6 +175,7 @@ def get_ifs_capabilities() -> Dict[str, Any]:
             "eject_slot": False,
             "recovery": False,
             "manage": True,
+            "preview_job": True,
         },
         "metadata_schema": metadata_schema,
         "integrations": integrations,
@@ -190,6 +191,8 @@ def get_ifs_capabilities() -> Dict[str, Any]:
         },
         "mapping": {
             "tool_to_slot": True,
+            "preprint_preview": True,
+            "apply_preprint_mapping": False,
             "endless_spool": False,
         },
     }

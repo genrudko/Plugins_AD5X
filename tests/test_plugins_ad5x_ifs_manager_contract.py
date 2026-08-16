@@ -140,8 +140,10 @@ class IFSManagerContractTests(unittest.TestCase):
         self.assertTrue(caps["integrations"]["flashforge"])
         self.assertTrue(caps["integrations"]["manual_store"])
         self.assertFalse(caps["integrations"]["spoolman"])
-        self.assertFalse(caps["integrations"]["slicer"])
+        self.assertTrue(caps["integrations"]["slicer"])
         self.assertFalse(caps["integrations"]["rfid"])
+        self.assertTrue(caps["mapping"]["preprint_preview"])
+        self.assertFalse(caps["mapping"]["apply_preprint_mapping"])
         self.assertFalse(caps["mapping"]["endless_spool"])
 
     def test_paused_print_and_running_operation_fail_closed(self):

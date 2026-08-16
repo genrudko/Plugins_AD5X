@@ -36,11 +36,12 @@ except ImportError:
     normalize_spool_metadata = _model_module.normalize_spool_metadata
 
 API_VERSION = "1.0"
-BACKEND_VERSION = "0.1.5"
+BACKEND_VERSION = "0.1.6"
 
 SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/snapshot"
 IFS_ACTION_ENDPOINT = "/server/plugins_ad5x/ifs/action"
 IFS_METADATA_ENDPOINT = "/server/plugins_ad5x/ifs/metadata"
+IFS_JOB_PREVIEW_ENDPOINT = "/server/plugins_ad5x/ifs/job/preview"
 SNAPSHOT_CHANGED_EVENT = "plugins_ad5x:snapshot_changed"
 SNAPSHOT_CHANGED_NOTIFY_NAME = "plugins_ad5x_snapshot_changed"
 IFS_OBJECT = "ad5x_ifs"
@@ -53,6 +54,8 @@ IFS_METADATA_STORE_PATH = "/opt/config/mod_data/ad5x_custom/ifs_metadata.json"
 IFS_METADATA_STORE_MAX_BYTES = 64 * 1024
 
 SAFE_FILAMENT_OP_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
+SAFE_JOB_PREVIEW_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
+IFS_JOB_PREVIEW_COMMAND = "AD5X_IFS_JOB_PREVIEW"
 IFS_ACTION_COMMANDS = {
     "select_slot": "SET_EXTRUDER_SLOT SLOT={slot}",
     "load_slot": "INSERT_PRUTOK_IFS PRUTOK={slot}",
@@ -95,6 +98,13 @@ class PluginsAD5X:
             IFS_METADATA_ENDPOINT,
             RequestType.POST,
             self._handle_ifs_metadata,
+            transports=TransportType.HTTP | TransportType.WEBSOCKET,
+            auth_required=True,
+        )
+        self.server.register_endpoint(
+            IFS_JOB_PREVIEW_ENDPOINT,
+            RequestType.POST,
+            self._handle_ifs_job_preview,
             transports=TransportType.HTTP | TransportType.WEBSOCKET,
             auth_required=True,
         )
@@ -603,6 +613,87 @@ class PluginsAD5X:
             "ok": True,
             "slot": slot,
             "result": result,
+            "snapshot": self.get_snapshot(),
+        }
+
+    @staticmethod
+    def _job_preview_rejection(filename: str, error: str) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "filename": filename,
+            "error": error,
+        }
+
+    @staticmethod
+    def _job_preview_filename_valid(filename: str) -> bool:
+        if not isinstance(filename, str):
+            return False
+        filename = filename.strip()
+        if (
+            not filename
+            or filename.startswith("/")
+            or "\x00" in filename
+            or '"' in filename
+            or "\n" in filename
+            or "\r" in filename
+        ):
+            return False
+        parts = filename.replace("\\", "/").split("/")
+        return all(part not in ("", "..") for part in parts)
+
+    async def _handle_ifs_job_preview(self, web_request: Any) -> Dict[str, Any]:
+        try:
+            filename = web_request.get_str("filename").strip()
+        except Exception as exc:
+            return self._job_preview_rejection(
+                "", f"Invalid IFS job preview request: {exc}"
+            )
+
+        if not self._job_preview_filename_valid(filename):
+            return self._job_preview_rejection(filename, "Invalid IFS job preview filename")
+        if self._ifs_module is None or not self._ifs_module.get("available", False):
+            return self._job_preview_rejection(filename, "IFS bridge is not available")
+        if self._operation_state != "idle":
+            return self._job_preview_rejection(
+                filename, "IFS operation is already running"
+            )
+        if self._print_state not in SAFE_JOB_PREVIEW_PRINT_STATES:
+            return self._job_preview_rejection(
+                filename,
+                f"IFS job preview is blocked while print state is {self._print_state}",
+            )
+
+        command = f'{IFS_JOB_PREVIEW_COMMAND} FILENAME="{filename}"'
+        try:
+            klippy_apis = self.server.lookup_component("klippy_apis")
+            await klippy_apis.run_gcode(command)
+            status = await klippy_apis.query_objects({IFS_OBJECT: None}, default={})
+        except Exception as exc:
+            return self._job_preview_rejection(
+                filename, str(exc) or exc.__class__.__name__
+            )
+
+        payload = status.get(IFS_OBJECT) if isinstance(status, dict) else None
+        if isinstance(payload, dict):
+            self._ifs_raw.update(payload)
+            self._set_ifs_module(self._compose_ifs_module())
+
+        module = self._ifs_module if isinstance(self._ifs_module, dict) else {}
+        preview = module.get("job_preview")
+        if not isinstance(preview, dict) or not preview.get("available", False):
+            error = (
+                preview.get("error")
+                if isinstance(preview, dict)
+                else "job_preview_not_published"
+            )
+            return self._job_preview_rejection(
+                filename, f"Z-Mod job preview unavailable: {error or 'unknown'}"
+            )
+
+        return {
+            "ok": True,
+            "filename": filename,
+            "job_preview": dict(preview),
             "snapshot": self.get_snapshot(),
         }
 

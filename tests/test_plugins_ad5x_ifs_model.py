@@ -207,13 +207,17 @@ class IFSManagerModelTests(unittest.TestCase):
         self.assertTrue(capabilities["actions"]["select_slot"])
         self.assertTrue(capabilities["actions"]["load_slot"])
         self.assertTrue(capabilities["actions"]["unload_slot"])
+        self.assertTrue(capabilities["actions"]["preview_job"])
         self.assertFalse(capabilities["actions"]["eject_slot"])
         self.assertFalse(capabilities["actions"]["recovery"])
         self.assertTrue(capabilities["metadata"]["multi_color"])
         self.assertTrue(capabilities["metadata"]["finish"])
         self.assertTrue(capabilities["integrations"]["manual_store"])
         self.assertFalse(capabilities["integrations"]["spoolman"])
+        self.assertTrue(capabilities["integrations"]["slicer"])
         self.assertFalse(capabilities["metadata"]["rfid"])
+        self.assertTrue(capabilities["mapping"]["preprint_preview"])
+        self.assertFalse(capabilities["mapping"]["apply_preprint_mapping"])
         self.assertFalse(capabilities["mapping"]["endless_spool"])
 
     def test_spool_fields_are_normalized_without_inventing_missing_data(self):

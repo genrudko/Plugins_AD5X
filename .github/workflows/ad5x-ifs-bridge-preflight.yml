@@ -21,6 +21,7 @@ on:
       - 'tests/test_installer_ifs_manager_model_lifecycle.py'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_plugins_ad5x_ifs_backend.py'
+      - 'tests/test_plugins_ad5x_ifs_job_preview.py'
       - 'tests/test_plugins_ad5x_ifs_metadata_store.py'
       - 'tests/test_plugins_ad5x_ifs_model.py'
       - 'tests/test_plugins_ad5x_ifs_manager_contract.py'
@@ -69,6 +70,7 @@ jobs:
           python -m unittest -v \
             tests.test_plugins_ad5x_component \
             tests.test_plugins_ad5x_ifs_backend \
+            tests.test_plugins_ad5x_ifs_job_preview \
             tests.test_plugins_ad5x_ifs_metadata_store \
             tests.test_plugins_ad5x_ifs_model \
             tests.test_plugins_ad5x_ifs_manager_contract \
