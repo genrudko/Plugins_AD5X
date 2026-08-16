@@ -1,0 +1,36 @@
+name: AD5X IFS bridge preflight
+
+on:
+  pull_request:
+    paths:
+      - 'klipper/extras/ad5x_ifs.py'
+      - 'moonraker/components/plugins_ad5x.py'
+      - 'tests/test_ad5x_ifs_bridge.py'
+      - 'tests/test_plugins_ad5x_component.py'
+      - 'tests/test_plugins_ad5x_ifs_backend.py'
+      - '.github/workflows/ad5x-ifs-bridge-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile bridge and backend
+        run: |
+          python -m py_compile \
+            klipper/extras/ad5x_ifs.py \
+            moonraker/components/plugins_ad5x.py
+      - name: Run Plugins AD5X backend and IFS bridge tests
+        run: |
+          python -m unittest -v \
+            tests.test_plugins_ad5x_component \
+            tests.test_ad5x_ifs_bridge \
+            tests.test_plugins_ad5x_ifs_backend
