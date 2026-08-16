@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** MEASUREMENT IN PROGRESS  
+**Status:** MEASUREMENT COMPLETE / CLEANUP PENDING  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -156,11 +156,84 @@ N 1. Вес: 0.0
 
 Interpretation: this independent run's tare succeeded on the first reported attempt with residual `0.0 g`. This is retained as descriptive H7/tare evidence only.
 
-## Remaining controlled path
+### Independent repeated reference series
+
+Command:
 
 ```text
 PROBE_ACCURACY SAMPLES=10
-→ explicit Z5 retract
+```
+
+Klipper/Z-Mod reported:
+
+```text
+PROBE_ACCURACY at X:107.500 Y:107.500 Z:5.000
+samples=10 retract=2.000 speed=2.0 lift_speed=5.0
+```
+
+User-facing contact estimates, in acquisition order:
+
+```text
+-1.982500
+-1.980000
+-1.965000
+-1.967500
+-1.977500
+-1.972500
+-1.960000
+-1.965000
+-1.982500
+-1.977500
+```
+
+Descriptive statistics reported/derived:
+
+```text
+maximum             = -1.960000 mm
+minimum             = -1.982500 mm
+range               =  0.022500 mm
+average             = -1.973000 mm
+median              = -1.975000 mm
+standard deviation  =  0.007730 mm
+first→last drift    = +0.005000 mm
+```
+
+The corresponding raw probe-Z messages remained exactly `0.250000 mm` lower than each user-facing contact estimate, consistent with the configured `[probe] z_offset=-0.25` semantics already established in reverse engineering. These coordinate forms are not mixed in the reference dataset.
+
+Post-probe state before explicit cleanup:
+
+```text
+print_stats.state        = standby
+toolhead.homed_axes      = xyz
+toolhead.position        = [107.5, 107.5, -0.2275, 0.0]
+gcode_move.homing_origin = [0.0, 0.0, 0.0, 0.0]
+bed_mesh.profile_name    = ""
+```
+
+No standard Klipper Z offset was introduced by the measurement.
+
+## Short-term comparison with Gate B run 001
+
+```text
+                         Gate B run 001      Gate C run 001      C - B
+average                  -1.985500 mm        -1.973000 mm        +0.012500 mm
+median                   -1.986250 mm        -1.975000 mm        +0.011250 mm
+range                     0.017500 mm         0.022500 mm        +0.005000 mm
+stddev                    0.005220 mm         0.007730 mm        +0.002510 mm
+first→last drift         +0.010000 mm        +0.005000 mm        -0.005000 mm
+```
+
+Descriptive interpretation only:
+
+- the independently homed/tared second ambient series remains tightly clustered and shows no large monotonic drift or old-style transient;
+- its mean is `+0.012500 mm` higher (less negative) than Gate B run 001;
+- both series remain close on the scale of the historical anomalies, but **no acceptance band or motion/search threshold is inferred from two runs**;
+- the saved `auto` center remains `-1.925833 mm`; current Gate-C mean minus that saved center is `-0.047167 mm`, retained as observation only and not applied.
+
+## Remaining controlled path
+
+```text
+explicit Z5 retract
 → restore saved auto mesh at runtime
 → post-state/hash verification
 ```
@@ -169,13 +242,10 @@ No `SAVE_CONFIG`, persistent user-trim mutation, saved-mesh overwrite/delete, Pl
 
 ## Pending
 
-- raw 10-sample reference series: PENDING
-- descriptive mean/median/spread/drift: PENDING
-- comparison with Gate B run 001: PENDING
 - cleanup/retract confirmation: PENDING
 - post-run effective offset: PENDING
 - saved mesh unchanged proof: PENDING
 - post-run `printer.cfg` hash: PENDING
 - stop condition observed: PENDING
 
-Until complete, this run is not policy-reviewable and authorizes nothing.
+Until cleanup/persistence verification is complete, this run is not yet policy-reviewable and authorizes nothing.
