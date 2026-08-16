@@ -7,6 +7,8 @@
 **Основной новый work item:** [#13 — CALIBRATION-SUBSYSTEM-002: explainable safe Auto-Z, mesh policy and multi-frontend Calibration Center](https://github.com/genrudko/Plugins_AD5X/issues/13)  
 **Рабочая ветка:** `feature/z-calibration-subsystem-v2`  
 **База ветки:** `dev` @ `ab25f96c017d56fe3a754ce4d05664c710dd2a80`  
+**Текущий repository implementation head перед frontend slice:** `b852f25c2c5f52d62ee65a83ea3f420d4b327bd0`  
+**Repository gates:** exact-head `Z Calibration Core` run `31954499638` — compile PASS, shell syntax PASS, **117/117 tests PASS**  
 **Platform Foundation issue #8:** остаётся OPEN / coordinator review pending; его принятый backend/managed-copy contract используется как foundation и не переоткрывается автоматически  
 **Старый Calibration Center:** issue #5 CLOSED `not_planned`; Draft PR #6 CLOSED / UNMERGED / research-history only
 
@@ -133,9 +135,11 @@ pnpm run build             PASS
 
 Unit result at acceptance: 20 test files / 415 tests PASS.
 
+**Frontend drift found during CALIBRATION-SUBSYSTEM-002:** the accepted branch still contains an old PoC `plugins_ad5x.get_capabilities` adapter even though the authoritative backend contract is `server.plugins_ad5x.snapshot`. The first Calibration UI slice must replace that stale adapter before rendering module state.
+
 ---
 
-## 4. Backend contract v1 — accepted foundation
+## 4. Backend contract v1 — accepted foundation, extended by CALIBRATION-SUBSYSTEM-002
 
 D-022 defines an optional in-process Moonraker component:
 
@@ -144,16 +148,16 @@ component: plugins_ad5x
 config:    [plugins_ad5x]
 ```
 
-Production read-only snapshot contract:
+Production snapshot contract:
 
 ```text
 HTTP:     GET /server/plugins_ad5x/snapshot
 JSON-RPC: server.plugins_ad5x.snapshot
 API:      1.0
-backend:  release version, foundation baseline 0.1.2
+backend:  release version, current 0.1.2
 ```
 
-Minimal snapshot envelope:
+Snapshot envelope:
 
 ```text
 api_version
@@ -161,6 +165,13 @@ backend_version
 revision
 backend.health
 modules{}
+```
+
+`modules.z_calibration` now exposes frontend-neutral runtime/safety/offset state. Current implemented read-only endpoints also include:
+
+```text
+POST /server/plugins_ad5x/z_calibration/reconcile
+GET  /server/plugins_ad5x/z_calibration/diagnostics
 ```
 
 State invalidation contract:
@@ -172,27 +183,20 @@ wire notification:  notify_plugins_ad5x_snapshot_changed
 
 `revision` is process-local and resets across Moonraker restart. Notification is low-frequency invalidation, not high-rate telemetry. After reconnect the frontend performs a full `server.info → snapshot` resync.
 
-Repository-side component:
+Repository-side components:
 
 ```text
 moonraker/components/plugins_ad5x.py
+moonraker/components/plugins_ad5x_zcalibration.py
 ```
 
-Repository PoC baseline used for prior real-printer acceptance:
-
-```text
-2b02b7d8b1a8f7421173816cc5ddd93ffd578670
-artifact SHA256:
-8ae26bc4a9669147274a2b7d1caff86d28a69b70715504f6edd7c4cec1df6c3a
-```
-
-CALIBRATION-SUBSYSTEM-002 must extend this shared backend model instead of creating a second daemon/backend.
+CALIBRATION-SUBSYSTEM-002 extends this shared backend model; no second daemon/backend was introduced.
 
 ---
 
-## 5. Real AD5X backend acceptance — accepted prior evidence
+## 5. Real AD5X backend acceptance — accepted prior evidence only
 
-Managed-copy deployment and mandatory rollback were previously accepted on the actual printer.
+Managed-copy deployment and mandatory rollback were previously accepted on the actual printer for the Platform Foundation backend primitive.
 
 Observed active state included:
 
@@ -205,11 +209,11 @@ Observed active state included:
 
 Mandatory rollback restored the original baseline, removed the managed backend/config and returned Moonraker/ad5x_custom to clean state.
 
-This acceptance proves the backend deployment primitive, not the new Z Calibration safety logic.
+This acceptance proves the deployment primitive, **not** the new Z Calibration logic/hook/helper. New CALIBRATION-SUBSYSTEM-002 runtime artifacts still require their own controlled real-printer acceptance.
 
 ---
 
-## 6. Managed-copy lifecycle — accepted
+## 6. Managed-copy lifecycle — accepted and extended
 
 D-023 remains authoritative.
 
@@ -239,7 +243,22 @@ wait klippy_connected=true
 wait klippy_state=ready
 ```
 
-Managed runtime ownership, atomic replacement, `--apply-only`, status, uninstall and rollback semantics remain inherited constraints for CALIBRATION-SUBSYSTEM-002.
+CALIBRATION-SUBSYSTEM-002 now extends the managed runtime artifact set atomically to:
+
+```text
+plugins_ad5x.py
+plugins_ad5x_zcalibration.py
+```
+
+Both files have ownership checks, separate SHA256 state, source/runtime verification, install/uninstall snapshots and rollback restoration. An unknown/foreign Z-calibration helper blocks combined deployment before the existing main backend is replaced.
+
+The installer also prepares the late Klipper extension hook:
+
+```text
+[include plugins/ad5x_custom/z_calibration.cfg]
+```
+
+which overrides Z-Mod's deliberately empty `_USER_START_PRINT` extension point only after the installer idle/snapshot gates. The hook itself performs no `PROBE`, motion or direct Z-offset write; it reports which Z-Mod offset branch (`global` / `job` / `none`) has already executed.
 
 ---
 
@@ -305,7 +324,70 @@ H7/load-cell data is secondary until its latency/stop-distance semantics are sep
 
 ---
 
-## 8. Reverse-engineering state — proven vs unresolved
+## 8. Current implementation status
+
+### Milestone A — core/fake: repository-green
+
+Implemented:
+
+- dependency-free core model;
+- offset provenance/composition with replace-not-accumulate Auto-Z;
+- state machine and atomic abort/cancel cleanup;
+- bounded trusted-reference and explicit initial-acquisition envelopes;
+- probe spread/drift/plausibility validation;
+- mandatory independent second-series confirmation for large delta;
+- saved/saved+check/runtime mesh decisions;
+- bounded structured diagnostics;
+- H7 secondary-signal model;
+- deterministic fake Klipper/Moonraker adapter;
+- mutation-sensitive lower-bound test.
+
+### Milestone B — backend lifecycle binding: repository-green
+
+Implemented:
+
+- standard Klipper effective-offset reconciliation;
+- explicit `external_unknown` provenance;
+- Z-Mod post-`_START_PRINT` adoption for its real three-way `global/job/none` offset semantics;
+- idempotent retry: no second offset application;
+- mismatch rejection before write;
+- terminal job and disconnect cleanup of job/Auto-Z/live transient provenance;
+- optional runtime detection of the loaded `_USER_START_PRINT` hook marker;
+- internal job-start remote method refuses to operate when that marker is absent/incompatible;
+- optional hook query failure does not make the whole backend unavailable;
+- Z-offset write gate defaults **closed** and is independent of hook-loaded state;
+- calibration motion actions remain disabled.
+
+### Milestone C — installer/config lifecycle: repository-green
+
+Implemented:
+
+- helper source validation and managed-copy deployment;
+- foreign destination fail-closed;
+- separate main/helper ownership hashes;
+- combined source/runtime verification;
+- install/uninstall snapshot + rollback for both Moonraker files;
+- bytecode cleanup;
+- late `_USER_START_PRINT` hook asset and controlled include;
+- exact tests proving hook activation ordering after idle/snapshot gates;
+- no direct Z/probe/motion command in the hook.
+
+Exact repository evidence at current implementation head:
+
+```text
+head: b852f25c2c5f52d62ee65a83ea3f420d4b327bd0
+compare vs dev: ahead 31 / behind 0
+workflow: 31954499638
+compile: PASS
+shell syntax: PASS
+repository tests: 117 / 117 PASS
+```
+
+No CALIBRATION-SUBSYSTEM-002 artifact has been deployed to the live AD5X in this work item. No live Z movement or Z-offset mutation has been performed.
+
+---
+
+## 9. Reverse-engineering state — proven vs unresolved
 
 ### Proven enough to constrain implementation
 
@@ -331,7 +413,7 @@ H7/load-cell data is secondary until its latency/stop-distance semantics are sep
 
 ---
 
-## 9. Old CALIBRATION-CENTER-001 disposition
+## 10. Old CALIBRATION-CENTER-001 disposition
 
 Issue #5 is CLOSED as superseded/not planned.
 
@@ -351,24 +433,30 @@ Do not cherry-pick the old architecture wholesale.
 
 ---
 
-## 10. Current implementation sequence
+## 11. Current implementation sequence
+
+Completed repository gates:
 
 1. formal core model and fake Klipper/Moonraker adapter;
 2. exhaustive repository/model/safety tests;
-3. extend shared `plugins_ad5x` backend with frontend-neutral Z Calibration state/actions;
+3. shared `plugins_ad5x` backend runtime/provenance binding;
 4. structured bounded diagnostic log;
-5. installer/config integration using existing managed-copy lifecycle;
-6. Fluidd full UI using accepted `src/ad5x/**` seams;
-7. controlled real-printer acceptance gates;
-8. optional first-layer verifier physical acceptance;
-9. actual nozzle/hotend or plate-change acceptance;
-10. later parity adapters for Mainsail, HelixScreen, Guppy and KlipperScreen after its platform acceptance.
+5. installer/config integration using existing managed-copy lifecycle.
 
-`docs/Z_CALIBRATION_TEST_PLAN_V2.md` is mandatory for implementation/release.
+Next:
+
+6. correct the stale Fluidd capabilities PoC to consume `server.plugins_ad5x.snapshot` and add the first read-only Z Calibration status slice using accepted `src/ad5x/**` seams;
+7. expand Fluidd to the full Calibration Center only as backend actions become repository-safe;
+8. controlled real-printer acceptance gates;
+9. optional first-layer verifier physical acceptance;
+10. actual nozzle/hotend or plate-change acceptance;
+11. later parity adapters for Mainsail, HelixScreen, Guppy and KlipperScreen after its platform acceptance.
+
+`docs/Z_CALIBRATION_TEST_PLAN_V2.md` remains mandatory for implementation/release.
 
 ---
 
-## 11. Issue #8 relationship / scope guard
+## 12. Issue #8 relationship / scope guard
 
 Issue #8 remains OPEN because its coordinator review was not formally closed in the root `dev` state at branch creation.
 
@@ -380,7 +468,7 @@ No merge of this feature into `dev` is implied by merely opening/working the Dra
 
 ---
 
-## 12. Context recovery rule for a new implementation chat
+## 13. Context recovery rule for a new implementation chat
 
 Before changing code:
 
