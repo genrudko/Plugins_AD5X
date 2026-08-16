@@ -12,6 +12,7 @@ on:
       - "tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf"
       - "tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh"
       - "tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py"
+      - "tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py"
       - "tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py"
 
 permissions:
@@ -29,6 +30,9 @@ env:
   KS_NETWORK_ARTIFACT_ID: "9263797247"
   KS_NETWORK_ZIP_SHA256: 3798e13c9c0a02e631d0fe87840225f044241b30be414fa46117abdda023acba
   KS_NETWORK_TAR_SHA256: 08bc9be98629c0c275fffe4b17a9de8962957a5ea1a7e2158172ad037b4ea83f
+  KS_CAIRO_ARTIFACT_ID: "9268998995"
+  KS_CAIRO_ZIP_SHA256: f1bebd0c1d0acb35200f19c4b7fbff47a5535a3f45042fa10125d6419ab690b1
+  KS_CAIRO_TAR_SHA256: 1751ee284e333e42c0b6470007a90bff67fc85d096adbe0c84b7e514b7211a1d
 
 jobs:
   build-klipperscreen:
@@ -130,7 +134,33 @@ jobs:
           test -e "$APPROOT/lib/libcrypto.so.3"
           echo "KS_NETWORK_DELTA_READY"
 
-      - name: MIPS QEMU startup import, IFS panel and PNG proof
+      - name: Download proven PyGObject Cairo foreign bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out/ks-cairo
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${KS_CAIRO_ARTIFACT_ID}/zip" \
+            -o out/ks-cairo/artifact.zip
+          echo "${KS_CAIRO_ZIP_SHA256}  out/ks-cairo/artifact.zip" | sha256sum -c -
+          unzip -q out/ks-cairo/artifact.zip -d out/ks-cairo/artifact
+          CAIRO_TAR=out/ks-cairo/artifact/ad5x-klipperscreen-cairo-bridge.tar.gz
+          test -f "$CAIRO_TAR"
+          echo "${KS_CAIRO_TAR_SHA256}  $CAIRO_TAR" | sha256sum -c -
+          grep -q '^QEMU_CAIRO_FOREIGN_OK 1.29.0 3.42.2' out/ks-cairo/artifact/qemu-cairo-foreign.txt
+          gzip -dc "$CAIRO_TAR" | tar -xf - -C out/klipperscreen/bundle-root
+
+          APPROOT=out/klipperscreen/bundle-root/opt/ad5x-klipperscreen
+          test -f "$APPROOT/CAIRO_BRIDGE_BUILDINFO.txt"
+          test -f "$APPROOT/lib/python3.12/site-packages/gi/_gi.cpython-312-mipsel-linux-gnu.so"
+          test -f "$APPROOT/lib/python3.12/site-packages/gi/_gi_cairo.cpython-312-mipsel-linux-gnu.so"
+          echo "KS_CAIRO_FOREIGN_BRIDGE_READY"
+
+      - name: MIPS QEMU startup import, Cairo foreign, IFS panel and PNG proof
         run: |
           set -euo pipefail
           TARGET="$PWD/out/stage3/rootfs"
@@ -141,6 +171,7 @@ jobs:
           ICON="$APP/styles/icon.png"
           test -f "$ICON"
           test -f "$APP/panels/ad5x_ifs.py"
+          test -f "$APP/panels/ad5x_ifs_manage.py"
           env \
             QEMU_LD_PREFIX="$TARGET" \
             PYTHONHOME="$TARGET/usr" \
@@ -148,10 +179,11 @@ jobs:
             LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \
             GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
             qemu-mipsel "$TARGET/usr/bin/python3" -c \
-            'import cairo,gi,hashlib,jinja2,requests,ssl,websocket,zlib,sys; gi.require_version("Gtk","3.0"); gi.require_version("GdkPixbuf","2.0"); from gi.repository import Gtk,GdkPixbuf; import screen; import panels.ad5x_ifs as ad5x_ifs; p=GdkPixbuf.Pixbuf.new_from_file(sys.argv[1]); print("QEMU_KLIPPERSCREEN_IMPORT_OK", sys.version.split()[0], Gtk.get_major_version(), Gtk.get_minor_version(), jinja2.__version__, requests.__version__, websocket.__version__, zlib.ZLIB_VERSION, ssl.OPENSSL_VERSION, hashlib.sha256(b"ad5x").hexdigest()[:12], p.get_width(), p.get_height(), ad5x_ifs.SNAPSHOT_METHOD)' "$ICON" \
+            'import cairo,gi,hashlib,jinja2,requests,ssl,websocket,zlib,sys; gi.require_foreign("cairo"); gi.require_version("Gtk","3.0"); gi.require_version("Gdk","3.0"); gi.require_version("GdkPixbuf","2.0"); from gi.repository import Gtk,Gdk,GdkPixbuf; s=cairo.ImageSurface(cairo.FORMAT_ARGB32,2,2); c=cairo.Context(s); rgba=Gdk.RGBA(); assert rgba.parse("#123456"); Gdk.cairo_set_source_rgba(c,rgba); c.paint(); import screen; import panels.ad5x_ifs as ad5x_ifs; import panels.ad5x_ifs_manage; p=GdkPixbuf.Pixbuf.new_from_file(sys.argv[1]); print("QEMU_KLIPPERSCREEN_IMPORT_OK", sys.version.split()[0], Gtk.get_major_version(), Gtk.get_minor_version(), jinja2.__version__, requests.__version__, websocket.__version__, zlib.ZLIB_VERSION, ssl.OPENSSL_VERSION, hashlib.sha256(b"ad5x").hexdigest()[:12], p.get_width(), p.get_height(), ad5x_ifs.SNAPSHOT_METHOD, cairo.version, gi.__version__, "CAIRO_FOREIGN_OK")' "$ICON" \
             | tee out/klipperscreen/qemu-klipperscreen-import.txt
           grep -q 'QEMU_KLIPPERSCREEN_IMPORT_OK 3.12.9 3 24 3.1.6 2.34.2 1.9.0 1.3.1 OpenSSL 3.4.1' out/klipperscreen/qemu-klipperscreen-import.txt
           grep -q 'server.plugins_ad5x.snapshot' out/klipperscreen/qemu-klipperscreen-import.txt
+          grep -q '1.29.0 3.42.2 CAIRO_FOREIGN_OK' out/klipperscreen/qemu-klipperscreen-import.txt
 
       - name: MIPS QEMU full KlipperScreen X11 startup smoke
         run: |
@@ -185,6 +217,8 @@ jobs:
               "$PWD/tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py" \
               | tee out/klipperscreen/qemu-ifs-panel-smoke.txt
           grep -q 'QEMU_AD5X_IFS_PANEL_CONSTRUCT_OK 17' out/klipperscreen/qemu-ifs-panel-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_ACTION_GATES_OK$' out/klipperscreen/qemu-ifs-panel-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_MANAGE_PANEL_OK 17$' out/klipperscreen/qemu-ifs-panel-smoke.txt
 
           set +e
           env \
@@ -223,8 +257,9 @@ jobs:
 
           grep -q 'Screen resolution: 800x480' out/klipperscreen/qemu-KlipperScreen.log
           grep -q 'Connecting to AD5X' out/klipperscreen/qemu-KlipperScreen.log
-          if grep -q 'Fatal error in main loop' out/klipperscreen/qemu-KlipperScreen.log; then
-            tail -n 180 out/klipperscreen/qemu-KlipperScreen.log >&2
+          if grep -Eq 'Fatal error in main loop|Couldn.t find foreign struct converter for .cairo.Context.' out/klipperscreen/qemu-KlipperScreen.log out/klipperscreen/qemu-startup.stdout; then
+            cat out/klipperscreen/qemu-startup.stdout >&2 || true
+            tail -n 180 out/klipperscreen/qemu-KlipperScreen.log >&2 || true
             exit 1
           fi
           echo "QEMU_KLIPPERSCREEN_X11_STARTUP_OK" | tee out/klipperscreen/qemu-startup-result.txt
@@ -238,7 +273,11 @@ jobs:
 
           test -x "$APPROOT/run-klipperscreen-test.sh"
           test -f "$APPROOT/PYTHON_NETWORK_BUILDINFO.txt"
+          test -f "$APPROOT/CAIRO_BRIDGE_BUILDINFO.txt"
           test -f "$APPROOT/app/panels/ad5x_ifs.py"
+          test -f "$APPROOT/app/panels/ad5x_ifs_manage.py"
+          test -f "$APPROOT/lib/python3.12/site-packages/gi/_gi.cpython-312-mipsel-linux-gnu.so"
+          test -f "$APPROOT/lib/python3.12/site-packages/gi/_gi_cairo.cpython-312-mipsel-linux-gnu.so"
           grep -Fqx 'panel: ad5x_ifs' "$APPROOT/KlipperScreen.conf"
           grep -Fqx 'icon: extrude' "$APPROOT/KlipperScreen.conf"
           test ! -e "$BUNDLE_ROOT/usr"
@@ -260,7 +299,7 @@ jobs:
           done
 
           tar -tzf "$FINAL" | grep -E '\.so($|\.)' > out/klipperscreen/final-native-files.txt || true
-          if grep -Ev '^opt/ad5x-klipperscreen/lib/(lib(z|ssl|crypto)\.so($|\.)|python3\.12/lib-dynload/(zlib|_ssl|_hashlib)[^/]*\.so$)' out/klipperscreen/final-native-files.txt | grep -q .; then
+          if grep -Ev '^opt/ad5x-klipperscreen/lib/(lib(z|ssl|crypto)\.so($|\.)|python3\.12/lib-dynload/(zlib|_ssl|_hashlib)[^/]*\.so$|python3\.12/site-packages/gi/_gi(_cairo)?[^/]*\.so$)' out/klipperscreen/final-native-files.txt | grep -q .; then
             echo "ERROR: unexpected native object in final Stage 4 bundle" >&2
             cat out/klipperscreen/final-native-files.txt >&2
             exit 1
@@ -268,8 +307,10 @@ jobs:
 
           grep -q '^opt/ad5x-klipperscreen/app/screen.py$' out/klipperscreen/bundle-files.txt
           grep -q '^opt/ad5x-klipperscreen/app/panels/ad5x_ifs.py$' out/klipperscreen/bundle-files.txt
+          grep -q '^opt/ad5x-klipperscreen/app/panels/ad5x_ifs_manage.py$' out/klipperscreen/bundle-files.txt
           grep -q '^opt/ad5x-klipperscreen/run-klipperscreen-test.sh$' out/klipperscreen/bundle-files.txt
           grep -q '^opt/ad5x-klipperscreen/lib/python3.12/lib-dynload/_ssl' out/klipperscreen/bundle-files.txt
+          grep -q '^opt/ad5x-klipperscreen/lib/python3.12/site-packages/gi/_gi_cairo' out/klipperscreen/bundle-files.txt
           echo "STAGE4_DEPLOY_BUNDLE_OK"
 
       - name: Upload Stage 4 KlipperScreen deploy bundle
