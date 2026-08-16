@@ -1,0 +1,64 @@
+name: Temporary Klipper bridge runtime path fix
+
+on:
+  push:
+    branches:
+      - ad5x-klipperscreen-spike
+    paths:
+      - '.github/workflows/_tmp-fix-klipper-bridge-runtime-path.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ad5x-klipperscreen-spike
+          fetch-depth: 0
+
+      - name: Patch installer runtime destination and regression test
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          installer = Path('install.sh')
+          text = installer.read_text(encoding='utf-8')
+          old = 'KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/usr/prog/klipper/klippy/extras/ad5x_ifs.py}"'
+          new = 'KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/root/klipper-env/klippy/extras/ad5x_ifs.py}"'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one old destination, found {text.count(old)}')
+          installer.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test = Path('tests/test_installer_ifs_bridge_lifecycle.py')
+          t = test.read_text(encoding='utf-8')
+          old_assert = 'self.assertIn("/usr/prog/klipper/klippy/extras/ad5x_ifs.py", text)'
+          new_assert = 'self.assertIn("/root/klipper-env/klippy/extras/ad5x_ifs.py", text)'
+          if t.count(old_assert) != 1:
+              raise SystemExit(f'expected one old path assertion, found {t.count(old_assert)}')
+          t = t.replace(old_assert, new_assert, 1)
+
+          marker = '    def test_managed_copy_is_atomic_and_records_hash(self) -> None:\n'
+          extra = '''    def test_default_destination_matches_zmod_klipper_runtime_entrypoint(self) -> None:\n        text = INSTALLER.read_text(encoding="utf-8")\n        self.assertIn(\n            'KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/root/klipper-env/klippy/extras/ad5x_ifs.py}"',\n            text,\n        )\n\n'''
+          if 'test_default_destination_matches_zmod_klipper_runtime_entrypoint' not in t:
+              if marker not in t:
+                  raise SystemExit('test insertion marker missing')
+              t = t.replace(marker, extra + marker, 1)
+          test.write_text(t, encoding='utf-8')
+          PY
+
+          sh -n install.sh
+          python -m unittest -v \
+            tests.test_installer_backend_lifecycle \
+            tests.test_installer_ifs_bridge_lifecycle
+
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name 'genrudko'
+          git config user.email '54811999+genrudko@users.noreply.github.com'
+          git rm .github/workflows/_tmp-fix-klipper-bridge-runtime-path.yml
+          git add install.sh tests/test_installer_ifs_bridge_lifecycle.py
+          git commit -m 'fix(installer): deploy IFS bridge to live Klipper runtime'
+          git push origin HEAD:ad5x-klipperscreen-spike
