@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence phase:** `gate_c_repeatability`  
-**Status:** HOT CENTER POSITION ESTABLISHED / TARE PENDING  
+**Status:** HOT TARE COMPLETE / PROBE SERIES PENDING  
 **Authority:** evidence record only; does not authorize production Plugins AD5X motion or writes
 
 ## Run identity
@@ -173,11 +173,32 @@ Interpretation:
 - the nozzle heater remains off, with passive nozzle temperature `30.07 C`;
 - printer remains standby and no stop condition is observed.
 
+## Heated-condition load-cell tare
+
+Command:
+
+```text
+LOAD_CELL_TARE
+```
+
+Z-Mod returned the command as `ok` and reported:
+
+```text
+H1 > command H1 ok. 8431997
+N 1. Вес: 80.0
+H1 > command H1 ok. 8430826
+N 2. Вес: 20.0
+Сброс тензодатчка: ОК. Вес: 80.0->20.0
+```
+
+This observation is retained exactly. It differs from the previous ambient runs (`60→0 g` in Gate B and `0→0 g` in Gate C run 001): this heated-condition tare required the second observation and ended at a reported residual `20 g`, while Z-Mod itself still classified the tare as `ОК`.
+
+No new numeric tare acceptance threshold is inferred from this result. The `20 g` residual is retained as secondary H7/tare evidence and will be considered together with the independent contact series rather than silently normalized to zero or discarded.
+
 ## Remaining planned path
 
 ```text
-fresh LOAD_CELL_TARE
-→ PROBE_ACCURACY SAMPLES=10
+PROBE_ACCURACY SAMPLES=10
 → explicit Z5 retract
 → restore saved auto mesh at runtime
 → post-state/hash verification
@@ -187,7 +208,6 @@ No `SAVE_CONFIG`, persistent trim mutation, saved-mesh overwrite/delete, Plugins
 
 ## Pending
 
-- tare observation: PENDING
 - raw 10-sample series: PENDING
 - descriptive statistics: PENDING
 - comparison with ambient runs: PENDING
