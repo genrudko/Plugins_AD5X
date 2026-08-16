@@ -285,6 +285,10 @@ Therefore `gate-c-001-ambient-back-to-back-2026-08-17` is **structurally complet
 
 It does **not** by itself authorize a motion policy, search envelope, correction limit, production adapter or gate opening.
 
+## Dataset note after first repeatability run
+
+The evidence set now contains one clean Gate-B controlled measurement and one clean Gate-C repeatability run under near-identical ambient conditions. This is useful evidence of short-term repeatability, but it is intentionally insufficient to freeze numeric policy because condition diversity is still missing.
+
 ## Next evidence condition
 
 Do not spend additional runs on identical immediate ambient repetition unless a later observation creates a reason to do so. The next useful Gate-C condition should be a distinct recorded condition such as the owner's representative PLA bed temperature, followed later by representative higher-bed temperature, reboot/power-cycle and time-separated evidence.
