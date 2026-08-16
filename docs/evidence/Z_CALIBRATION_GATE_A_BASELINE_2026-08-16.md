@@ -11,11 +11,64 @@
 - Source 1: owner-provided screenshot of the live bed-mesh UI after current mechanical adjustment.
 - Source 2: owner-provided live `printer.cfg` `SAVE_CONFIG` excerpt containing Klipper bed-mesh profiles.
 - Source 3: owner-provided read-only Z-Mod chroot configuration inspection under `/opt/config`.
+- Source 4: owner-provided read-only live Moonraker/Klipper API responses plus exact Git checkout inspection inside the Z-Mod chroot.
 - Physical context reported by owner immediately before this baseline: head-belt tightening and bed screws/fasteners tightening.
 - Mesh geometry: 5 × 5 measured points, X 0..215 mm, Y 0..215 mm, bicubic interpolation, `mesh_x_pps=5`, `mesh_y_pps=5`, tension 0.2.
 - The Plugins AD5X CALIBRATION-SUBSYSTEM-002 motion/write path was not deployed or used for this measurement.
-- Z-Mod chroot used for configuration inspection: `/usr/data/.mod/.zmod`; active configuration namespace inside the chroot: `/opt/config`.
-- Exact live Z-Mod/Klipper/Moonraker versions remain pending Gate-A provenance fields.
+- Z-Mod chroot used for configuration/runtime inspection: `/usr/data/.mod/.zmod`; active configuration namespace inside the chroot: `/opt/config`.
+
+## Live software/runtime provenance
+
+### Z-Mod
+
+- reported AD5X version from `/opt/config/mod/version_5x.txt`: `1.7.2-5`;
+- checkout branch: `1.7`;
+- exact checkout HEAD: `2e32155d00e464094b8c7197e23783ec821a112c`.
+
+### Klipper
+
+Live `/printer/info` reported:
+
+```text
+state            = ready
+hostname         = flashforge
+klipper_path     = /usr/data/config/base/klipper
+python_path      = /usr/prog/Python-3.8.2/bin/python3
+process_id       = 1706
+log_file         = /usr/data/logs/printer.log
+config_file      = /usr/data/config/printer.cfg
+software_version = v0.13.0-753-g0df153f7-ZMOD-20260816
+```
+
+The inspected checkout at `/opt/config/base/klipper` reports exact HEAD:
+
+```text
+6bd8fca222811d465b4be3b0ed862915d6caf59e
+```
+
+The runtime software string embeds `g0df153f7`, while the inspected checkout HEAD is `6bd8fca...`. These are retained as **distinct provenance facts**. This Gate-A record does not infer that they are equivalent and does not invent a cause for the difference.
+
+### Moonraker
+
+Live `/server/info` reported:
+
+```text
+klippy_connected       = true
+klippy_state           = ready
+failed_components      = []
+warnings               = []
+moonraker_version      = ?
+api_version            = [1, 5, 0]
+api_version_string     = 1.5.0
+```
+
+The inspected checkout at `/opt/config/base/moonraker` reports exact HEAD:
+
+```text
+a5ac2593f5937a0b5fea6d2aeb1fab8c241b0a8e
+```
+
+Moonraker's semantic/version field is literally `?` in the live API response. The evidence therefore records `?` rather than substituting an invented semantic version; exact checkout SHA plus API version are retained for reproducibility.
 
 ## Active include context
 
@@ -171,16 +224,21 @@ The measured surface remains a broad, smooth bowl-like shape: the central/interi
 
 This observation is qualitative and must not be converted into a calibration acceptance threshold.
 
-## Gate-A status
+## Gate-A status — COMPLETE
 
 This artifact now records:
 
 - the fresh bed-mesh baseline after the reported mechanical adjustment;
-- the active configuration include context;
-- the current base `stepper_z` contract;
-- the merged base + active-Z-Mod-`recommend` probe contract;
-- the active `recommend` bed-mesh overrides.
+- active configuration include context;
+- current base `stepper_z` contract;
+- merged base + active-Z-Mod-`recommend` probe contract;
+- active `recommend` bed-mesh overrides;
+- exact Z-Mod version/branch/checkout SHA;
+- live Klipper readiness/runtime software string plus exact inspected checkout SHA;
+- live Moonraker readiness/API version plus exact inspected checkout SHA.
 
-It remains a **partial Gate-A record** only because exact live Z-Mod/Klipper/Moonraker versions (and any desired live standard-Klipper effective-offset snapshot) have not yet been captured into this artifact.
+The optional live standard-Klipper effective-offset snapshot was not required to close this read-only Gate-A baseline because this gate establishes machine/configuration/mesh provenance rather than an Auto-Z correction. Effective-offset reconciliation remains a mandatory runtime preflight for any later controlled action.
+
+**Gate A is complete as descriptive evidence.** It authorizes no motion or writes and establishes no production safety threshold.
 
 No `owner_accepted`, `ready_for_motion`, search margin, approach speed, contact speed, retract distance, Auto-Z correction limit or release threshold is established by this record.
