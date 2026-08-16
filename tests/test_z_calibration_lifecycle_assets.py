@@ -205,10 +205,12 @@ fail(){{ echo "$*" >&2; return 1; }}
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             components = tmp / "moonraker" / "components"
+            components.mkdir(parents=True, exist_ok=True)
             main_dest = components / "plugins_ad5x.py"
             zcal_dest = components / "plugins_ad5x_zcalibration.py"
             main_dest.write_text("old-main\n", encoding="utf-8")
             main_marker = tmp / "state-root" / "state" / "backend-runtime.sha256"
+            main_marker.parent.mkdir(parents=True, exist_ok=True)
             main_marker.write_text(sha256(main_dest) + "\n", encoding="utf-8")
             zcal_dest.write_text("foreign-zcal\n", encoding="utf-8")
             result = self.run_main("deploy_backend_managed_copy", tmp, check=False)
