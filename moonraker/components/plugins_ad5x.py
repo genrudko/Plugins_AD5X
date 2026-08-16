@@ -2,13 +2,31 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+from pathlib import Path
 from typing import Any, Dict
 
 from ..common import RequestType, TransportType
 
+try:
+    from .plugins_ad5x_ifs_model import normalize_module
+except ImportError:
+    # Minimal test/source-tree compatibility. Production installer deploys the
+    # helper beside this managed component and the normal relative import wins.
+    _model_path = Path(__file__).with_name("plugins_ad5x_ifs_model.py")
+    _model_spec = importlib.util.spec_from_file_location(
+        "moonraker.components.plugins_ad5x_ifs_model",
+        _model_path,
+    )
+    if _model_spec is None or _model_spec.loader is None:
+        raise
+    _model_module = importlib.util.module_from_spec(_model_spec)
+    _model_spec.loader.exec_module(_model_module)
+    normalize_module = _model_module.normalize_module
+
 API_VERSION = "1.0"
-BACKEND_VERSION = "0.1.3"
+BACKEND_VERSION = "0.1.4"
 
 SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/snapshot"
 IFS_ACTION_ENDPOINT = "/server/plugins_ad5x/ifs/action"
@@ -72,9 +90,8 @@ class PluginsAD5X:
                 "server:klippy_disconnect", self._on_klippy_disconnect
             )
 
-    @staticmethod
-    def _unavailable_ifs(reason: str) -> Dict[str, Any]:
-        return {
+    def _unavailable_ifs(self, reason: str) -> Dict[str, Any]:
+        raw = {
             "available": False,
             "reason": reason,
             "state": "unavailable",
@@ -88,6 +105,18 @@ class PluginsAD5X:
             "stall": False,
             "stall_mask": 0,
         }
+        return normalize_module(
+            raw,
+            self._ifs_metadata,
+            self._print_state,
+            self._head_filament,
+            {
+                "state": self._operation_state,
+                "action": self._operation_action,
+                "slot": self._operation_slot,
+                "error": self._operation_error,
+            },
+        )
 
     def get_snapshot(self) -> Dict[str, Any]:
         return {
@@ -125,52 +154,18 @@ class PluginsAD5X:
         return True
 
     def _compose_ifs_module(self) -> Dict[str, Any]:
-        module = dict(self._ifs_raw)
-        module.pop("reason", None)
-
-        slot_meta = self._ifs_metadata.get("slots", {})
-        raw_slots = module.get("slots")
-        if isinstance(raw_slots, list) and slot_meta:
-            enriched_slots = []
-            for raw_slot in raw_slots:
-                if not isinstance(raw_slot, dict):
-                    continue
-                item = dict(raw_slot)
-                slot = item.get("slot")
-                metadata = slot_meta.get(slot)
-                if isinstance(metadata, dict):
-                    item.update(metadata)
-                enriched_slots.append(item)
-            module["slots"] = enriched_slots
-
-        configured_active_slot = self._ifs_metadata.get("active_slot")
-        if isinstance(configured_active_slot, int) and configured_active_slot > 0:
-            # Keep the bridge-provided cur_port only as diagnostic evidence. The
-            # FlashForge FFMInfo.channel value is the authority Z-Mod itself uses
-            # for current filament operations and is therefore canonical here.
-            runtime_active_slot = module.get("active_slot", 0)
-            module["runtime_active_slot"] = runtime_active_slot
-            module["active_slot"] = configured_active_slot
-
-        tool_mapping = self._ifs_metadata.get("tool_mapping")
-        if isinstance(tool_mapping, list):
-            module["tool_mapping"] = list(tool_mapping)
-
-        module["print_state"] = self._print_state
-        module["filament_at_toolhead"] = self._head_filament
-        module["operation"] = {
-            "state": self._operation_state,
-            "action": self._operation_action,
-            "slot": self._operation_slot,
-            "error": self._operation_error,
-        }
-        module["operations"] = {
-            "select_slot": True,
-            "load_slot": True,
-            "unload_slot": True,
-            "manage": True,
-        }
-        return module
+        return normalize_module(
+            self._ifs_raw,
+            self._ifs_metadata,
+            self._print_state,
+            self._head_filament,
+            {
+                "state": self._operation_state,
+                "action": self._operation_action,
+                "slot": self._operation_slot,
+                "error": self._operation_error,
+            },
+        )
 
     def _apply_ifs_status(self, payload: Dict[str, Any]) -> bool:
         # Klipper subscriptions may deliver partial object updates. Merge into
