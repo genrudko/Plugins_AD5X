@@ -8,6 +8,7 @@ on:
       - 'klipper/extras/ad5x_ifs.py'
       - 'moonraker/components/plugins_ad5x.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'
       - 'tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf'
       - 'tools/ad5x-display-spike/klipperscreen/build-stage4.sh'
       - 'tests/test_ad5x_ifs_bridge.py'
@@ -35,7 +36,8 @@ jobs:
           python -m py_compile \
             klipper/extras/ad5x_ifs.py \
             moonraker/components/plugins_ad5x.py \
-            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
+            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py \
+            tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py
       - name: Validate shell syntax and IFS panel packaging contract
         run: |
           sh -n install.sh
