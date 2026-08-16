@@ -8,115 +8,23 @@ on:
       - '.github/workflows/ad5x-ifs-ui-polish-run.yml'
 
 permissions:
-  contents: write
+  contents: read
+  actions: write
 
 jobs:
-  patch:
+  dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feature/ifs-manager-v1
-      - name: Expose direct spool editor
+      - name: Dispatch exact-branch IFS UI target smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          panel = Path('tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py')
-          s = panel.read_text()
-
-          # Add a non-mechanical metadata action before the mechanical controls.
-          pat = re.compile(
-              r'(?m)^(\s*)self\.action_select = Gtk\.Button\(label="Выбрать"\)\n'
-          )
-          repl = (
-              r'\1self.action_edit = Gtk.Button(label="Катушка")\n'
-              r'\1self.action_edit.connect("clicked", self._on_edit_clicked)\n'
-              r'\1action_bar.pack_start(self.action_edit, False, False, 0)\n\n'
-              r'\1self.action_select = Gtk.Button(label="Выбрать")\n'
-          )
-          s, n = pat.subn(repl, s, count=1)
-          assert n == 1, f'action edit insertion failed: {n}'
-
-          # Direct navigation keeps selected slot as frontend-local context.
-          pat = re.compile(
-              r'(?m)^(    def _on_slot_clicked\(self, _widget, slot\):\n'
-              r'        self\._select_slot\(slot\)\n\n)'
-          )
-          repl = (
-              r'\1'
-              r'    def _on_edit_clicked(self, _widget):\n'
-              r'        slot = self._selected_slot or 1\n'
-              r'        self._screen.show_panel(\n'
-              r'            "ad5x_ifs_metadata",\n'
-              r'            "IFS — катушка",\n'
-              r'            panel_name=f"ad5x_ifs_metadata_slot_{slot}",\n'
-              r'            slot=slot,\n'
-              r'        )\n\n'
-          )
-          s, n = pat.subn(repl, s, count=1)
-          assert n == 1, f'edit handler insertion failed: {n}'
-          panel.write_text(s)
-
-          metadata = Path('tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py')
-          m = metadata.read_text()
-          m, n = re.subn(
-              r'def __init__\(self, screen, title\):',
-              'def __init__(self, screen, title, slot=1):',
-              m,
-              count=1,
-          )
-          assert n == 1, f'metadata constructor signature failed: {n}'
-          m, n = re.subn(
-              r'(?m)^(        self\._last_module = None\n)        self\._selected_slot = 1\n',
-              r'\1        try:\n'
-              r'            requested_slot = int(slot)\n'
-              r'        except (TypeError, ValueError):\n'
-              r'            requested_slot = 1\n'
-              r'        self._selected_slot = requested_slot if 1 <= requested_slot <= 4 else 1\n',
-              m,
-              count=1,
-          )
-          assert n == 1, f'metadata selected slot init failed: {n}'
-          metadata.write_text(m)
-
-          smoke = Path('tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py')
-          q = smoke.read_text()
-          anchor = 'panel._render_snapshot(sample)\npanel._on_manage_clicked(None)\n'
-          assert anchor in q
-          q = q.replace(
-              anchor,
-              'panel._render_snapshot(sample)\n'
-              'panel._select_slot(3)\n'
-              'panel._on_edit_clicked(None)\n'
-              'assert screen.opened_panels[-1] == ("ad5x_ifs_metadata", "IFS — катушка")\n'
-              'panel._on_manage_clicked(None)\n',
-              1,
-          )
-          old = 'metadata = IFSMetadataPanel(screen, "IFS — катушки")\nmetadata._render_snapshot(sample)\nassert metadata._selected_slot == 1\n'
-          new = 'metadata = IFSMetadataPanel(screen, "IFS — катушки", slot=3)\nmetadata._render_snapshot(sample)\nassert metadata._selected_slot == 3\n'
-          assert old in q
-          q = q.replace(old, new, 1)
-          old = 'assert "Flashforge/Z-Mod" in metadata.source.get_text()\nassert metadata.entries["material"].get_text() == "PETG"\n'
-          new = 'assert "Plugins AD5X" in metadata.source.get_text()\nmetadata._on_slot_clicked(None, 1)\nassert "Flashforge/Z-Mod" in metadata.source.get_text()\nassert metadata.entries["material"].get_text() == "PETG"\n'
-          assert old in q
-          q = q.replace(old, new, 1)
-          smoke.write_text(q)
-          PY
-
-          python3 -m py_compile \
-            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py \
-            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py \
-            tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py
-          git diff --check
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py \
-            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py \
-            tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py
-          git commit -m 'fix(ifs-ui): expose spool editor from primary MMU surface'
-          git push origin HEAD:feature/ifs-manager-v1
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ad5x-ifs-ui-target-smoke.yml/dispatches" \
+            -d '{"ref":"feature/ifs-manager-v1"}'
+          echo 'IFS_UI_TARGET_SMOKE_DISPATCH_OK'
