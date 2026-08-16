@@ -23,6 +23,12 @@ STATE_NAMES = {
     "unknown": "Неизвестно",
 }
 
+STORE_NAMES = {
+    "ok": "Готов",
+    "missing": "Пока пуст — будет создан при сохранении",
+    "invalid": "Ошибка хранилища",
+}
+
 
 class Panel(ScreenPanel):
     def __init__(self, screen, title):
@@ -70,6 +76,7 @@ class Panel(ScreenPanel):
             ("head", "Филамент у головы"),
             ("print", "Состояние печати"),
             ("operation", "Операция IFS"),
+            ("metadata", "Метаданные катушек"),
             ("mapping", "Карта инструментов"),
             ("silk", "Silk mask"),
             ("raw_channel", "F13 channel"),
@@ -99,9 +106,9 @@ class Panel(ScreenPanel):
 
         note = Gtk.Label(
             label=(
-                "Здесь показывается диагностическое состояние адаптера. "
-                "Cold-eject/recovery, изменение material/color и привязка Spoolman "
-                "будут добавляться отдельными безопасными flows, а не скрытыми макросами."
+                "Катушки, материал, несколько цветов и тип поверхности сохраняются "
+                "через Plugins AD5X и не меняют штатный Flashforge JSON. "
+                "Cold-eject/recovery останутся отдельными flows после аппаратного доказательства."
             ),
             hexpand=True,
             halign=Gtk.Align.START,
@@ -112,10 +119,22 @@ class Panel(ScreenPanel):
         note.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
         root.pack_start(note, False, False, 0)
 
+        actions = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=6,
+            homogeneous=True,
+            hexpand=True,
+            vexpand=False,
+        )
+        metadata = Gtk.Button(label="Катушки")
+        metadata.connect("clicked", self._on_metadata_clicked)
+        actions.pack_start(metadata, True, True, 0)
+
         spoolman = Gtk.Button(label="Spoolman")
         spoolman.set_sensitive(bool(getattr(self._printer, "spoolman", False)))
         spoolman.connect("clicked", self.menu_item_clicked, {"panel": "spoolman"})
-        root.pack_end(spoolman, False, False, 0)
+        actions.pack_start(spoolman, True, True, 0)
+        root.pack_end(actions, False, False, 0)
 
         self.content.add(root)
         self.content.show_all()
@@ -126,6 +145,9 @@ class Panel(ScreenPanel):
 
     def _on_refresh_clicked(self, _widget):
         self._request_snapshot(force=True)
+
+    def _on_metadata_clicked(self, _widget):
+        self._screen.show_panel("ad5x_ifs_metadata", "IFS — катушки")
 
     def _request_snapshot(self, force=False):
         if self._request_pending and not force:
@@ -182,6 +204,13 @@ class Panel(ScreenPanel):
             op = "idle"
         self.values["operation"].set_text(op)
 
+        store = module.get("metadata_store") or {}
+        store_status = store.get("status") or "missing"
+        store_text = STORE_NAMES.get(store_status, str(store_status))
+        if store.get("error"):
+            store_text += f" ({store.get('error')})"
+        self.values["metadata"].set_text(store_text)
+
         mapping = module.get("tool_mapping")
         if isinstance(mapping, list) and mapping:
             self.values["mapping"].set_text(
@@ -190,13 +219,20 @@ class Panel(ScreenPanel):
         else:
             self.values["mapping"].set_text("—")
 
-        self.values["silk"].set_text(str(module.get("silk_mask", 0)))
-        runtime_active = module.get("runtime_active_slot", 0)
-        raw_channel = module.get("raw_channel", 0)
+        diagnostics = module.get("diagnostics") or {}
+        self.values["silk"].set_text(
+            str(diagnostics.get("silk_mask", module.get("silk_mask", 0)))
+        )
+        runtime_active = diagnostics.get(
+            "runtime_active_slot", module.get("runtime_active_slot", 0)
+        )
+        raw_channel = diagnostics.get("raw_channel", module.get("raw_channel", 0))
         self.values["raw_channel"].set_text(
             f"raw={raw_channel}, bridge_cur_port={runtime_active}"
         )
-        self.values["stall"].set_text(str(module.get("stall_mask", 0)))
+        self.values["stall"].set_text(
+            str(diagnostics.get("stall_mask", module.get("stall_mask", 0)))
+        )
 
     def process_update(self, action, _data):
         if action == SNAPSHOT_NOTIFICATION:
