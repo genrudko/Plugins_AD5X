@@ -133,9 +133,10 @@ jobs:
                 grep -Eq "Class:[[:space:]]+ELF32" "out/ks-python/$(basename "$so").elf.txt"
                 grep -Eq "Data:[[:space:]]+2.s complement, little endian" "out/ks-python/$(basename "$so").elf.txt"
                 grep -Eq "Machine:[[:space:]]+MIPS R3000" "out/ks-python/$(basename "$so").elf.txt"
+                grep -Eq "Flags:.*nan2008.*o32" "out/ks-python/$(basename "$so").elf.txt"
                 mipsel-buildroot-linux-gnu-readelf -A "$so" >"out/ks-python/$(basename "$so").attributes.txt"
-                grep -q "Tag_GNU_MIPS_ABI_FP: Hard float (32-bit CPU, Any FPU)" "out/ks-python/$(basename "$so").attributes.txt"
-                grep -q "Tag_GNU_MIPS_ABI_MSA: Any MSA or not" "out/ks-python/$(basename "$so").attributes.txt" || true
+                grep -q "Tag_GNU_MIPS_ABI_FP: Hard float (32-bit CPU, 64-bit FPU)" "out/ks-python/$(basename "$so").attributes.txt"
+                grep -q "ISA: MIPS32r5" "out/ks-python/$(basename "$so").attributes.txt"
               done
 
               : > out/ks-python/needed.txt
