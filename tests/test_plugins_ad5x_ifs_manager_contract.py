@@ -132,13 +132,13 @@ class IFSManagerContractTests(unittest.TestCase):
         )
         self.assertEqual(slot3["appearance"]["finish"], "silk")
 
-    def test_capability_schema_does_not_pretend_integrations_exist(self):
+    def test_capability_schema_does_not_pretend_unimplemented_integrations_exist(self):
         caps = model.get_ifs_capabilities()
         self.assertTrue(caps["metadata_schema"]["spool_fields"])
         self.assertTrue(caps["metadata_schema"]["multi_color"])
         self.assertTrue(caps["metadata_schema"]["finish"])
         self.assertTrue(caps["integrations"]["flashforge"])
-        self.assertFalse(caps["integrations"]["manual_store"])
+        self.assertTrue(caps["integrations"]["manual_store"])
         self.assertFalse(caps["integrations"]["spoolman"])
         self.assertFalse(caps["integrations"]["slicer"])
         self.assertFalse(caps["integrations"]["rfid"])
