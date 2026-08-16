@@ -160,7 +160,7 @@ def get_ifs_capabilities() -> Dict[str, Any]:
     }
     integrations = {
         "flashforge": True,
-        "manual_store": False,
+        "manual_store": True,
         "spoolman": False,
         "slicer": False,
         "rfid": False,
@@ -178,7 +178,7 @@ def get_ifs_capabilities() -> Dict[str, Any]:
         },
         "metadata_schema": metadata_schema,
         "integrations": integrations,
-        # Transitional compatibility for early IFS consumers.  New frontends
+        # Transitional compatibility for early IFS consumers. New frontends
         # must use metadata_schema + integrations so a representable field is
         # never confused with an implemented external integration.
         "metadata": {
@@ -286,6 +286,7 @@ def normalize_slot(
         or spool["spoolman_id"]
         or spool["remaining_g"] is not None
         or appearance["colors"]
+        or appearance["finish"] != "standard"
     )
 
     result = dict(raw_slot)
