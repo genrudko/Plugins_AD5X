@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import math
 import statistics
 from typing import Optional
 
@@ -129,6 +128,8 @@ class HardwareEvidenceRunV1:
             raise core.PolicyError("hardware evidence source_refs must be distinct")
         if self.tare_residual is not None:
             core._finite(self.tare_residual, "tare_residual")
+        if self.h7_status is not None and not isinstance(self.h7_status, core.H7Status):
+            raise core.PolicyError("h7_status must be an H7Status value")
 
     @property
     def review_blockers(self) -> tuple[str, ...]:
