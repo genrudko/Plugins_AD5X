@@ -8,15 +8,26 @@ from typing import Any, Dict
 from ..common import RequestType, TransportType
 
 API_VERSION = "1.0"
-BACKEND_VERSION = "0.1.2"
+BACKEND_VERSION = "0.1.3"
 
 SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/snapshot"
+IFS_ACTION_ENDPOINT = "/server/plugins_ad5x/ifs/action"
 SNAPSHOT_CHANGED_EVENT = "plugins_ad5x:snapshot_changed"
 SNAPSHOT_CHANGED_NOTIFY_NAME = "plugins_ad5x_snapshot_changed"
 IFS_OBJECT = "ad5x_ifs"
+PRINT_STATS_OBJECT = "print_stats"
+HEAD_SENSOR_OBJECT = "filament_switch_sensor head_switch_sensor"
 
 FFCONFIG_PATH = "/usr/prog/config/Adventurer5M.json"
 FILE_MAPPING_PATH = "/usr/data/config/mod_data/file.json"
+
+SAFE_FILAMENT_OP_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
+IFS_ACTION_COMMANDS = {
+    "select_slot": "SET_EXTRUDER_SLOT SLOT={slot}",
+    "load_slot": "INSERT_PRUTOK_IFS PRUTOK={slot}",
+    # Z-Mod's stock toolhead-unload wrapper: it owns heat/cut/trash/cooldown semantics.
+    "unload_slot": "_IFS_REMOVE_CURRENT_PRUTOK",
+}
 
 
 class PluginsAD5X:
@@ -26,11 +37,24 @@ class PluginsAD5X:
         self._ifs_raw: Dict[str, Any] = {}
         self._ifs_metadata: Dict[str, Any] = {}
         self._ifs_module = None
+        self._print_state = "unknown"
+        self._head_filament = None
+        self._operation_state = "idle"
+        self._operation_action = ""
+        self._operation_slot = 0
+        self._operation_error = ""
 
         self.server.register_endpoint(
             SNAPSHOT_ENDPOINT,
             RequestType.GET,
             self._handle_snapshot,
+            transports=TransportType.HTTP | TransportType.WEBSOCKET,
+            auth_required=True,
+        )
+        self.server.register_endpoint(
+            IFS_ACTION_ENDPOINT,
+            RequestType.POST,
+            self._handle_ifs_action,
             transports=TransportType.HTTP | TransportType.WEBSOCKET,
             auth_required=True,
         )
@@ -121,6 +145,9 @@ class PluginsAD5X:
 
         configured_active_slot = self._ifs_metadata.get("active_slot")
         if isinstance(configured_active_slot, int) and configured_active_slot > 0:
+            # Keep the bridge-provided cur_port only as diagnostic evidence. The
+            # FlashForge FFMInfo.channel value is the authority Z-Mod itself uses
+            # for current filament operations and is therefore canonical here.
             runtime_active_slot = module.get("active_slot", 0)
             module["runtime_active_slot"] = runtime_active_slot
             module["active_slot"] = configured_active_slot
@@ -129,6 +156,20 @@ class PluginsAD5X:
         if isinstance(tool_mapping, list):
             module["tool_mapping"] = list(tool_mapping)
 
+        module["print_state"] = self._print_state
+        module["filament_at_toolhead"] = self._head_filament
+        module["operation"] = {
+            "state": self._operation_state,
+            "action": self._operation_action,
+            "slot": self._operation_slot,
+            "error": self._operation_error,
+        }
+        module["operations"] = {
+            "select_slot": True,
+            "load_slot": True,
+            "unload_slot": True,
+            "manage": True,
+        }
         return module
 
     def _apply_ifs_status(self, payload: Dict[str, Any]) -> bool:
@@ -136,6 +177,25 @@ class PluginsAD5X:
         # the last complete state before publishing the canonical module.
         self._ifs_raw.update(payload)
         return self._set_ifs_module(self._compose_ifs_module())
+
+    def _apply_aux_status(self, status: Dict[str, Any]) -> bool:
+        changed = False
+        print_stats = status.get(PRINT_STATS_OBJECT)
+        if isinstance(print_stats, dict):
+            state = print_stats.get("state")
+            if isinstance(state, str) and state and state != self._print_state:
+                self._print_state = state
+                changed = True
+
+        head = status.get(HEAD_SENSOR_OBJECT)
+        if isinstance(head, dict):
+            enabled = head.get("enabled", True)
+            detected = head.get("filament_detected")
+            normalized = bool(detected) if enabled and isinstance(detected, bool) else None
+            if normalized != self._head_filament:
+                self._head_filament = normalized
+                changed = True
+        return changed
 
     @staticmethod
     def _read_json(path: str) -> Any:
@@ -204,6 +264,132 @@ class PluginsAD5X:
             return self._set_ifs_module(self._compose_ifs_module())
         return False
 
+    def _operation_begin(self, action: str, slot: int) -> None:
+        self._operation_state = "running"
+        self._operation_action = action
+        self._operation_slot = slot
+        self._operation_error = ""
+        if self._ifs_raw:
+            self._set_ifs_module(self._compose_ifs_module())
+
+    def _operation_end(self, error: str = "") -> None:
+        self._operation_state = "idle"
+        self._operation_action = ""
+        self._operation_slot = 0
+        self._operation_error = error
+        if self._ifs_raw:
+            self._set_ifs_module(self._compose_ifs_module())
+
+    def _action_rejection(self, action: str, slot: int, error: str) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "action": action,
+            "slot": slot,
+            "error": error,
+            "snapshot": self.get_snapshot(),
+        }
+
+    def _validate_ifs_action(self, action: str, slot: int) -> str:
+        if action not in IFS_ACTION_COMMANDS:
+            return f"Unsupported IFS action: {action}"
+        if slot < 1 or slot > 4:
+            return f"Invalid IFS slot: {slot}"
+        if self._ifs_module is None or not self._ifs_module.get("available", False):
+            return "IFS is not available"
+        if self._ifs_module.get("state") != "ready":
+            return f"IFS is not ready: {self._ifs_module.get('state', 'unknown')}"
+        if self._operation_state != "idle":
+            return "Another IFS operation is already running"
+        # Helix hardware research proved Z-Mod filament macros may self-home and
+        # move the toolhead. Refuse writes not only while printing but also while
+        # PAUSED; unknown/non-idle job states fail closed as well.
+        if self._print_state not in SAFE_FILAMENT_OP_PRINT_STATES:
+            return f"IFS operations are blocked while print state is {self._print_state}"
+
+        slots = self._ifs_module.get("slots") or []
+        slot_data = next(
+            (
+                item
+                for item in slots
+                if isinstance(item, dict) and item.get("slot") == slot
+            ),
+            {},
+        )
+        present = bool(slot_data.get("present", False))
+        active_slot = int(self._ifs_module.get("active_slot") or 0)
+
+        if action in ("select_slot", "load_slot") and not present:
+            return f"IFS slot {slot} is empty"
+        if action == "load_slot" and active_slot == slot and self._head_filament is True:
+            return f"IFS slot {slot} is already loaded at the toolhead"
+        if action == "unload_slot":
+            if active_slot != slot:
+                return "First normal implementation only unloads the active toolhead slot"
+            if self._head_filament is not True:
+                return "Toolhead filament presence is not confirmed; use Manage/recovery instead"
+        return ""
+
+    async def _refresh_live_after_action(self, klippy_apis: Any) -> None:
+        objects: Dict[str, Any] = {
+            IFS_OBJECT: None,
+            PRINT_STATS_OBJECT: ["state"],
+            HEAD_SENSOR_OBJECT: ["enabled", "filament_detected"],
+        }
+        try:
+            status = await klippy_apis.query_objects(objects, default={})
+        except Exception:
+            status = {}
+        if isinstance(status, dict):
+            payload = status.get(IFS_OBJECT)
+            if isinstance(payload, dict):
+                self._ifs_raw.update(payload)
+            self._apply_aux_status(status)
+        await self._refresh_ifs_metadata()
+        if self._ifs_raw:
+            self._set_ifs_module(self._compose_ifs_module())
+
+    async def _handle_ifs_action(self, web_request: Any) -> Dict[str, Any]:
+        try:
+            action = web_request.get_str("action")
+            slot = web_request.get_int("slot")
+        except Exception as exc:
+            return self._action_rejection("", 0, f"Invalid IFS action request: {exc}")
+
+        await self._refresh_ifs_metadata()
+        rejection = self._validate_ifs_action(action, slot)
+        if rejection:
+            return self._action_rejection(action, slot, rejection)
+
+        # Selecting the already active lane is a safe no-op and avoids sending a
+        # redundant firmware write.
+        if action == "select_slot" and int(self._ifs_module.get("active_slot") or 0) == slot:
+            return {
+                "ok": True,
+                "action": action,
+                "slot": slot,
+                "result": "already_selected",
+                "snapshot": self.get_snapshot(),
+            }
+
+        command = IFS_ACTION_COMMANDS[action].format(slot=slot)
+        self._operation_begin(action, slot)
+        try:
+            klippy_apis = self.server.lookup_component("klippy_apis")
+            result = await klippy_apis.run_gcode(command)
+            self._operation_end()
+            await self._refresh_live_after_action(klippy_apis)
+            return {
+                "ok": True,
+                "action": action,
+                "slot": slot,
+                "result": result,
+                "snapshot": self.get_snapshot(),
+            }
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+            self._operation_end(error)
+            return self._action_rejection(action, slot, error)
+
     async def _on_klippy_ready(self) -> None:
         try:
             klippy_apis = self.server.lookup_component("klippy_apis")
@@ -218,10 +404,17 @@ class PluginsAD5X:
             self._set_ifs_module(self._unavailable_ifs("bridge_not_loaded"))
             return
 
+        subscription: Dict[str, Any] = {
+            IFS_OBJECT: None,
+            PRINT_STATS_OBJECT: ["state"],
+        }
+        if HEAD_SENSOR_OBJECT in objects:
+            subscription[HEAD_SENSOR_OBJECT] = ["enabled", "filament_detected"]
+
         try:
             initial = await klippy_apis.subscribe_objects(
-                {IFS_OBJECT: None},
-                callback=self._on_ifs_status_update,
+                subscription,
+                callback=self._on_status_update,
                 default={},
             )
         except Exception:
@@ -233,21 +426,35 @@ class PluginsAD5X:
         if not isinstance(payload, dict):
             payload = {}
         self._ifs_raw = dict(payload)
+        if isinstance(initial, dict):
+            self._apply_aux_status(initial)
         await self._refresh_ifs_metadata()
         if self._ifs_raw:
             self._apply_ifs_status({})
         else:
             self._set_ifs_module(self._unavailable_ifs("bridge_empty"))
 
-    async def _on_ifs_status_update(
+    async def _on_status_update(
         self, status: Dict[str, Dict[str, Any]], _eventtime: float
     ) -> None:
+        changed = False
         payload = status.get(IFS_OBJECT)
         if isinstance(payload, dict):
-            self._apply_ifs_status(payload)
+            self._ifs_raw.update(payload)
+            changed = True
+        if self._apply_aux_status(status):
+            changed = True
+        if changed and self._ifs_raw:
+            self._set_ifs_module(self._compose_ifs_module())
 
     async def _on_klippy_disconnect(self) -> None:
         self._ifs_raw.clear()
+        self._print_state = "unknown"
+        self._head_filament = None
+        self._operation_state = "idle"
+        self._operation_action = ""
+        self._operation_slot = 0
+        self._operation_error = ""
         self._set_ifs_module(self._unavailable_ifs("klippy_disconnected"))
 
 
