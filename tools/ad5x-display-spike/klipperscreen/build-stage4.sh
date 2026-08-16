@@ -116,8 +116,6 @@ new = '''    def set_dpms(self, use_dpms):
                 GLib.source_remove(self.check_dpms_timeout)
             self.check_dpms_timeout = None
             self.use_dpms = False
-            self._config.set("main", "use_dpms", False)
-            self._config.save_user_config_options()
             self.blanking_time = 0
             self.screensaver.reset_timeout()
             logging.info("xset unavailable; AD5X launcher owns display blanking")
@@ -151,15 +149,15 @@ s = s.replace(old, new, 1)
 screen.write_text(s)
 
 # Spoolman dynamically recolors its SVG in memory, which the no-librsvg Stage 3
-# runtime cannot decode. In AD5X PNG-only mode use the normal pre-rendered icon;
-# this keeps startup clean while Spoolman itself remains outside Stage 4 scope.
+# runtime cannot decode. The generated AD5X bundle defaults to the normal static
+# pre-rendered PNG icon; a future librsvg runtime may opt out of PNG-only mode.
 base = app / "panels" / "base_panel.py"
 s = base.read_text()
 old = '''        icon_size = self._gtk.img_scale * self.bts * 0.9
         if not os.path.isfile(icon_path):
 '''
 new = '''        icon_size = self._gtk.img_scale * self.bts * 0.9
-        if os.environ.get("AD5X_KLIPPERSCREEN_PNG_ONLY") == "1":
+        if os.environ.get("AD5X_KLIPPERSCREEN_PNG_ONLY", "1") == "1":
             return self._gtk.PixbufFromIcon("spool", icon_size, icon_size)
         if not os.path.isfile(icon_path):
 '''
@@ -188,6 +186,7 @@ chmod +x "$APPROOT/run-klipperscreen-test.sh"
     echo "svg_strategy=ci-prerendered-png-fallback"
     echo "display_blanking_owner=ad5x-launcher-backlight"
     echo "xset_required=false"
+    echo "spoolman_dynamic_svg_gradient=deferred"
 } > "$APPROOT/BUILDINFO.txt"
 
 python3 -m compileall -q "$APP"
