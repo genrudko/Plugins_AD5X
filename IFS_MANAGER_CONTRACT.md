@@ -63,6 +63,11 @@ Target shape:
     "error": ""
   },
   "capabilities": {},
+  "metadata_store": {
+    "status": "ok",
+    "schema_version": "1.0",
+    "error": ""
+  },
   "slots": [],
   "tool_mapping": [1, 1, 1, 4],
   "diagnostics": {}
@@ -146,6 +151,44 @@ Allowed source identifiers:
 A source identifier describes where metadata came from. It does **not** imply
 that the corresponding integration is currently available.
 
+### Persistent manual metadata
+
+Plugins AD5X provides a manual metadata overlay without modifying the stock
+Flashforge/Z-Mod metadata files.
+
+Runtime path:
+
+```text
+/opt/config/mod_data/ad5x_custom/ifs_metadata.json
+```
+
+The store is versioned with `schema_version: "1.0"` and contains per-slot
+`spool` + `appearance` records. Manual metadata overrides the effective metadata
+presentation for that slot, while physical presence, active slot and tool mapping
+remain independent truth domains.
+
+The authenticated Moonraker write endpoint is:
+
+```text
+POST /server/plugins_ad5x/ifs/metadata
+RPC  server.plugins_ad5x.ifs.metadata
+```
+
+Supported v1 operations:
+
+- update one slot with normalized `spool` and `appearance` objects;
+- `clear=true` to remove the manual overlay for one slot and return to the
+  Flashforge/Z-Mod fallback.
+
+The store is written atomically (temporary file + fsync + replace). A corrupt or
+unsupported store is reported as `metadata_store.status = "invalid"`; normal
+physical/mechanical IFS state remains available, but metadata writes fail closed
+rather than overwriting the damaged file.
+
+Metadata editing is non-mechanical: it does not emit G-code and therefore is not
+coupled to the mechanical filament-operation write gate. Mechanical actions still
+use their own fail-closed permissions.
+
 ## 6. Appearance
 
 Appearance is independent from material type.
@@ -208,7 +251,7 @@ These concepts are different.
 Capabilities answer: **can this backend/hardware/software combination implement
 this feature at all?**
 
-Example categories:
+Current v1 shape:
 
 ```json
 {
@@ -229,7 +272,7 @@ Example categories:
   },
   "integrations": {
     "flashforge": true,
-    "manual_store": false,
+    "manual_store": true,
     "spoolman": false,
     "slicer": false,
     "rfid": false
@@ -242,7 +285,8 @@ Example categories:
 ```
 
 Capabilities MUST NOT claim an integration merely because the schema has a field
-for that integration.
+for that integration. In particular, `spoolman_id` being representable does not
+mean per-slot Spoolman enrichment is implemented yet.
 
 ### Runtime permissions
 
@@ -283,22 +327,27 @@ A frontend must not present unsupported operations as ordinary buttons.
 
 ## 9. Reference frontend UX
 
-The current KlipperScreen 2×2 diagnostic/card proof is not the target design.
+KlipperScreen is the first reference consumer of the Manager contract; it is not
+the owner of IFS business or safety logic.
 
-The reference MMU-like UI should provide:
+The current reference implementation provides:
 
-- four visual lane/spool cards;
+- four 2×2 lane/spool cards;
 - physical empty/present state at a glance;
-- clearly distinct active and selected states;
-- real appearance swatches for mono/dual/tri/gradient/rainbow;
-- finish labels such as Silk/Matte;
-- a simple filament path toward the toolhead;
+- distinct active and frontend-selected states;
+- visual segmented swatches for mono/multi-color metadata;
+- finish/color-mode labels such as Silk/Matte / 2 colors / 3 colors;
 - one contextual action bar for the selected slot;
+- action sensitivity taken only from backend `slot.permissions`;
 - diagnostics and tool mapping in a Details/Advanced view;
+- a local spool metadata editor using the manual store endpoint;
 - no HEX-first main UI.
 
 Frontend selection is local/session UI state and MUST NOT be stored as hardware
 `active_slot`.
+
+The reference UI may continue to evolve visually, but it must not regain backend
+safety logic, Z-Mod parsing or macro selection.
 
 ## 10. Frontend portability
 
@@ -319,4 +368,6 @@ macro selection stay in Plugins_AD5X/backend layers, not in frontend adapters.
 - no steady-state high-frequency polling for cosmetic UI;
 - no separate heavy daemon for this contract;
 - backend failure must not prevent normal Z-Mod printing;
-- CI proof does not replace real-printer acceptance for mechanical operations.
+- corrupt/unsupported manual metadata must not erase itself automatically;
+- CI proof does not replace real-printer acceptance for mechanical operations or
+  final local-screen UX.
