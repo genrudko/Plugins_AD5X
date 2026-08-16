@@ -47,12 +47,16 @@ SOURCE_NAMES = {
 
 
 class Panel(ScreenPanel):
-    def __init__(self, screen, title):
+    def __init__(self, screen, title, slot=1):
         super().__init__(screen, title or "IFS — катушки")
         self._request_pending = False
         self._save_pending = False
         self._last_module = None
-        self._selected_slot = 1
+        try:
+            requested_slot = int(slot)
+        except (TypeError, ValueError):
+            requested_slot = 1
+        self._selected_slot = requested_slot if 1 <= requested_slot <= 4 else 1
         self._slot_data = {}
         self._loading_form = False
 

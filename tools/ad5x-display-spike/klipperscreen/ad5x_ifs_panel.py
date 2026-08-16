@@ -142,6 +142,13 @@ class Panel(ScreenPanel):
         self.selection.set_ellipsize(Pango.EllipsizeMode.END)
         action_bar.pack_start(self.selection, True, True, 0)
 
+        self.action_edit = Gtk.Button(label="Катушка")
+
+        self.action_edit.connect("clicked", self._on_edit_clicked)
+
+        action_bar.pack_start(self.action_edit, False, False, 0)
+
+
         self.action_select = Gtk.Button(label="Выбрать")
         self.action_load = Gtk.Button(label="Загрузить")
         self.action_unload = Gtk.Button(label="Выгрузить")
@@ -347,6 +354,15 @@ class Panel(ScreenPanel):
 
     def _on_slot_clicked(self, _widget, slot):
         self._select_slot(slot)
+
+    def _on_edit_clicked(self, _widget):
+        slot = self._selected_slot or 1
+        self._screen.show_panel(
+            "ad5x_ifs_metadata",
+            "IFS — катушка",
+            panel_name=f"ad5x_ifs_metadata_slot_{slot}",
+            slot=slot,
+        )
 
     def _select_slot(self, slot):
         if slot not in self._slot_widgets:

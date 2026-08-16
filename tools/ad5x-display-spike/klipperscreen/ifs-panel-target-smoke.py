@@ -289,6 +289,9 @@ assert not panel.action_unload.get_sensitive()
 
 # Restore idle sample and prove the Advanced/Details navigation target exists.
 panel._render_snapshot(sample)
+panel._select_slot(3)
+panel._on_edit_clicked(None)
+assert screen.opened_panels[-1] == ("ad5x_ifs_metadata", "IFS — катушка")
 panel._on_manage_clicked(None)
 assert screen.opened_panels[-1] == ("ad5x_ifs_manage", "IFS — детали")
 
@@ -306,9 +309,11 @@ assert manage.values["stall"].get_text() == "0"
 manage._on_metadata_clicked(None)
 assert screen.opened_panels[-1] == ("ad5x_ifs_metadata", "IFS — катушки")
 
-metadata = IFSMetadataPanel(screen, "IFS — катушки")
+metadata = IFSMetadataPanel(screen, "IFS — катушки", slot=3)
 metadata._render_snapshot(sample)
-assert metadata._selected_slot == 1
+assert metadata._selected_slot == 3
+assert "Plugins AD5X" in metadata.source.get_text()
+metadata._on_slot_clicked(None, 1)
 assert "Flashforge/Z-Mod" in metadata.source.get_text()
 assert metadata.entries["material"].get_text() == "PETG"
 assert metadata.save_button.get_sensitive()
