@@ -10,6 +10,7 @@ from gi.repository import Gtk
 from ks_includes.KlippyGtk import KlippyGtk
 from panels.ad5x_ifs import Panel as IFSPanel
 from panels.ad5x_ifs_manage import Panel as IFSManagePanel
+from panels.ad5x_ifs_metadata import Panel as IFSMetadataPanel
 
 
 class MainConfig:
@@ -54,12 +55,20 @@ class Screen:
         self.gtk = KlippyGtk(self)
         self.opened_panels = []
         self.popups = []
+        self.keyboard_requests = 0
 
     def show_panel(self, panel, title=None, **_kwargs):
         self.opened_panels.append((panel, title))
 
     def show_popup_message(self, message, level=1):
         self.popups.append((message, level))
+
+    def show_keyboard(self, *_args, **_kwargs):
+        self.keyboard_requests += 1
+        return False
+
+    def remove_keyboard(self, *_args, **_kwargs):
+        return None
 
 
 def slot(
@@ -288,12 +297,34 @@ assert manage.summary.get_text() == "IFS: Готов   •   активный с
 assert manage.values["head"].get_text() == "Есть"
 assert manage.values["print"].get_text() == "standby"
 assert manage.values["operation"].get_text() == "idle"
+assert manage.values["metadata"].get_text() == "Готов"
 assert manage.values["mapping"].get_text() == "T0→1   T1→1   T2→1   T3→4"
 assert manage.values["raw_channel"].get_text() == "raw=0, bridge_cur_port=0"
 assert manage.values["silk"].get_text() == "7"
 assert manage.values["stall"].get_text() == "0"
+manage._on_metadata_clicked(None)
+assert screen.opened_panels[-1] == ("ad5x_ifs_metadata", "IFS — катушки")
+
+metadata = IFSMetadataPanel(screen, "IFS — катушки")
+metadata._render_snapshot(sample)
+assert metadata._selected_slot == 1
+assert "Flashforge/Z-Mod" in metadata.source.get_text()
+assert metadata.entries["material"].get_text() == "PETG"
+assert metadata.save_button.get_sensitive()
+assert not metadata.clear_button.get_sensitive()
+
+metadata._on_slot_clicked(None, 3)
+assert metadata._selected_slot == 3
+assert "Plugins AD5X" in metadata.source.get_text()
+assert metadata.entries["brand"].get_text() == "ERYONE"
+assert metadata.entries["name"].get_text() == "Triple Color"
+assert metadata.color_mode.get_active_id() == "tricolor"
+assert metadata.finish.get_active_id() == "silk"
+assert sum(check.get_active() for check in metadata.color_checks) == 3
+assert metadata.clear_button.get_sensitive()
 
 print("QEMU_AD5X_IFS_PANEL_CONSTRUCT_OK", panel._last_revision)
 print("QEMU_AD5X_IFS_MANAGER_CONTRACT_UI_OK", panel._selected_slot)
 print("QEMU_AD5X_IFS_ACTION_GATES_OK")
 print("QEMU_AD5X_IFS_MANAGE_PANEL_OK", manage._last_revision)
+print("QEMU_AD5X_IFS_METADATA_PANEL_OK", metadata._selected_slot)
