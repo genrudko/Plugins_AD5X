@@ -15,7 +15,9 @@ FFS_STATE_NAMES = {
     127: "driver_error",
 }
 
-JOB_PREVIEW_COMMAND = "AD5X_IFS_JOB_PREVIEW"
+# Klipper's extended-command parser splits tokens at digits. Keep this internal
+# command strictly A-Z/underscore so AD5X product naming cannot truncate to AD5.
+JOB_PREVIEW_COMMAND = "ADIFS_JOB_PREVIEW"
 
 # Source-verified Z-Mod zmod_color flags. _zmod_flag() prefers the values from
 # the live method globals and uses these only as compatibility defaults.
@@ -254,7 +256,7 @@ class AD5XIFS:
                 except AttributeError:
                     pass
 
-        gcmd.respond_raw("AD5X_IFS_JOB_PREVIEW_OK")
+        gcmd.respond_raw("ADIFS_JOB_PREVIEW_OK")
 
     def get_status(self, eventtime):
         zmod_ifs = self.zmod_ifs
