@@ -13,8 +13,12 @@ on:
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/apply-ad5x-spoolman-runtime-patch.py'
       - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'
       - 'tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/spoolman-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh'
+      - 'tools/ad5x-display-spike/klipperscreen/deploy-stage4-on-ad5x.sh'
       - 'tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf'
       - 'tools/ad5x-display-spike/klipperscreen/build-stage4.sh'
       - 'tests/test_ad5x_ifs_bridge.py'
@@ -55,11 +59,15 @@ jobs:
             tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py \
             tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py \
             tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py \
+            tools/ad5x-display-spike/klipperscreen/apply-ad5x-spoolman-runtime-patch.py \
             tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py \
-            tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py
+            tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py \
+            tools/ad5x-display-spike/klipperscreen/spoolman-target-smoke.py
       - name: Validate shell syntax and IFS panel packaging contract
         run: |
           sh -n install.sh
+          sh -n tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh
+          sh -n tools/ad5x-display-spike/klipperscreen/deploy-stage4-on-ad5x.sh
           bash -n tools/ad5x-display-spike/klipperscreen/build-stage4.sh
           grep -Fqx 'panel: ad5x_ifs' tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf
           grep -Fq 'server.plugins_ad5x.snapshot' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
@@ -76,6 +84,12 @@ jobs:
           grep -Fq 'ad5x_ifs_preprint.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
           grep -Fq '/server/plugins_ad5x/ifs/metadata' moonraker/components/plugins_ad5x.py
           grep -Fq '/server/plugins_ad5x/ifs/job/preview' moonraker/components/plugins_ad5x.py
+          grep -Fq 'JOB_PREVIEW_COMMAND = "ADIFS_JOB_PREVIEW"' klipper/extras/ad5x_ifs.py
+          grep -Fq 'IFS_JOB_PREVIEW_COMMAND = "ADIFS_JOB_PREVIEW"' moonraker/components/plugins_ad5x.py
+          ! grep -Fq 'AD5X_IFS_JOB_PREVIEW' klipper/extras/ad5x_ifs.py
+          grep -Fq 'S80helixscreen' tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh
+          grep -Fq 'HELIX_STOPPED_FOR_KLIPPERSCREEN' tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh
+          grep -Fq 'gzip -dc "$ARCHIVE" | tar -xf - -C "$ROOT"' tools/ad5x-display-spike/klipperscreen/deploy-stage4-on-ad5x.sh
       - name: Run Plugins AD5X backend and IFS tests
         run: |
           python -m unittest -v \
