@@ -72,7 +72,7 @@ class IFSJobPreviewBackendTests(unittest.TestCase):
         self.assertEqual(
             api.gcodes,
             [
-                'AD5X_IFS_JOB_PREVIEW FILENAME="3mf/model/demo/Metadata/plate_1.gcode"'
+                'ADIFS_JOB_PREVIEW FILENAME="3mf/model/demo/Metadata/plate_1.gcode"'
             ],
         )
         snapshot_preview = result["snapshot"]["modules"]["ifs"]["job_preview"]
@@ -117,7 +117,7 @@ class IFSJobPreviewBackendTests(unittest.TestCase):
         )
         self.assertFalse(result["ok"])
         self.assertIn("zmod_color_unavailable", result["error"])
-        self.assertEqual(api.gcodes, ['AD5X_IFS_JOB_PREVIEW FILENAME="demo.gcode"'])
+        self.assertEqual(api.gcodes, ['ADIFS_JOB_PREVIEW FILENAME="demo.gcode"'])
 
     def test_capability_advertises_source_delegated_slicer_preview(self):
         component, _server, _api = self.make_live_component()
