@@ -265,29 +265,41 @@ class AD5XIFS:
         if ifs_data is None or not hasattr(ifs_data, "get_values"):
             return self._unavailable()
 
-        values = ifs_data.get_values()
-        ports = list(values.get("Ports") or [])
-        state_code = int(values.get("State") or 0)
-        silk_mask = int(values.get("Silk") or 0)
-        raw_channel = int(values.get("Chan") or 0)
-        insert_slot = int(values.get("Insert") or 0)
-        stall_mask = int(values.get("stall_state") or 0)
+        # Z-Mod creates its IFS object before every field used by get_values()
+        # is guaranteed to exist. Klipper status callbacks must never propagate
+        # that transient source exception into Printer.run(), otherwise a
+        # harmless early objects/query can shut the whole printer down.
+        try:
+            values = ifs_data.get_values()
+            if not isinstance(values, dict):
+                return self._unavailable()
 
-        # cur_port is the Z-Mod runtime selection populated from FFMInfo.channel.
-        # It is intentionally distinct from the raw F13 `chan` diagnostic field.
-        active_slot = int(getattr(ifs_data, "cur_port", 0) or 0)
-        if active_slot < 0 or active_slot > len(ports):
-            active_slot = 0
+            ports = list(values.get("Ports") or [])
+            state_code = int(values.get("State") or 0)
+            silk_mask = int(values.get("Silk") or 0)
+            raw_channel = int(values.get("Chan") or 0)
+            insert_slot = int(values.get("Insert") or 0)
+            stall_mask = int(values.get("stall_state") or 0)
 
-        slots = []
-        for index, present in enumerate(ports, start=1):
-            slots.append({
-                "slot": index,
-                "present": bool(present),
-                "stall": bool(stall_mask & (1 << (index - 1))),
-            })
+            # cur_port is the Z-Mod runtime selection populated from
+            # FFMInfo.channel. It is intentionally distinct from the raw F13
+            # `chan` diagnostic field.
+            active_slot = int(getattr(ifs_data, "cur_port", 0) or 0)
+            if active_slot < 0 or active_slot > len(ports):
+                active_slot = 0
 
-        available = bool(getattr(zmod_ifs, "get_ifs_status", lambda: True)())
+            slots = []
+            for index, present in enumerate(ports, start=1):
+                slots.append({
+                    "slot": index,
+                    "present": bool(present),
+                    "stall": bool(stall_mask & (1 << (index - 1))),
+                })
+
+            available = bool(getattr(zmod_ifs, "get_ifs_status", lambda: True)())
+        except Exception:
+            return self._unavailable()
+
         return {
             "available": available,
             "state": FFS_STATE_NAMES.get(state_code, "unknown"),
