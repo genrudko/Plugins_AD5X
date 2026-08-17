@@ -1,0 +1,225 @@
+name: AD5X KlipperScreen Python runtime
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ad5x-klipperscreen-python-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELIXSCREEN_REF: 708e992618d57814055346ae827c0479e7843fc6
+  BUILDROOT_REF: 2024.11.2
+  TOOLCHAIN_IMAGE: plugins-ad5x/ad5x-toolchain:ks-python-ci
+
+jobs:
+  build-python-runtime-delta:
+    name: Build MIPS Python zlib+SSL delta
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Plugins_AD5X
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned HelixScreen toolchain source
+        uses: actions/checkout@v4
+        with:
+          repository: prestonbrown/helixscreen
+          ref: ${{ env.HELIXSCREEN_REF }}
+          path: .ci/helixscreen
+
+      - name: Checkout Buildroot
+        uses: actions/checkout@v4
+        with:
+          repository: buildroot/buildroot
+          ref: ${{ env.BUILDROOT_REF }}
+          path: .ci/buildroot
+
+      - name: Install host QEMU
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user
+
+      - name: Build AD5X toolchain image
+        run: |
+          set -euo pipefail
+          docker build \
+            -t "$TOOLCHAIN_IMAGE" \
+            -f .ci/helixscreen/docker/Dockerfile.ad5x \
+            .ci/helixscreen/docker
+
+      - name: Build and package Python network delta
+        run: |
+          set -euo pipefail
+          rm -rf out/ks-python
+          mkdir -p out/ks-python
+
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            "$TOOLCHAIN_IMAGE" \
+            bash -euxo pipefail -c '
+              apt-get update
+              apt-get install -y --no-install-recommends cpio unzip rsync bc file python3
+              rm -rf /var/lib/apt/lists/*
+
+              unset CROSS_COMPILE CC CXX AR STRIP RANLIB LD TARGET_CFLAGS TARGET_LDFLAGS
+
+              DEFCONFIG=/work/tools/ad5x-display-spike/klipperscreen/ad5x_ks_python_network_defconfig
+              make -C .ci/buildroot BR2_DEFCONFIG="$DEFCONFIG" defconfig \
+                2>&1 | tee out/ks-python/defconfig.log
+              cp .ci/buildroot/.config out/ks-python/buildroot.config
+
+              for symbol in \
+                BR2_TOOLCHAIN_EXTERNAL_FORTRAN \
+                BR2_PACKAGE_PYTHON3 \
+                BR2_PACKAGE_PYTHON3_ZLIB \
+                BR2_PACKAGE_PYTHON3_SSL \
+                BR2_PACKAGE_ZLIB \
+                BR2_PACKAGE_OPENSSL \
+                BR2_PACKAGE_OPENSSL_FORCE_LIBOPENSSL; do
+                grep -qx "$symbol=y" .ci/buildroot/.config || exit 1
+              done
+
+              if ! make -C .ci/buildroot -j2 >out/ks-python/build.log 2>&1; then
+                tail -n 300 out/ks-python/build.log
+                exit 1
+              fi
+
+              TARGET=.ci/buildroot/output/target
+              BUNDLE_ROOT=out/ks-python/bundle-root
+              APPROOT="$BUNDLE_ROOT/opt/ad5x-klipperscreen"
+              DYNL="$APPROOT/lib/python3.12/lib-dynload"
+              mkdir -p "$DYNL" "$APPROOT/lib"
+
+              for mod in zlib _ssl _hashlib; do
+                so="$(find "$TARGET/usr/lib/python3.12/lib-dynload" -maxdepth 1 -type f -name "$mod*.so" | head -n1)"
+                test -n "$so"
+                cp -a "$so" "$DYNL/"
+              done
+
+              cp -a "$TARGET/usr/lib/libz.so"* "$APPROOT/lib/"
+              cp -a "$TARGET/usr/lib/libssl.so"* "$APPROOT/lib/"
+              cp -a "$TARGET/usr/lib/libcrypto.so"* "$APPROOT/lib/"
+
+              {
+                echo "stage=4-klipperscreen-python-network-delta"
+                echo "buildroot_ref=2024.11.2"
+                echo "helixscreen_ref=708e992618d57814055346ae827c0479e7843fc6"
+                echo "python=3.12.9"
+                echo "modules=zlib,_ssl,_hashlib"
+                echo "private_libs=libz,libssl,libcrypto"
+                echo "stage3_external_dep=libatomic.so.1:/opt/ad5x-x11/lib/libatomic.so.1"
+              } > "$APPROOT/PYTHON_NETWORK_BUILDINFO.txt"
+
+              for so in "$DYNL"/*.so; do
+                out="out/ks-python/$(basename "$so")"
+                mipsel-buildroot-linux-gnu-readelf -h "$so" >"$out.elf.txt"
+                mipsel-buildroot-linux-gnu-readelf -A "$so" >"$out.attributes.txt"
+                grep -Eq "Class:[[:space:]]+ELF32" "$out.elf.txt"
+                grep -Eq "Data:[[:space:]]+2.s complement, little endian" "$out.elf.txt"
+                grep -Eq "Flags:.*nan2008.*o32" "$out.elf.txt"
+                grep -q "Tag_GNU_MIPS_ABI_FP: Hard float (32-bit CPU, 64-bit FPU)" "$out.attributes.txt"
+                grep -q "ISA: MIPS32r5" "$out.attributes.txt"
+              done
+
+              : > out/ks-python/needed.txt
+              : > out/ks-python/missing-needed.txt
+              while IFS= read -r elf; do
+                mipsel-buildroot-linux-gnu-readelf -h "$elf" >/dev/null 2>&1 || continue
+                while IFS= read -r needed; do
+                  [ -n "$needed" ] || continue
+                  printf "%s -> %s\n" "${elf#$BUNDLE_ROOT/}" "$needed" >> out/ks-python/needed.txt
+                  case "$needed" in
+                    ld-linux-mipsn8.so.1|libc.so.6|libdl.so.2|libm.so.6|libpthread.so.0|librt.so.1|libgcc_s.so.1|libatomic.so.1)
+                      continue
+                      ;;
+                  esac
+                  find "$APPROOT/lib" -name "$needed" -print -quit | grep -q . || \
+                    printf "%s -> %s\n" "${elf#$BUNDLE_ROOT/}" "$needed" >> out/ks-python/missing-needed.txt
+                done < <(mipsel-buildroot-linux-gnu-readelf -d "$elf" 2>/dev/null | sed -n "s/.*Shared library: \[\(.*\)\]/\1/p")
+              done < <(find "$APPROOT" -type f -print | sort)
+
+              sort -u out/ks-python/needed.txt -o out/ks-python/needed.txt
+              sort -u out/ks-python/missing-needed.txt -o out/ks-python/missing-needed.txt
+              test ! -s out/ks-python/missing-needed.txt
+              grep -q "libatomic.so.1" out/ks-python/needed.txt
+
+              cp .ci/buildroot/output/images/rootfs.tar.gz out/ks-python/reference-rootfs.tar.gz
+              tar --sort=name --mtime="UTC 2020-01-01" \
+                --owner=0 --group=0 --numeric-owner \
+                -C "$BUNDLE_ROOT" \
+                -czf out/ks-python/ad5x-klipperscreen-python-network.tar.gz opt
+              sha256sum out/ks-python/ad5x-klipperscreen-python-network.tar.gz | tee out/ks-python/SHA256SUMS
+              tar -tzf out/ks-python/ad5x-klipperscreen-python-network.tar.gz | sort > out/ks-python/bundle-files.txt
+            '
+
+      - name: QEMU Python network import proof
+        run: |
+          set -euo pipefail
+          mkdir -p out/ks-python/reference-rootfs
+          gzip -dc out/ks-python/reference-rootfs.tar.gz | tar -xf - -C out/ks-python/reference-rootfs
+          TARGET="$PWD/out/ks-python/reference-rootfs"
+          APPROOT="$PWD/out/ks-python/bundle-root/opt/ad5x-klipperscreen"
+          test -e "$TARGET/usr/lib/libatomic.so.1" -o -e "$TARGET/lib/libatomic.so.1"
+          env \
+            QEMU_LD_PREFIX="$TARGET" \
+            PYTHONHOME="$TARGET/usr" \
+            PYTHONPATH="$APPROOT/lib/python3.12/lib-dynload" \
+            LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \
+            qemu-mipsel "$TARGET/usr/bin/python3" -c \
+              'import hashlib,ssl,sys,zlib; print("QEMU_PY_NETWORK_OK", sys.version.split()[0], zlib.ZLIB_VERSION, ssl.OPENSSL_VERSION, hashlib.sha256(b"ad5x").hexdigest()[:12])' \
+            | tee out/ks-python/qemu-python-network.txt
+          grep -q '^QEMU_PY_NETWORK_OK 3.12.9 ' out/ks-python/qemu-python-network.txt
+
+      - name: Validate private delta archive
+        run: |
+          set -euo pipefail
+          test -s out/ks-python/ad5x-klipperscreen-python-network.tar.gz
+          test ! -s out/ks-python/missing-needed.txt
+          grep -q '^opt/ad5x-klipperscreen/' out/ks-python/bundle-files.txt
+          if grep -Eq '^(usr|lib|bin)/|^opt/ad5x-x11/' out/ks-python/bundle-files.txt; then
+            exit 1
+          fi
+          for forbidden in libc.so.6 ld-linux-mipsn8.so.1 libpython3.so libpython3.12.so libatomic.so.1; do
+            if grep -F "/$forbidden" out/ks-python/bundle-files.txt; then
+              exit 1
+            fi
+          done
+          echo "KS_PYTHON_NETWORK_DELTA_OK"
+
+      - name: Upload Python network runtime delta
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-klipperscreen-python-network-${{ github.sha }}
+          path: |
+            out/ks-python/ad5x-klipperscreen-python-network.tar.gz
+            out/ks-python/SHA256SUMS
+            out/ks-python/bundle-files.txt
+            out/ks-python/needed.txt
+            out/ks-python/missing-needed.txt
+            out/ks-python/qemu-python-network.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload Python network diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-klipperscreen-python-network-diagnostics-${{ github.sha }}
+          path: |
+            out/ks-python/build.log
+            out/ks-python/buildroot.config
+            out/ks-python/defconfig.log
+            out/ks-python/*.elf.txt
+            out/ks-python/*.attributes.txt
+            out/ks-python/needed.txt
+            out/ks-python/missing-needed.txt
+            out/ks-python/qemu-python-network.txt
+          retention-days: 7
+          if-no-files-found: warn

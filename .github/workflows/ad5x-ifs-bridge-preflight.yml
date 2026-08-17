@@ -1,0 +1,61 @@
+name: AD5X IFS bridge preflight
+
+on:
+  pull_request:
+    paths:
+      - 'ad5x_custom.cfg'
+      - 'install.sh'
+      - 'klipper/extras/ad5x_ifs.py'
+      - 'moonraker/components/plugins_ad5x.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf'
+      - 'tools/ad5x-display-spike/klipperscreen/build-stage4.sh'
+      - 'tests/test_ad5x_ifs_bridge.py'
+      - 'tests/test_installer_backend_lifecycle.py'
+      - 'tests/test_installer_ifs_bridge_lifecycle.py'
+      - 'tests/test_plugins_ad5x_component.py'
+      - 'tests/test_plugins_ad5x_ifs_backend.py'
+      - '.github/workflows/ad5x-ifs-bridge-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile bridge, backend and screen adapters
+        run: |
+          python -m py_compile \
+            klipper/extras/ad5x_ifs.py \
+            moonraker/components/plugins_ad5x.py \
+            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py \
+            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py \
+            tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py
+      - name: Validate shell syntax and IFS panel packaging contract
+        run: |
+          sh -n install.sh
+          bash -n tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          grep -Fqx 'panel: ad5x_ifs' tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf
+          grep -Fq 'server.plugins_ad5x.snapshot' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
+          grep -Fq 'server.plugins_ad5x.ifs.action' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
+          grep -Fq 'notify_plugins_ad5x_snapshot_changed' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
+          grep -Fq 'server.plugins_ad5x.snapshot' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py
+          grep -Fq 'ad5x_ifs_manage_panel.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          grep -Fq 'ad5x_ifs_manage.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+      - name: Run Plugins AD5X backend and IFS bridge tests
+        run: |
+          python -m unittest -v \
+            tests.test_plugins_ad5x_component \
+            tests.test_plugins_ad5x_ifs_backend \
+            tests.test_ad5x_ifs_bridge \
+            tests.test_installer_backend_lifecycle \
+            tests.test_installer_ifs_bridge_lifecycle

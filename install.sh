@@ -17,6 +17,10 @@ BACKEND_DEST="${AD5X_BACKEND_DEST:-/opt/config/base/moonraker/components/plugins
 BACKEND_CONFIG="$PLUGIN_DIR/plugins_ad5x.moonraker.conf"
 BACKEND_HASH_STATE="$STATE/backend-runtime.sha256"
 MOONRAKER_COMPONENTS_DIR="${AD5X_MOONRAKER_COMPONENTS_DIR:-${BACKEND_DEST%/*}}"
+KLIPPER_BRIDGE_SOURCE="$PLUGIN_DIR/klipper/extras/ad5x_ifs.py"
+KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/opt/config/base/klipper/klippy/extras/ad5x_ifs.py}"
+KLIPPER_BRIDGE_HASH_STATE="$STATE/klipper-ifs-bridge.sha256"
+KLIPPER_EXTRAS_DIR="${AD5X_KLIPPER_EXTRAS_DIR:-${KLIPPER_BRIDGE_DEST%/*}}"
 MOONRAKER_HTTP_BASE="${AD5X_MOONRAKER_HTTP_BASE:-http://127.0.0.1:7125}"
 MOONRAKER_STOP_TIMEOUT="${AD5X_MOONRAKER_STOP_TIMEOUT:-30}"
 MOONRAKER_READY_TIMEOUT="${AD5X_MOONRAKER_READY_TIMEOUT:-90}"
@@ -33,12 +37,14 @@ fi
 
 fail(){ echo "ОШИБКА: $*" >&2; exit 1; }
 find_root(){
+    # AD5X has a stable Z-Mod chroot. Prefer it over /proc/<pid>/root:
+    # the latter disappears when the installer intentionally stops Moonraker.
+    [ -d /usr/data/.mod/.zmod ] && { echo /usr/data/.mod/.zmod; return 0; }
     for P in /proc/[0-9]*; do
         [ -r "$P/cmdline" ] || continue
         CMD="$(tr '\0' ' ' <"$P/cmdline" 2>/dev/null || true)"
         case "$CMD" in *moonraker.py*) [ -d "$P/root" ] && { echo "$P/root"; return 0; };; esac
     done
-    [ -d /usr/data/.mod/.zmod ] && { echo /usr/data/.mod/.zmod; return 0; }
     return 1
 }
 remove_lines(){ F="$1"; P="$2"; [ -f "$F" ] || : >"$F"; grep -Ev "$P" "$F" >"$F.tmp" 2>/dev/null || true; mv "$F.tmp" "$F"; }
@@ -127,10 +133,28 @@ python_bin(){
     elif command -v python3 >/dev/null 2>&1; then
         command -v python3
     else
-        return 1
+        ROOT_="${ROOT:-$(find_root)}" || return 1
+        [ -x "$ROOT_/bin/python3" ] || return 1
+        WRAPPER=/tmp/ad5x-installer-python3
+        cat >"$WRAPPER" <<EOF
+#!/bin/sh
+exec chroot "$ROOT_" /bin/python3 "\$@"
+EOF
+        chmod 0755 "$WRAPPER"
+        echo "$WRAPPER"
     fi
 }
 sha256_file(){ sha256sum "$1" | awk '{print $1}'; }
+python_source_valid(){
+    FILE="$1"
+    PY="$(python_bin)" || return 1
+    "$PY" -B - "$FILE" <<'PY' >/dev/null 2>&1
+import ast
+import pathlib
+import sys
+ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])
+PY
+}
 backend_constant(){
     NAME="$1"
     sed -n "s/^$NAME = \"\([^\"]*\)\"/\\1/p" "$BACKEND_SOURCE" | head -n 1
@@ -142,13 +166,7 @@ backend_source_valid(){
     [ -s "$BACKEND_CONFIG" ] || return 1
     [ "$(grep -c '^\[plugins_ad5x\]$' "$BACKEND_CONFIG" 2>/dev/null || true)" -eq 1 ] || return 1
     [ "$(grep -Ec '^\[[^]]+\]$' "$BACKEND_CONFIG" 2>/dev/null || true)" -eq 1 ] || return 1
-    PY="$(python_bin)" || return 1
-    "$PY" -B - "$BACKEND_SOURCE" <<'PY' >/dev/null 2>&1 || return 1
-import ast
-import pathlib
-import sys
-ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])
-PY
+    python_source_valid "$BACKEND_SOURCE" || return 1
     API_VERSION_="$(backend_constant API_VERSION)"
     BACKEND_VERSION_="$(backend_constant BACKEND_VERSION)"
     ROOT_VERSION_="$(tr -d '\r\n' <"$PLUGIN_DIR/VERSION")"
@@ -208,6 +226,65 @@ configure_moonraker_includes(){
     remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
     append_line "$MOONRAKER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.moonraker.conf]'
     append_line "$MOONRAKER_INCLUDES" '[include plugins/ad5x_custom/plugins_ad5x.moonraker.conf]'
+}
+klipper_bridge_source_valid(){
+    [ -s "$KLIPPER_BRIDGE_SOURCE" ] || return 1
+    [ -d "$KLIPPER_EXTRAS_DIR" ] || return 1
+    python_source_valid "$KLIPPER_BRIDGE_SOURCE"
+}
+validate_klipper_bridge_source(){
+    klipper_bridge_source_valid || fail 'IFS Klipper bridge source validation failed'
+}
+klipper_bridge_destination_owned(){
+    [ -e "$KLIPPER_BRIDGE_DEST" ] || [ -L "$KLIPPER_BRIDGE_DEST" ] || return 0
+    [ -f "$KLIPPER_BRIDGE_DEST" ] || return 1
+    [ ! -L "$KLIPPER_BRIDGE_DEST" ] || return 1
+    DEST_HASH="$(sha256_file "$KLIPPER_BRIDGE_DEST" 2>/dev/null || true)"
+    [ -n "$DEST_HASH" ] || return 1
+    SOURCE_HASH="$(sha256_file "$KLIPPER_BRIDGE_SOURCE" 2>/dev/null || true)"
+    if [ -f "$KLIPPER_BRIDGE_HASH_STATE" ] && [ "$(cat "$KLIPPER_BRIDGE_HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
+        return 0
+    fi
+    [ -n "$SOURCE_HASH" ] && [ "$DEST_HASH" = "$SOURCE_HASH" ]
+}
+validate_klipper_bridge_destination_ownership(){
+    klipper_bridge_destination_owned || fail "неизвестный файл в IFS Klipper bridge destination: $KLIPPER_BRIDGE_DEST"
+}
+remove_klipper_bridge_bytecode(){
+    rm -f "$KLIPPER_EXTRAS_DIR/__pycache__/ad5x_ifs"*.pyc 2>/dev/null || true
+}
+deploy_klipper_bridge_managed_copy(){
+    validate_klipper_bridge_source
+    validate_klipper_bridge_destination_ownership
+    SOURCE_HASH="$(sha256_file "$KLIPPER_BRIDGE_SOURCE")"
+    TMP="$KLIPPER_EXTRAS_DIR/.ad5x_ifs.py.tmp.$$"
+    rm -f "$TMP"
+    cp "$KLIPPER_BRIDGE_SOURCE" "$TMP" || { rm -f "$TMP"; return 1; }
+    chmod 0644 "$TMP" || { rm -f "$TMP"; return 1; }
+    [ "$(sha256_file "$TMP")" = "$SOURCE_HASH" ] || { rm -f "$TMP"; return 1; }
+    mv -f "$TMP" "$KLIPPER_BRIDGE_DEST" || { rm -f "$TMP"; return 1; }
+    [ "$(sha256_file "$KLIPPER_BRIDGE_DEST")" = "$SOURCE_HASH" ] || return 1
+    remove_klipper_bridge_bytecode
+    HASH_TMP="$KLIPPER_BRIDGE_HASH_STATE.tmp.$$"
+    printf '%s\n' "$SOURCE_HASH" >"$HASH_TMP"
+    mv -f "$HASH_TMP" "$KLIPPER_BRIDGE_HASH_STATE"
+}
+klipper_bridge_runtime_matches_source(){
+    [ -f "$KLIPPER_BRIDGE_DEST" ] || return 1
+    [ ! -L "$KLIPPER_BRIDGE_DEST" ] || return 1
+    [ -f "$KLIPPER_BRIDGE_HASH_STATE" ] || return 1
+    SOURCE_HASH="$(sha256_file "$KLIPPER_BRIDGE_SOURCE" 2>/dev/null || true)"
+    DEST_HASH="$(sha256_file "$KLIPPER_BRIDGE_DEST" 2>/dev/null || true)"
+    RECORDED_HASH="$(cat "$KLIPPER_BRIDGE_HASH_STATE" 2>/dev/null || true)"
+    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ]
+}
+remove_klipper_bridge_managed_copy(){
+    if [ -e "$KLIPPER_BRIDGE_DEST" ] || [ -L "$KLIPPER_BRIDGE_DEST" ]; then
+        klipper_bridge_destination_owned || return 1
+        rm -f "$KLIPPER_BRIDGE_DEST"
+    fi
+    remove_klipper_bridge_bytecode
+    rm -f "$KLIPPER_BRIDGE_HASH_STATE"
 }
 moonraker_process_count(){
     COUNT=0
@@ -528,6 +605,8 @@ if [ "$MODE" = --status ]; then
     if backend_source_valid; then echo '[OK] backend source'; else echo '[FAIL] backend source'; fi
     if backend_runtime_matches_source; then echo '[OK] backend runtime file'; else echo '[FAIL] backend runtime file'; fi
     if backend_include_ok; then echo '[OK] backend config include'; else echo '[FAIL] backend config include'; fi
+    if klipper_bridge_source_valid; then echo '[OK] IFS Klipper bridge source'; else echo '[FAIL] IFS Klipper bridge source'; fi
+    if klipper_bridge_runtime_matches_source; then echo '[OK] IFS Klipper bridge runtime file'; else echo '[FAIL] IFS Klipper bridge runtime file'; fi
     INFO="$(moonraker_server_info 2>/dev/null || true)"
     if [ -n "$INFO" ]; then
         case "$(backend_component_state "$INFO" 2>/dev/null || true)" in
@@ -558,6 +637,7 @@ fi
 if [ "$MODE" = --uninstall ]; then
     check_idle
     validate_backend_destination_ownership
+    validate_klipper_bridge_destination_ownership
     STAMP="$(date +%Y%m%d-%H%M%S)"; B="$BACKUPS/uninstall-$STAMP"; mkdir -p "$B"
     snapshot "$KLIPPER_INCLUDES" plugins.cfg
     snapshot "$MOONRAKER_INCLUDES" plugins.moonraker.conf
@@ -565,6 +645,8 @@ if [ "$MODE" = --uninstall ]; then
     snapshot "$POWER_ON" power_on.sh
     snapshot "$BACKEND_DEST" backend-runtime.py
     snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+    snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
+    snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
     UNINSTALL_SUCCESS=0
     rollback_uninstall(){
         set +e
@@ -578,7 +660,10 @@ if [ "$MODE" = --uninstall ]; then
         restore_snapshot "$POWER_ON" power_on.sh
         restore_snapshot "$BACKEND_DEST" backend-runtime.py
         restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+        restore_snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
+        restore_snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
         remove_backend_bytecode
+        remove_klipper_bridge_bytecode
         restore_moonraker_after_rollback || true
         echo "Uninstall rollback завершён. Backup: $B" >&2
     }
@@ -600,17 +685,20 @@ if [ "$MODE" = --uninstall ]; then
     else
         strip_block "$POWER_ON" 'AD5X_CUSTOM_POWER_ON_BEGIN' 'AD5X_CUSTOM_POWER_ON_END'
     fi
+    remove_klipper_bridge_managed_copy || fail 'IFS Klipper bridge uninstall failed'
     ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
     run_moonraker_transition backend_uninstall_transition verify_backend_absent || fail 'backend uninstall lifecycle failed'
     UNINSTALL_SUCCESS=1
     trap - EXIT HUP INT TERM
-    echo 'Интеграция отключена. Backend удалён; исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
+    echo 'Интеграция отключена. Backend и IFS bridge удалены; исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
     exit 0
 fi
 
 check_idle
 validate_backend_source
 validate_backend_destination_ownership
+validate_klipper_bridge_source
+validate_klipper_bridge_destination_ownership
 STAMP="$(date +%Y%m%d-%H%M%S)"; B="$BACKUPS/$STAMP"; mkdir -p "$B/upstream"
 SUCCESS=0
 
@@ -630,7 +718,10 @@ rollback_install(){
     restore_snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
     restore_snapshot "$BACKEND_DEST" backend-runtime.py
     restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+    restore_snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
+    restore_snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
     remove_backend_bytecode
+    remove_klipper_bridge_bytecode
     [ -f "$B/upstream/notify.cfg" ] && cp -p "$B/upstream/notify.cfg" /opt/config/mod_data/plugins/notify/ru/notify.cfg
     [ -f "$B/upstream/notify.moonraker.cfg" ] && cp -p "$B/upstream/notify.moonraker.cfg" /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg
     [ -f "$B/upstream/timelapse.cfg" ] && cp -p "$B/upstream/timelapse.cfg" /opt/config/mod_data/plugins/timelapse/timelapse.cfg
@@ -657,6 +748,8 @@ snapshot "$GENERATED/notify.cfg" generated-notify.cfg
 snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
 snapshot "$BACKEND_DEST" backend-runtime.py
 snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
+snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.cfg "$B/upstream/notify.cfg"
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg "$B/upstream/notify.moonraker.cfg"
 [ -f /opt/config/mod_data/plugins/timelapse/timelapse.cfg ] && cp -p /opt/config/mod_data/plugins/timelapse/timelapse.cfg "$B/upstream/timelapse.cfg"
@@ -692,6 +785,7 @@ append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.cfg]'
 append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/notify.cfg]'
 append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/timelapse.cfg]'
 
+deploy_klipper_bridge_managed_copy || fail 'IFS Klipper bridge deployment failed'
 install_power_on_hook
 rm -f /etc/init.d/S99zzcamera2 /etc/init.d/S59ad5x-custom-refresh /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S98ad5x-camera-select /etc/init.d/S99zzad5x-camera2 2>/dev/null || true
 
@@ -701,4 +795,5 @@ SUCCESS=1
 trap - EXIT HUP INT TERM
 echo "AD5X Custom применён. Backup: $B"
 echo 'Plugins AD5X backend применён через managed copy и controlled Moonraker lifecycle.'
+echo 'IFS Klipper bridge установлен managed-copy; он активируется при следующем firmware restart / включении принтера.'
 echo 'Для активации остальных camera/power-on изменений требуется полное выключение и включение принтера.'
