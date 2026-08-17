@@ -98,12 +98,14 @@ v4l2_formats_available()
 find_named_capture_device()
 {
     CAMERA_NAME="$1"
+    EXCLUDED_DEVICE="${2:-}"
     for SYSDEV in /sys/class/video4linux/video*; do
         [ -r "$SYSDEV/name" ] || continue
+        CANDIDATE="${SYSDEV##*/}"
+        [ -n "$EXCLUDED_DEVICE" ] && [ "$CANDIDATE" = "$EXCLUDED_DEVICE" ] && continue
         DEVICE_NAME="$(cat "$SYSDEV/name" 2>/dev/null || true)"
         case "$DEVICE_NAME" in
             *"$CAMERA_NAME"*)
-                CANDIDATE="${SYSDEV##*/}"
                 if v4l2_formats_available "/dev/$CANDIDATE"; then
                     echo "$CANDIDATE"
                     return 0
@@ -112,6 +114,13 @@ find_named_capture_device()
         esac
     done
     return 1
+}
+
+configured_primary_camera_device()
+{
+    CAMERA_CONF="/opt/config/mod_data/camera.conf"
+    [ -r "$CAMERA_CONF" ] || return 1
+    sed -n 's/^VIDEO=//p' "$CAMERA_CONF" | tail -n 1
 }
 
 snapshot_ready()
@@ -229,7 +238,25 @@ camera_recover()
         fi
 
         load_zmod_camera_tools
-        SECONDARY="$(find_named_capture_device "$SECONDARY_CAMERA_NAME" 2>/dev/null || true)"
+        PRIMARY_DEVICE="$(configured_primary_camera_device 2>/dev/null || true)"
+
+        # A single UVC camera may expose multiple /dev/videoN nodes. If the
+        # configured stock primary has the identity that used to belong to
+        # Camera 2, treat the machine as single-camera before scanning sibling
+        # nodes. Excluding only /dev/video0 would still allow the same physical
+        # camera to be rediscovered through /dev/video1.
+        if [ -n "$PRIMARY_DEVICE" ] && [ -r "/sys/class/video4linux/$PRIMARY_DEVICE/name" ]; then
+            PRIMARY_NAME="$(cat "/sys/class/video4linux/$PRIMARY_DEVICE/name" 2>/dev/null || true)"
+            case "$PRIMARY_NAME" in
+                *"$SECONDARY_CAMERA_NAME"*)
+                    log "Single-camera mode detected: $SECONDARY_CAMERA_NAME is already stock Camera 1 on /dev/$PRIMARY_DEVICE; Camera 2 recovery disabled"
+                    return 0
+                    ;;
+            esac
+        fi
+
+        SECONDARY="$(find_named_capture_device "$SECONDARY_CAMERA_NAME" "$PRIMARY_DEVICE" 2>/dev/null || true)"
+
         if [ -n "$SECONDARY" ]; then
             log "Camera 2 device ready after stock Camera 1: /dev/$SECONDARY"
             start_secondary_camera || true
