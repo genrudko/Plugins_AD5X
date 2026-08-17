@@ -6,13 +6,21 @@ on:
       - ad5x-klipperscreen-spike
     paths:
       - '.github/workflows/ad5x-ifs-ui-target-smoke.yml'
+      - 'klipper/extras/ad5x_ifs.py'
+      - 'moonraker/components/plugins_ad5x.py'
+      - 'tests/test_ad5x_ifs_bridge.py'
+      - 'tests/test_plugins_ad5x_ifs_job_preview.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/apply-ad5x-ifs-gcodes-patch.py'
+      - 'tools/ad5x-display-spike/klipperscreen/apply-ad5x-spoolman-runtime-patch.py'
       - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'
       - 'tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/spoolman-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/run-klipperscreen-test.sh'
+      - 'tools/ad5x-display-spike/klipperscreen/deploy-stage4-on-ad5x.sh'
       - 'tools/ad5x-display-spike/klipperscreen/build-stage4.sh'
       - 'tools/ad5x-display-spike/klipperscreen/requirements-startup.txt'
   workflow_dispatch:
@@ -27,7 +35,7 @@ env:
   STAGE3_ROOTFS_ZIP_SHA256: bb11794acf51b2d622117f149cce00e634759dddb49397e91785bdd7254e8ff7
   KS_NETWORK_ARTIFACT_ID: '9263797247'
   KS_NETWORK_ZIP_SHA256: 3798e13c9c0a02e631d0fe87840225f044241b30be414fa46117abdda023acba
-  KS_NETWORK_TAR_SHA256: 08bc9be98629c0c275fffe4b17a9de8962957a5ea1a7e2158172ad037b4ea83f
+  KS_NETWORK_TAR_SHA256: 08bc9be98629c0c275fffe87840225f044241b30be414fa46117abdda023acba
   KS_CAIRO_ARTIFACT_ID: '9268998995'
   KS_CAIRO_ZIP_SHA256: f1bebd0c1d0acb35200f19c4b7fbff47a5535a3f45042fa10125d6419ab690b1
   KS_CAIRO_TAR_SHA256: 1751ee284e333e42c0b6470007a90bff67fc85d096adbe0c84b7e514b7211a1d
@@ -78,6 +86,17 @@ jobs:
             | tee out/klipperscreen/ifs-gcodes-patch.txt
           grep -Fq '"IFS план"' "$APP/panels/gcodes.py"
           grep -Fq '"ad5x_ifs_preprint"' "$APP/panels/gcodes.py"
+          python3 -m compileall -q "$APP"
+          find "$APP" -type d -name '__pycache__' -prune -exec rm -rf {} +
+
+      - name: Add AD5X Spoolman runtime compatibility
+        run: |
+          set -euo pipefail
+          APP=out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app
+          python3 tools/ad5x-display-spike/klipperscreen/apply-ad5x-spoolman-runtime-patch.py "$APP" \
+            | tee out/klipperscreen/spoolman-runtime-patch.txt
+          grep -Fq 'AD5X_KLIPPERSCREEN_PNG_ONLY' "$APP/panels/spoolman.py"
+          grep -Fq 'markup_escape_text' "$APP/panels/spoolman.py"
           python3 -m compileall -q "$APP"
           find "$APP" -type d -name '__pycache__' -prune -exec rm -rf {} +
 
@@ -159,9 +178,15 @@ jobs:
             > out/klipperscreen/frozen-gcodes.py
           grep -Fq '"IFS план"' out/klipperscreen/frozen-gcodes.py
           grep -Fq '"ad5x_ifs_preprint"' out/klipperscreen/frozen-gcodes.py
+
+          tar -xOzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            opt/ad5x-klipperscreen/app/panels/spoolman.py \
+            > out/klipperscreen/frozen-spoolman.py
+          grep -Fq 'AD5X_KLIPPERSCREEN_PNG_ONLY' out/klipperscreen/frozen-spoolman.py
+          grep -Fq 'markup_escape_text' out/klipperscreen/frozen-spoolman.py
           echo 'AD5X_IFS_FROZEN_BUNDLE_OK'
 
-      - name: Construct IFS Manager UI in MIPS GTK X11 runtime
+      - name: Construct IFS Manager and Spoolman UI in MIPS GTK X11 runtime
         run: |
           set -euo pipefail
           TARGET="$PWD/out/stage3/rootfs"
@@ -217,6 +242,26 @@ jobs:
 
           grep -q '^QEMU_AD5X_IFS_PREPRINT_PANEL_OK 1$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
           grep -q '^QEMU_AD5X_IFS_PREPRINT_START_GATED_OK$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+
+          env \
+            DISPLAY=:99 \
+            GDK_BACKEND=x11 \
+            AD5X_KLIPPERSCREEN_PNG_ONLY=1 \
+            HOME="$PWD/out/qemu-home" \
+            XDG_RUNTIME_DIR="$PWD/out/qemu-runtime" \
+            QEMU_LD_PREFIX="$TARGET" \
+            PYTHONHOME="$TARGET/usr" \
+            PYTHONPATH="$DYNL:$SITE:$TARGET/usr/lib/python3.12/site-packages:$APP" \
+            LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \
+            GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
+            XDG_DATA_DIRS="$TARGET/usr/share" \
+            FONTCONFIG_PATH="$TARGET/etc/fonts" \
+            qemu-mipsel "$TARGET/usr/bin/python3" \
+              "$PWD/tools/ad5x-display-spike/klipperscreen/spoolman-target-smoke.py" \
+              | tee out/klipperscreen/qemu-spoolman-ui-smoke.txt
+
+          grep -q '^QEMU_AD5X_SPOOLMAN_PNG_FALLBACK_OK$' out/klipperscreen/qemu-spoolman-ui-smoke.txt
+          grep -q '^QEMU_AD5X_SPOOLMAN_MARKUP_ESCAPE_OK$' out/klipperscreen/qemu-spoolman-ui-smoke.txt
           echo 'AD5X_IFS_MIPS_GTK_UI_OK'
 
       - name: Write exact-head hardware manifest
@@ -224,21 +269,29 @@ jobs:
           EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
+          cp tools/ad5x-display-spike/klipperscreen/deploy-stage4-on-ad5x.sh \
+            out/klipperscreen/deploy-stage4-on-ad5x.sh
+          chmod +x out/klipperscreen/deploy-stage4-on-ad5x.sh
           {
-            echo "purpose=ifs-readonly-preprint-hardware-acceptance-01"
+            echo "purpose=ifs-readonly-preprint-hardware-acceptance-02"
             echo "repository=${GITHUB_REPOSITORY}"
             echo "head=${EXACT_HEAD}"
             echo "klipperscreen_ref=${KLIPPERSCREEN_REF}"
-            echo "job_preview=enabled"
+            echo "job_preview=enabled-parser-safe"
             echo "resolved_tool_map=enabled"
             echo "ifs_preprint_route=enabled"
             echo "generic_print_path=preserved"
             echo "ifs_launch_write=disabled"
             echo "zmod_projection_write=disabled"
-            echo "spoolman=disabled"
+            echo "spoolman_ifs_integration=disabled"
+            echo "klipperscreen_spoolman_runtime=png-fallback-tested"
+            echo "display_handoff=helix-owned-by-launcher"
+            echo "deploy_extract=busybox-safe-gzip-pipe"
           } > out/klipperscreen/HARDWARE_BUILD.txt
           cat out/klipperscreen/HARDWARE_BUILD.txt
           sha256sum out/klipperscreen/HARDWARE_BUILD.txt \
+            >> out/klipperscreen/SHA256SUMS
+          sha256sum out/klipperscreen/deploy-stage4-on-ad5x.sh \
             >> out/klipperscreen/SHA256SUMS
 
       - name: Upload hardware acceptance bundle
@@ -251,8 +304,12 @@ jobs:
             out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz
             out/klipperscreen/SHA256SUMS
             out/klipperscreen/HARDWARE_BUILD.txt
+            out/klipperscreen/deploy-stage4-on-ad5x.sh
             out/klipperscreen/ifs-gcodes-patch.txt
+            out/klipperscreen/spoolman-runtime-patch.txt
             out/klipperscreen/qemu-ifs-ui-smoke.txt
             out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+            out/klipperscreen/qemu-spoolman-ui-smoke.txt
             out/klipperscreen/frozen-bundle-files.txt
+            out/klipperscreen/frozen-spoolman.py
             out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/BUILDINFO.txt
