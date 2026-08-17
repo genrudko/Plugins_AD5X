@@ -203,6 +203,44 @@ Port `8898` did not open during the watcher interval. Port `8899` opened early i
 
 The watcher logged repeated `PING UP` lines when RTT changed because the probe state string included the RTT value. Those lines are not repeated state transitions and have no diagnostic meaning beyond continued ICMP reachability.
 
+## Camera lifecycle misconfiguration discovered after recovery
+
+Post-recovery camera forensics established an independent live bug in the deployed Plugins AD5X camera lifecycle:
+
+- the stock camera streamer is successfully using `/dev/video0` on port `8080`;
+- `/opt/config/mod_data/camera.conf` also records `VIDEO=video0`;
+- the currently connected camera identity is `CCX2F3298`;
+- the deployed `runtime.sh` still hard-codes `PRIMARY_CAMERA_NAME="HD Camera"` and `SECONDARY_CAMERA_NAME="CCX2F3298"`;
+- because the former `HD Camera` is no longer connected, primary selection times out;
+- after stock Camera 1 starts on `/dev/video0`, the Camera 2 recovery worker rediscovers the same `CCX2F3298` physical camera as `/dev/video0` and repeatedly attempts to start Camera 2 on port `8081`;
+- this produces a continuing cycle of three failed Camera 2 attempts followed by rediscovery and retry.
+
+Representative evidence:
+
+```text
+WARN: primary camera selection timed out; stock S99camera remains authoritative
+Scheduling late Camera 2 recovery after stock Camera 1 startup
+...
+Camera 2 device ready after stock Camera 1: /dev/video0
+Starting Camera 2 after stock Camera 1, attempt 1
+...
+ERROR: Camera 2 failed after 3 attempts
+...
+Camera 2 device ready after stock Camera 1: /dev/video0
+```
+
+The stock streamer simultaneously reports:
+
+```text
+i: Using V4L2 device.: /dev/video0
+```
+
+This is a proven configuration/lifecycle defect regardless of whether it caused the earlier partial-boot anomaly. It means the current dual-camera recovery logic does not safely degrade to the actual one-camera hardware state and may contend with the stock camera path.
+
+The canonical runtime was therefore hardened so Camera 2 discovery excludes the currently configured stock primary `VIDEO` device. If the connected `CCX2F3298` camera is already the stock primary, the worker exits cleanly in explicit single-camera mode instead of repeatedly attempting Camera 2 recovery.
+
+This fix does **not** prove the camera lifecycle defect caused the kernel/userspace startup anomaly. Root-cause attribution remains open pending another clean boot and observation after deploying the corrected runtime.
+
 ## Current interpretation
 
 The evidence establishes two distinct outcomes across consecutive power cycles:
@@ -216,24 +254,23 @@ The successful boot timeline also shows that this AD5X can take roughly `2 min 2
 
 IFS-related software/hardware remains one candidate because the current machine composition includes Z-Mod IFS handling and Plugins AD5X IFS work, but this event does **not** establish IFS causality. No component is assigned root cause at this stage.
 
+The newly proven one-camera/dual-camera lifecycle defect is now a stronger concrete suspect for unnecessary camera-path stress than before, but it still must not be promoted to the root cause without reproduction or disappearance evidence after deployment of the fix.
+
 ## Gate C disposition
 
 The failed recovery event itself is **not a calibration run** and does not count as Gate C repeatability evidence.
 
-The subsequent cold boot restored a usable baseline, but the intended reboot/time-separated calibration measurement has still not started. Before any Z homing/probing or calibration motion, capture the recovered live runtime state and relevant logs/process/resource evidence, then perform a fresh clean preflight.
+The subsequent cold boot restored a usable baseline, but the intended reboot/time-separated calibration measurement has still not started. Before any Z homing/probing or calibration motion, deploy the camera lifecycle correction, confirm the runaway Camera 2 recovery worker is gone, then capture a fresh clean preflight.
 
 No production Plugins AD5X motion or write gate is opened by this evidence.
 
 ## Next diagnostic objective
 
-While SSH and Moonraker are healthy, capture the current successful-boot process/resource state and persistent logs before another restart or calibration action. The highest-value observations are:
+Deploy the one-camera-safe runtime, stop the currently running stale Camera 2 recovery worker without touching the stock Camera 1 process, and verify that:
 
-- uptime/load/memory;
-- filesystem usage and basic kernel messages;
-- entropy availability;
-- process list, especially Moonraker/Klipper/Z-Mod/IFS-related processes;
-- listening sockets where available;
-- recent Moonraker and Klipper logs;
-- current Moonraker/Klipper readiness.
+- port `8080` remains healthy;
+- no Camera 2 worker continues retrying `/dev/video0`;
+- Moonraker/Klipper remain ready;
+- no new camera-related kernel failure is introduced.
 
 Only after preserving that evidence should the time-separated Gate C measurement resume.
