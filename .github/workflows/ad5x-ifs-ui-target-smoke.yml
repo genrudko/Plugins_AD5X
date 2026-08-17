@@ -144,16 +144,22 @@ jobs:
             -czf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz opt
           sha256sum out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
             | tee out/klipperscreen/SHA256SUMS
+
           tar -tzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
-            | grep -Fqx 'opt/ad5x-klipperscreen/app/panels/ad5x_ifs_preprint.py'
+            > out/klipperscreen/frozen-bundle-files.txt
+          grep -Fqx 'opt/ad5x-klipperscreen/app/panels/ad5x_ifs_preprint.py' \
+            out/klipperscreen/frozen-bundle-files.txt
+          grep -Eq '(_gi_cairo|cairo)' out/klipperscreen/frozen-bundle-files.txt || {
+            echo 'ERROR: proven Cairo bridge missing from frozen hardware bundle' >&2
+            exit 1
+          }
+
           tar -xOzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
             opt/ad5x-klipperscreen/app/panels/gcodes.py \
-            | grep -Fq '"IFS план"'
-          tar -tzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
-            | grep -Eq '(_gi_cairo|cairo)' || {
-              echo 'ERROR: proven Cairo bridge missing from frozen hardware bundle' >&2
-              exit 1
-            }
+            > out/klipperscreen/frozen-gcodes.py
+          grep -Fq '"IFS план"' out/klipperscreen/frozen-gcodes.py
+          grep -Fq '"ad5x_ifs_preprint"' out/klipperscreen/frozen-gcodes.py
+          echo 'AD5X_IFS_FROZEN_BUNDLE_OK'
 
       - name: Construct IFS Manager UI in MIPS GTK X11 runtime
         run: |
@@ -248,4 +254,5 @@ jobs:
             out/klipperscreen/ifs-gcodes-patch.txt
             out/klipperscreen/qemu-ifs-ui-smoke.txt
             out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+            out/klipperscreen/frozen-bundle-files.txt
             out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/BUILDINFO.txt
