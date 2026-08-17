@@ -1,0 +1,143 @@
+name: AD5X IFS preprint UI apply
+
+on:
+  push:
+    branches:
+      - feature/ifs-manager-v1
+    paths:
+      - '.github/workflows/ad5x-ifs-preprint-ui-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/ifs-manager-v1
+      - name: Wire panel into Stage 4 and target smoke
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              assert count == 1, f"{label}: expected 1 occurrence, found {count}"
+              return text.replace(old, new, 1)
+
+          build = Path('tools/ad5x-display-spike/klipperscreen/build-stage4.sh')
+          text = build.read_text()
+          metadata_install = '''install -m 0644 \\
+              tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py \\
+              "$APP/panels/ad5x_ifs_metadata.py"
+          '''
+          preprint_install = '''install -m 0644 \\
+              tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py \\
+              "$APP/panels/ad5x_ifs_preprint.py"
+          '''
+          text = replace_once(
+              text,
+              metadata_install,
+              metadata_install + preprint_install,
+              'preprint panel install',
+          )
+          text = replace_once(
+              text,
+              '    echo "ifs_metadata_panel=plugins-ad5x-manual-store-editor"\n',
+              '    echo "ifs_metadata_panel=plugins-ad5x-manual-store-editor"\n    echo "ifs_preprint_panel=plugins-ad5x-zmod-delegated-readonly-plan"\n',
+              'preprint buildinfo',
+          )
+          text = replace_once(
+              text,
+              'test -s "$APP/panels/ad5x_ifs_metadata.py"\n',
+              'test -s "$APP/panels/ad5x_ifs_metadata.py"\ntest -s "$APP/panels/ad5x_ifs_preprint.py"\n',
+              'preprint bundle validation',
+          )
+          build.write_text(text)
+
+          target = Path('.github/workflows/ad5x-ifs-ui-target-smoke.yml')
+          text = target.read_text()
+          text = replace_once(
+              text,
+              "      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'\n",
+              "      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'\n      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py'\n",
+              'target panel path',
+          )
+          text = replace_once(
+              text,
+              "      - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'\n",
+              "      - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'\n      - 'tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py'\n",
+              'target smoke path',
+          )
+          text = replace_once(
+              text,
+              '          test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_metadata.py\n',
+              '          test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_metadata.py\n          test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_preprint.py\n',
+              'target built panel validation',
+          )
+          marker = "          grep -q '^QEMU_AD5X_IFS_METADATA_PANEL_OK 3$' out/klipperscreen/qemu-ifs-ui-smoke.txt\n          echo 'AD5X_IFS_MIPS_GTK_UI_OK'"
+          replacement = '''          grep -q '^QEMU_AD5X_IFS_METADATA_PANEL_OK 3$' out/klipperscreen/qemu-ifs-ui-smoke.txt
+
+          env \\
+            DISPLAY=:99 \\
+            GDK_BACKEND=x11 \\
+            HOME="$PWD/out/qemu-home" \\
+            XDG_RUNTIME_DIR="$PWD/out/qemu-runtime" \\
+            QEMU_LD_PREFIX="$TARGET" \\
+            PYTHONHOME="$TARGET/usr" \\
+            PYTHONPATH="$DYNL:$SITE:$TARGET/usr/lib/python3.12/site-packages:$APP" \\
+            LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \\
+            GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \\
+            XDG_DATA_DIRS="$TARGET/usr/share" \\
+            FONTCONFIG_PATH="$TARGET/etc/fonts" \\
+            qemu-mipsel "$TARGET/usr/bin/python3" \\
+              "$PWD/tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py" \\
+              | tee out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+
+          grep -q '^QEMU_AD5X_IFS_PREPRINT_PANEL_OK 1$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_PREPRINT_START_GATED_OK$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+          echo 'AD5X_IFS_MIPS_GTK_UI_OK' '''.rstrip()
+          text = replace_once(text, marker, replacement, 'target preprint execution')
+          target.write_text(text)
+
+          preflight = Path('.github/workflows/ad5x-ifs-bridge-preflight.yml')
+          text = preflight.read_text()
+          text = replace_once(
+              text,
+              "      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'\n",
+              "      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'\n      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py'\n      - 'tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py'\n",
+              'preflight preprint paths',
+          )
+          text = replace_once(
+              text,
+              '            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py \\\n',
+              '            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py \\\n            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py \\\n',
+              'preflight compile panel',
+          )
+          text = replace_once(
+              text,
+              "          grep -Fq 'ad5x_ifs_metadata.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh\n",
+              "          grep -Fq 'ad5x_ifs_metadata.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh\n          grep -Fq 'ad5x_ifs_preprint.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh\n          grep -Fq 'server.plugins_ad5x.ifs.job.preview' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py\n",
+              'preflight preprint contract',
+          )
+          preflight.write_text(text)
+          PY
+
+          python3 -m py_compile \
+            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py \
+            tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py
+          bash -n tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          git diff --check
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            tools/ad5x-display-spike/klipperscreen/build-stage4.sh \
+            .github/workflows/ad5x-ifs-ui-target-smoke.yml \
+            .github/workflows/ad5x-ifs-bridge-preflight.yml
+          git commit -m 'feat(ifs-ui): package and test read-only preprint plan'
+          git push origin HEAD:feature/ifs-manager-v1
