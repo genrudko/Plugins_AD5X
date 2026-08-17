@@ -81,13 +81,6 @@ jobs:
           python3 -m compileall -q "$APP"
           find "$APP" -type d -name '__pycache__' -prune -exec rm -rf {} +
 
-          tar --sort=name --mtime='UTC 2020-01-01' \
-            --owner=0 --group=0 --numeric-owner \
-            -C out/klipperscreen/bundle-root \
-            -czf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz opt
-          sha256sum out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
-            | tee out/klipperscreen/SHA256SUMS
-
       - name: Download accepted Stage 3 rootfs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -141,6 +134,26 @@ jobs:
           CAIRO_TAR=out/ks-cairo/artifact/ad5x-klipperscreen-cairo-bridge.tar.gz
           echo "${KS_CAIRO_TAR_SHA256}  $CAIRO_TAR" | sha256sum -c -
           gzip -dc "$CAIRO_TAR" | tar -xf - -C out/klipperscreen/bundle-root
+
+      - name: Freeze exact tested hardware bundle
+        run: |
+          set -euo pipefail
+          tar --sort=name --mtime='UTC 2020-01-01' \
+            --owner=0 --group=0 --numeric-owner \
+            -C out/klipperscreen/bundle-root \
+            -czf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz opt
+          sha256sum out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            | tee out/klipperscreen/SHA256SUMS
+          tar -tzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            | grep -Fqx 'opt/ad5x-klipperscreen/app/panels/ad5x_ifs_preprint.py'
+          tar -xOzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            opt/ad5x-klipperscreen/app/panels/gcodes.py \
+            | grep -Fq '"IFS план"'
+          tar -tzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            | grep -Eq '(_gi_cairo|cairo)' || {
+              echo 'ERROR: proven Cairo bridge missing from frozen hardware bundle' >&2
+              exit 1
+            }
 
       - name: Construct IFS Manager UI in MIPS GTK X11 runtime
         run: |
@@ -235,4 +248,4 @@ jobs:
             out/klipperscreen/ifs-gcodes-patch.txt
             out/klipperscreen/qemu-ifs-ui-smoke.txt
             out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
-            out/klipperscreen/BUILDINFO.txt
+            out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/BUILDINFO.txt
