@@ -11,7 +11,6 @@ from ks_includes.screen_panel import ScreenPanel
 SNAPSHOT_METHOD = "server.plugins_ad5x.snapshot"
 ACTION_METHOD = "server.plugins_ad5x.ifs.action"
 SNAPSHOT_NOTIFICATION = "notify_plugins_ad5x_snapshot_changed"
-SAFE_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
 
 STATE_NAMES = {
     "ready": "Готов",
@@ -31,6 +30,30 @@ ACTION_NAMES = {
     "unload_slot": "выгрузка",
 }
 
+FINISH_NAMES = {
+    "standard": "",
+    "matte": "Matte",
+    "silk": "Silk",
+    "satin": "Satin",
+    "metallic": "Metallic",
+    "transparent": "Transparent",
+    "translucent": "Translucent",
+    "glitter": "Glitter",
+    "glow": "Glow",
+    "wood": "Wood",
+    "carbon_fiber": "CF",
+    "other": "Special",
+}
+
+COLOR_MODE_NAMES = {
+    "solid": "1 цвет",
+    "dual": "2 цвета",
+    "tricolor": "3 цвета",
+    "gradient": "Градиент",
+    "rainbow": "Радуга",
+    "special": "Special",
+}
+
 
 class Panel(ScreenPanel):
     def __init__(self, screen, title):
@@ -40,6 +63,7 @@ class Panel(ScreenPanel):
         self._last_revision = None
         self._last_module = None
         self._slot_widgets = {}
+        self._selected_slot = 0
 
         root = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
@@ -89,32 +113,66 @@ class Panel(ScreenPanel):
         for slot in range(1, 5):
             card, widgets = self._make_slot_card(slot)
             self._slot_widgets[slot] = widgets
-            col = (slot - 1) % 2
-            row = (slot - 1) // 2
-            grid.attach(card, col, row, 1, 1)
+            grid.attach(card, slot - 1, 0, 1, 1)
         root.pack_start(grid, True, True, 0)
 
-        self.mapping = Gtk.Label(
-            label="",
+        self.path = Gtk.Label(
+            label="Тракт: —",
             hexpand=True,
             halign=Gtk.Align.START,
             valign=Gtk.Align.CENTER,
             xalign=0,
         )
-        self.mapping.set_line_wrap(True)
-        self.mapping.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        root.pack_end(self.mapping, False, False, 0)
+        self.path.set_ellipsize(Pango.EllipsizeMode.END)
+        root.pack_start(self.path, False, False, 0)
+
+        action_bar = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=5,
+            hexpand=True,
+            vexpand=False,
+        )
+        self.selection = Gtk.Label(
+            label="Выберите слот",
+            hexpand=True,
+            halign=Gtk.Align.START,
+            valign=Gtk.Align.CENTER,
+            xalign=0,
+        )
+        self.selection.set_ellipsize(Pango.EllipsizeMode.END)
+        action_bar.pack_start(self.selection, True, True, 0)
+
+        self.action_edit = Gtk.Button(label="Катушка")
+
+        self.action_edit.connect("clicked", self._on_edit_clicked)
+
+        action_bar.pack_start(self.action_edit, False, False, 0)
+
+
+        self.action_select = Gtk.Button(label="Выбрать")
+        self.action_load = Gtk.Button(label="Загрузить")
+        self.action_unload = Gtk.Button(label="Выгрузить")
+        self.action_select.connect("clicked", self._on_context_action_clicked, "select_slot")
+        self.action_load.connect("clicked", self._on_context_action_clicked, "load_slot")
+        self.action_unload.connect("clicked", self._on_context_action_clicked, "unload_slot")
+        for button in (self.action_select, self.action_load, self.action_unload):
+            button.set_sensitive(False)
+            action_bar.pack_start(button, False, False, 0)
+        root.pack_end(action_bar, False, False, 0)
 
         self.content.add(root)
         self.content.show_all()
         self._request_snapshot()
 
     def _make_slot_card(self, slot):
-        frame = Gtk.Frame(hexpand=True, vexpand=True)
+        card = Gtk.Button(hexpand=True, vexpand=True)
+        card.set_relief(Gtk.ReliefStyle.NONE)
+        card.connect("clicked", self._on_slot_clicked, slot)
+
         box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
-            spacing=2,
-            margin=5,
+            spacing=3,
+            margin=7,
             hexpand=True,
             vexpand=True,
         )
@@ -125,57 +183,169 @@ class Panel(ScreenPanel):
             xalign=0,
         )
         title.set_markup(f"<big><b>Слот {slot}</b></big>")
+
         material = Gtk.Label(
             label="—",
             halign=Gtk.Align.START,
             valign=Gtk.Align.CENTER,
             xalign=0,
         )
+        material.set_ellipsize(Pango.EllipsizeMode.END)
+
+        detail = Gtk.Label(
+            label="",
+            halign=Gtk.Align.START,
+            valign=Gtk.Align.CENTER,
+            xalign=0,
+        )
+        detail.set_ellipsize(Pango.EllipsizeMode.END)
+
         state = Gtk.Label(
             label="Нет данных",
             halign=Gtk.Align.START,
             valign=Gtk.Align.CENTER,
             xalign=0,
         )
-        color = Gtk.Label(
-            label="",
-            halign=Gtk.Align.START,
-            valign=Gtk.Align.CENTER,
-            xalign=0,
-        )
 
-        actions = Gtk.Box(
+        swatch = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=3,
+            spacing=1,
             homogeneous=True,
             hexpand=True,
             vexpand=False,
         )
-        select = Gtk.Button(label="Выбрать")
-        load = Gtk.Button(label="Загрузить")
-        unload = Gtk.Button(label="Выгрузить")
-        select.connect("clicked", self._on_action_clicked, "select_slot", slot)
-        load.connect("clicked", self._on_action_clicked, "load_slot", slot)
-        unload.connect("clicked", self._on_action_clicked, "unload_slot", slot)
-        for button in (select, load, unload):
-            button.set_sensitive(False)
-            actions.pack_start(button, True, True, 0)
+        swatch.set_size_request(-1, 24)
 
         box.pack_start(title, False, False, 0)
+        box.pack_start(swatch, False, False, 0)
         box.pack_start(material, False, False, 0)
-        box.pack_start(state, False, False, 0)
-        box.pack_start(color, False, False, 0)
-        box.pack_end(actions, False, False, 0)
-        frame.add(box)
-        return frame, {
+        box.pack_start(detail, False, False, 0)
+        box.pack_end(state, False, False, 0)
+        card.add(box)
+        return card, {
+            "card": card,
             "title": title,
             "material": material,
+            "detail": detail,
             "state": state,
-            "color": color,
-            "select": select,
-            "load": load,
-            "unload": unload,
+            "swatch": swatch,
+            "data": {},
         }
+
+    @staticmethod
+    def _set_background(widget, color):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(
+            (
+                "* { background-color: %s; min-height: 20px; "
+                "border: 1px solid rgba(255,255,255,0.55); border-radius: 3px; }"
+                % color
+            ).encode("utf-8")
+        )
+        widget.get_style_context().add_provider(
+            provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        widget._ad5x_css_provider = provider
+
+    def _apply_card_style(self, slot):
+        widgets = self._slot_widgets.get(slot)
+        if not widgets:
+            return
+        data = widgets.get("data") or {}
+        active = 0
+        if isinstance(self._last_module, dict):
+            active = int(self._last_module.get("active_slot") or 0)
+        selected = slot == self._selected_slot
+        stall = bool(data.get("stall", False))
+
+        if stall:
+            border = "#ffb020"
+        elif slot == active:
+            border = "#39d98a"
+        elif selected:
+            border = "#5da9ff"
+        else:
+            border = "rgba(255,255,255,0.20)"
+
+        if selected:
+            background = "rgba(255,255,255,0.10)"
+        elif slot == active:
+            background = "rgba(57,217,138,0.06)"
+        else:
+            background = "rgba(255,255,255,0.025)"
+
+        context = widgets["card"].get_style_context()
+        old_provider = getattr(widgets["card"], "_ad5x_card_css_provider", None)
+        if old_provider is not None:
+            context.remove_provider(old_provider)
+        provider = Gtk.CssProvider()
+        provider.load_from_data(
+            (
+                "* { border: 2px solid %s; border-radius: 10px; "
+                "background-color: %s; }" % (border, background)
+            ).encode("utf-8")
+        )
+        context.add_provider(
+            provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        widgets["card"]._ad5x_card_css_provider = provider
+
+    def _render_swatch(self, container, appearance, present):
+        for child in container.get_children():
+            container.remove(child)
+        if not present or not isinstance(appearance, dict):
+            container.hide()
+            return
+        colors = appearance.get("colors")
+        if not isinstance(colors, list) or not colors:
+            container.hide()
+            return
+        for color in colors[:8]:
+            if not isinstance(color, str) or not color.startswith("#"):
+                continue
+            segment = Gtk.EventBox(hexpand=True, vexpand=False)
+            self._set_background(segment, color)
+            container.pack_start(segment, True, True, 0)
+        if container.get_children():
+            container.show_all()
+        else:
+            container.hide()
+
+    @staticmethod
+    def _spool_title(data):
+        spool = data.get("spool") if isinstance(data.get("spool"), dict) else {}
+        name = spool.get("name") or ""
+        brand = spool.get("brand") or ""
+        material = spool.get("material") or data.get("material") or ""
+        if name:
+            return name
+        if brand and material:
+            return f"{brand} • {material}"
+        return material or brand or "Материал не задан"
+
+    @staticmethod
+    def _spool_detail(data):
+        spool = data.get("spool") if isinstance(data.get("spool"), dict) else {}
+        appearance = (
+            data.get("appearance") if isinstance(data.get("appearance"), dict) else {}
+        )
+        parts = []
+
+        def add(value):
+            if not value:
+                return
+            text = str(value)
+            if text.casefold() not in {item.casefold() for item in parts}:
+                parts.append(text)
+
+        add(spool.get("series") or "")
+        add(spool.get("variant") or "")
+        add(FINISH_NAMES.get(appearance.get("finish"), appearance.get("finish") or ""))
+        colors = appearance.get("colors") if isinstance(appearance.get("colors"), list) else []
+        mode = appearance.get("color_mode")
+        if colors:
+            add(COLOR_MODE_NAMES.get(mode, f"{len(colors)} цвета"))
+        return " • ".join(parts)
 
     def activate(self):
         self._request_snapshot()
@@ -186,7 +356,32 @@ class Panel(ScreenPanel):
     def _on_manage_clicked(self, _widget):
         self._screen.show_panel("ad5x_ifs_manage", "IFS — детали")
 
-    def _on_action_clicked(self, _widget, action, slot):
+    def _on_slot_clicked(self, _widget, slot):
+        self._select_slot(slot)
+
+    def _on_edit_clicked(self, _widget):
+        slot = self._selected_slot or 1
+        self._screen.show_panel(
+            "ad5x_ifs_metadata",
+            "IFS — катушка",
+            panel_name=f"ad5x_ifs_metadata_slot_{slot}",
+            slot=slot,
+        )
+
+    def _select_slot(self, slot):
+        if slot not in self._slot_widgets:
+            return
+        self._selected_slot = slot
+        self._render_selection()
+        self._render_action_buttons()
+
+    def _on_context_action_clicked(self, _widget, action):
+        slot = self._selected_slot
+        if not slot:
+            return
+        self._send_action(action, slot)
+
+    def _send_action(self, action, slot):
         if self._action_pending:
             return
         ws = getattr(self._screen, "_ws", None)
@@ -290,9 +485,9 @@ class Panel(ScreenPanel):
         elif operation.get("error"):
             text += "   •   последняя операция завершилась ошибкой"
 
-        print_state = module.get("print_state") or "unknown"
-        if print_state not in SAFE_PRINT_STATES:
-            text += f"   •   операции заблокированы ({print_state})"
+        blocked = module.get("write_blocked_reason") or ""
+        if blocked:
+            text += f"   •   действия заблокированы ({blocked})"
         self.status.set_text(text)
 
         slots = module.get("slots") or []
@@ -304,81 +499,116 @@ class Panel(ScreenPanel):
         for slot in range(1, 5):
             self._render_slot(slot, slot_map.get(slot, {}), active)
 
-        tool_mapping = module.get("tool_mapping")
-        if isinstance(tool_mapping, list) and tool_mapping:
-            pairs = [f"T{tool}→{slot}" for tool, slot in enumerate(tool_mapping)]
-            self.mapping.set_text("Карта инструментов: " + "   ".join(pairs))
-        else:
-            self.mapping.set_text("")
+        if self._selected_slot not in self._slot_widgets:
+            self._selected_slot = 0
+        if not self._selected_slot:
+            if active in self._slot_widgets:
+                self._selected_slot = active
+            else:
+                present = [slot for slot, data in slot_map.items() if data.get("present")]
+                self._selected_slot = present[0] if present else 1
+        self._render_selection()
         self._render_action_buttons()
 
     def _render_slot(self, slot, data, active):
         widgets = self._slot_widgets[slot]
-        title = f"Слот {slot}" + ("  ★" if slot == active else "")
-        widgets["title"].set_markup(f"<big><b>{title}</b></big>")
-
-        material = data.get("material") or "Материал не задан"
-        widgets["material"].set_text(str(material))
+        widgets["data"] = data if isinstance(data, dict) else {}
+        widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
 
         present = bool(data.get("present", False))
         stall = bool(data.get("stall", False))
-        if stall:
-            state = "⚠ Филамент остановлен"
-        elif present:
-            state = "● Филамент установлен"
-        else:
-            state = "○ Пусто"
-        widgets["state"].set_text(state)
+        metadata_status = data.get("metadata_status") or "none"
 
-        color = data.get("color")
-        widgets["color"].set_text(f"Цвет: {color}" if color else "")
-
-    def _render_action_buttons(self):
-        module = self._last_module
-        if not isinstance(module, dict) or not module.get("available", False):
-            self._set_all_action_buttons(False)
+        if not present:
+            widgets["material"].set_text("Пустой слот")
+            if metadata_status == "stale":
+                widgets["detail"].set_text("Было: " + self._spool_title(data))
+            else:
+                widgets["detail"].set_text("Катушка не назначена")
+            widgets["state"].set_text("○ Пусто")
+            self._render_swatch(widgets["swatch"], data.get("appearance"), False)
+            self._apply_card_style(slot)
             return
 
-        operation = module.get("operation") or {}
-        can_write = (
-            not self._action_pending
-            and module.get("state") == "ready"
-            and module.get("print_state") in SAFE_PRINT_STATES
-            and operation.get("state", "idle") == "idle"
-        )
-        active = int(module.get("active_slot") or 0)
-        head_filament = module.get("filament_at_toolhead")
-        slot_map = {
-            item.get("slot"): item
-            for item in (module.get("slots") or [])
-            if isinstance(item, dict)
-        }
+        widgets["material"].set_text(self._spool_title(data))
+        widgets["detail"].set_text(self._spool_detail(data))
+        if stall:
+            state = "⚠ ЗАМЯТИЕ"
+        elif slot == active:
+            state = "● В тракте"
+        else:
+            state = "● Загружен"
+        widgets["state"].set_text(state)
+        self._render_swatch(widgets["swatch"], data.get("appearance"), True)
+        self._apply_card_style(slot)
 
+    def _render_selection(self):
+        active = 0
+        if isinstance(self._last_module, dict):
+            active = int(self._last_module.get("active_slot") or 0)
         for slot, widgets in self._slot_widgets.items():
-            data = slot_map.get(slot, {})
-            present = bool(data.get("present", False))
-            widgets["select"].set_sensitive(can_write and present and slot != active)
-            widgets["load"].set_sensitive(
-                can_write and present and not (slot == active and head_filament is True)
+            widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
+            self._apply_card_style(slot)
+
+        self._render_path()
+        if not self._selected_slot:
+            self.selection.set_text("Выберите слот")
+            return
+        data = self._slot_widgets[self._selected_slot].get("data") or {}
+        if data.get("present"):
+            self.selection.set_text(
+                f"Слот {self._selected_slot} • {self._spool_title(data)}"
             )
-            widgets["unload"].set_sensitive(
-                can_write and slot == active and head_filament is True
-            )
+        else:
+            self.selection.set_text(f"Слот {self._selected_slot} • пусто")
+
+    def _render_path(self):
+        module = self._last_module if isinstance(self._last_module, dict) else {}
+        active = int(module.get("active_slot") or 0)
+        head = module.get("filament_at_toolhead")
+        if not active:
+            self.path.set_text("Тракт: —")
+            return
+        if head is True:
+            head_text = "● Головка"
+        elif head is False:
+            head_text = "○ Головка"
+        else:
+            head_text = "? Головка"
+        self.path.set_text(f"Тракт: Слот {active}  →  IFS  →  {head_text}")
+
+    def _render_action_buttons(self):
+        if self._action_pending or not self._selected_slot:
+            self._set_all_action_buttons(False)
+            return
+        widgets = self._slot_widgets.get(self._selected_slot) or {}
+        data = widgets.get("data") if isinstance(widgets, dict) else {}
+        permissions = data.get("permissions") if isinstance(data, dict) else {}
+        if not isinstance(permissions, dict):
+            permissions = {}
+        self.action_select.set_sensitive(bool(permissions.get("select_slot", False)))
+        self.action_load.set_sensitive(bool(permissions.get("load_slot", False)))
+        self.action_unload.set_sensitive(bool(permissions.get("unload_slot", False)))
 
     def _set_all_action_buttons(self, sensitive):
-        for widgets in self._slot_widgets.values():
-            for name in ("select", "load", "unload"):
-                widgets[name].set_sensitive(sensitive)
+        self.action_select.set_sensitive(sensitive)
+        self.action_load.set_sensitive(sensitive)
+        self.action_unload.set_sensitive(sensitive)
 
     def _clear_slots(self):
         self._last_module = None
+        self._selected_slot = 0
         for slot in range(1, 5):
             widgets = self._slot_widgets[slot]
+            widgets["data"] = {}
             widgets["title"].set_markup(f"<big><b>Слот {slot}</b></big>")
             widgets["material"].set_text("—")
+            widgets["detail"].set_text("")
             widgets["state"].set_text("Нет данных")
-            widgets["color"].set_text("")
-        self.mapping.set_text("")
+            self._render_swatch(widgets["swatch"], {}, False)
+            self._apply_card_style(slot)
+        self.path.set_text("Тракт: —")
+        self.selection.set_text("Выберите слот")
         self._set_all_action_buttons(False)
 
     def process_update(self, action, _data):

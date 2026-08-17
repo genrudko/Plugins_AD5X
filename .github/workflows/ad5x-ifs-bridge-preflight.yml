@@ -3,20 +3,33 @@ name: AD5X IFS bridge preflight
 on:
   pull_request:
     paths:
+      - 'VERSION'
       - 'ad5x_custom.cfg'
       - 'install.sh'
       - 'klipper/extras/ad5x_ifs.py'
       - 'moonraker/components/plugins_ad5x.py'
+      - 'moonraker/components/plugins_ad5x_ifs_model.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py'
       - 'tools/ad5x-display-spike/klipperscreen/KlipperScreen.conf'
       - 'tools/ad5x-display-spike/klipperscreen/build-stage4.sh'
       - 'tests/test_ad5x_ifs_bridge.py'
       - 'tests/test_installer_backend_lifecycle.py'
       - 'tests/test_installer_ifs_bridge_lifecycle.py'
+      - 'tests/test_installer_ifs_manager_model_lifecycle.py'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_plugins_ad5x_ifs_backend.py'
+      - 'tests/test_plugins_ad5x_ifs_job_preview.py'
+      - 'tests/test_plugins_ad5x_ifs_launch_contract.py'
+      - 'tests/test_plugins_ad5x_ifs_metadata_store.py'
+      - 'tests/test_plugins_ad5x_ifs_model.py'
+      - 'tests/test_plugins_ad5x_ifs_manager_contract.py'
+      - 'tests/test_plugins_ad5x_ifs_projection.py'
+      - 'tests/test_plugins_ad5x_ifs_preprint_plan.py'
       - '.github/workflows/ad5x-ifs-bridge-preflight.yml'
   workflow_dispatch:
 
@@ -32,14 +45,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compile bridge, backend and screen adapters
+      - name: Compile bridge, backend, model and screen adapters
         run: |
           python -m py_compile \
             klipper/extras/ad5x_ifs.py \
             moonraker/components/plugins_ad5x.py \
+            moonraker/components/plugins_ad5x_ifs_model.py \
             tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py \
             tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py \
-            tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py
+            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py \
+            tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py \
+            tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py \
+            tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py
       - name: Validate shell syntax and IFS panel packaging contract
         run: |
           sh -n install.sh
@@ -49,13 +66,29 @@ jobs:
           grep -Fq 'server.plugins_ad5x.ifs.action' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
           grep -Fq 'notify_plugins_ad5x_snapshot_changed' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py
           grep -Fq 'server.plugins_ad5x.snapshot' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py
+          grep -Fq 'server.plugins_ad5x.ifs.metadata' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py
+          grep -Fq 'server.plugins_ad5x.ifs.job.preview' tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py
           grep -Fq 'ad5x_ifs_manage_panel.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          grep -Fq 'ad5x_ifs_metadata_panel.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          grep -Fq 'ad5x_ifs_preprint_panel.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
           grep -Fq 'ad5x_ifs_manage.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
-      - name: Run Plugins AD5X backend and IFS bridge tests
+          grep -Fq 'ad5x_ifs_metadata.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          grep -Fq 'ad5x_ifs_preprint.py' tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          grep -Fq '/server/plugins_ad5x/ifs/metadata' moonraker/components/plugins_ad5x.py
+          grep -Fq '/server/plugins_ad5x/ifs/job/preview' moonraker/components/plugins_ad5x.py
+      - name: Run Plugins AD5X backend and IFS tests
         run: |
           python -m unittest -v \
             tests.test_plugins_ad5x_component \
             tests.test_plugins_ad5x_ifs_backend \
+            tests.test_plugins_ad5x_ifs_job_preview \
+            tests.test_plugins_ad5x_ifs_launch_contract \
+            tests.test_plugins_ad5x_ifs_metadata_store \
+            tests.test_plugins_ad5x_ifs_model \
+            tests.test_plugins_ad5x_ifs_manager_contract \
+            tests.test_plugins_ad5x_ifs_projection \
+            tests.test_plugins_ad5x_ifs_preprint_plan \
             tests.test_ad5x_ifs_bridge \
             tests.test_installer_backend_lifecycle \
-            tests.test_installer_ifs_bridge_lifecycle
+            tests.test_installer_ifs_bridge_lifecycle \
+            tests.test_installer_ifs_manager_model_lifecycle

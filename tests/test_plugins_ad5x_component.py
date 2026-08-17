@@ -110,6 +110,8 @@ class PluginsAD5XComponentTests(unittest.TestCase):
             {
                 component_module.SNAPSHOT_ENDPOINT,
                 component_module.IFS_ACTION_ENDPOINT,
+                component_module.IFS_METADATA_ENDPOINT,
+                component_module.IFS_JOB_PREVIEW_ENDPOINT,
             },
         )
 
@@ -117,8 +119,12 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertEqual(snapshot["request_types"], RequestType.GET)
         action = endpoints[component_module.IFS_ACTION_ENDPOINT]
         self.assertEqual(action["request_types"], RequestType.POST)
+        metadata = endpoints[component_module.IFS_METADATA_ENDPOINT]
+        self.assertEqual(metadata["request_types"], RequestType.POST)
+        preview = endpoints[component_module.IFS_JOB_PREVIEW_ENDPOINT]
+        self.assertEqual(preview["request_types"], RequestType.POST)
 
-        for endpoint in (snapshot, action):
+        for endpoint in (snapshot, action, metadata, preview):
             self.assertEqual(
                 endpoint["transports"],
                 TransportType.HTTP | TransportType.WEBSOCKET,
@@ -129,8 +135,12 @@ class PluginsAD5XComponentTests(unittest.TestCase):
 
         snapshot_rpc = snapshot["endpoint"].strip("/").replace("/", ".")
         action_rpc = action["endpoint"].strip("/").replace("/", ".")
+        metadata_rpc = metadata["endpoint"].strip("/").replace("/", ".")
+        preview_rpc = preview["endpoint"].strip("/").replace("/", ".")
         self.assertEqual(snapshot_rpc, "server.plugins_ad5x.snapshot")
         self.assertEqual(action_rpc, "server.plugins_ad5x.ifs.action")
+        self.assertEqual(metadata_rpc, "server.plugins_ad5x.ifs.metadata")
+        self.assertEqual(preview_rpc, "server.plugins_ad5x.ifs.job.preview")
 
     def test_notification_registration_contract(self) -> None:
         self.assertEqual(

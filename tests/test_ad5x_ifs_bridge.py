@@ -46,10 +46,59 @@ class FakeZmodIfs:
         return True
 
 
+class FakeGcode:
+    def __init__(self):
+        self.commands = {}
+
+    def register_command(self, name, callback):
+        self.commands[name] = callback
+
+
+class FakeZmodColor:
+    def __init__(self):
+        self.file_colors = [(9, "#ABCDEF", "OLD")]
+        self.calls = []
+
+    def get_used_colors(self, gcmd):
+        self.calls.append(("scan", gcmd.get("FILENAME", "")))
+        return [
+            (0, "#f330f9", "pla"),
+            (1, "#161616", "petg"),
+        ]
+
+    def get_printer_data_detail(self):
+        self.calls.append(("detail",))
+        return 200, {"fake": True}
+
+    def parse_printer_response(self, response):
+        self.calls.append(("parse", response))
+        return [
+            {"ID": "1", "Material": "PETG", "Color": "dark", "HEX": "161616"},
+            {"ID": "2", "Material": "PLA", "Color": "magenta", "HEX": "F330F9"},
+            {"ID": "3", "Material": "PLA", "Color": "blue", "HEX": "27C4F4"},
+        ]
+
+    def get_auto_tool_assignments(
+        self, gcmd, orig_tools, raw_slots, output_text, one_based_indexes
+    ):
+        self.calls.append(("assign", list(raw_slots), one_based_indexes))
+        self.assert_preview_file_colors = list(self.file_colors)
+        orig_tools[0] = 2
+        orig_tools[1] = 1
+        output_text.append("// canonical Z-Mod assignment")
+        return bridge_module.AUTO_ASSIGN_ANY_SUCCESS | bridge_module.AUTO_ASSIGN_COLOR_WEAK
+
+
 class FakePrinter:
     def __init__(self):
         self.handlers = {}
-        self.objects = {"zmod_ifs": FakeZmodIfs()}
+        self.gcode = FakeGcode()
+        self.zmod_color = FakeZmodColor()
+        self.objects = {
+            "gcode": self.gcode,
+            "zmod_ifs": FakeZmodIfs(),
+            "zmod_color": self.zmod_color,
+        }
 
     def register_event_handler(self, event, callback):
         self.handlers[event] = callback
@@ -66,21 +115,39 @@ class FakeConfig:
         return self.printer
 
 
+class FakeCommand:
+    def __init__(self, filename):
+        self.filename = filename
+        self.responses = []
+
+    def get(self, name, default=None):
+        return self.filename if name == "FILENAME" else default
+
+    def respond_raw(self, message):
+        self.responses.append(str(message))
+
+    @staticmethod
+    def error(message):
+        return ValueError(str(message))
+
+
 class AD5XIFSBridgeTests(unittest.TestCase):
     def setUp(self):
         self.printer = FakePrinter()
         self.bridge = bridge_module.load_config(FakeConfig(self.printer))
 
-    def test_registers_lifecycle_handlers(self):
+    def test_registers_lifecycle_handlers_and_preview_command(self):
         self.assertEqual(
             set(self.printer.handlers),
             {"klippy:ready", "klippy:disconnect", "klippy:shutdown"},
         )
+        self.assertIn(bridge_module.JOB_PREVIEW_COMMAND, self.printer.gcode.commands)
 
     def test_unavailable_before_ready(self):
         status = self.bridge.get_status(0.0)
         self.assertFalse(status["available"])
         self.assertEqual(status["slots"], [])
+        self.assertFalse(status["job_preview"]["available"])
 
     def test_ready_exports_normalized_zmod_state(self):
         self.printer.handlers["klippy:ready"]()
@@ -101,6 +168,59 @@ class AD5XIFSBridgeTests(unittest.TestCase):
             ],
         )
 
+    def test_job_preview_delegates_scan_and_matching_to_zmod_without_persisting(self):
+        self.printer.handlers["klippy:ready"]()
+        original_file_colors = list(self.printer.zmod_color.file_colors)
+
+        gcmd = FakeCommand("3mf/model/demo/Metadata/plate_1.gcode")
+        self.bridge.cmd_JOB_PREVIEW(gcmd)
+
+        preview = self.bridge.get_status(2.0)["job_preview"]
+        self.assertTrue(preview["available"])
+        self.assertEqual(preview["source"], "zmod")
+        self.assertEqual(preview["filename"], gcmd.filename)
+        self.assertEqual(
+            preview["requirements"],
+            [
+                {"tool": 0, "color": "#F330F9", "material": "PLA"},
+                {"tool": 1, "color": "#161616", "material": "PETG"},
+            ],
+        )
+        self.assertEqual(
+            preview["assignments"],
+            [{"tool": 0, "slot": 2}, {"tool": 1, "slot": 1}],
+        )
+        self.assertEqual(preview["allowed_tool_count"], 2)
+        self.assertEqual(preview["resolved_tool_map"], [2, 1])
+        self.assertTrue(preview["auto_assign"]["any_success"])
+        self.assertTrue(preview["auto_assign"]["weak_color"])
+        self.assertFalse(preview["auto_assign"]["material_failure"])
+        self.assertIn("canonical Z-Mod assignment", preview["messages"][-1])
+        self.assertEqual(gcmd.responses, ["AD5X_IFS_JOB_PREVIEW_OK"])
+
+        # Preview temporarily supplies file_colors to the canonical matcher and
+        # restores the source object's previous state afterwards.
+        self.assertEqual(
+            self.printer.zmod_color.assert_preview_file_colors,
+            [(0, "#f330f9", "pla"), (1, "#161616", "petg")],
+        )
+        self.assertEqual(self.printer.zmod_color.file_colors, original_file_colors)
+
+    def test_job_preview_rejects_path_escape_before_calling_zmod(self):
+        self.printer.handlers["klippy:ready"]()
+        with self.assertRaises(ValueError):
+            self.bridge.cmd_JOB_PREVIEW(FakeCommand("../config/printer.cfg"))
+        self.assertEqual(self.printer.zmod_color.calls, [])
+
+    def test_job_preview_fails_explicitly_without_zmod_color(self):
+        self.printer.objects.pop("zmod_color")
+        self.printer.handlers["klippy:ready"]()
+        with self.assertRaises(ValueError):
+            self.bridge.cmd_JOB_PREVIEW(FakeCommand("demo.gcode"))
+        preview = self.bridge.get_status(2.0)["job_preview"]
+        self.assertFalse(preview["available"])
+        self.assertEqual(preview["error"], "zmod_color_unavailable")
+
     def test_stall_mask_is_per_slot(self):
         self.printer.handlers["klippy:ready"]()
         data = self.printer.objects["zmod_ifs"].ifs_data
@@ -119,10 +239,14 @@ class AD5XIFSBridgeTests(unittest.TestCase):
         self.assertEqual(status["active_slot"], 3)
         self.assertEqual(status["raw_channel"], 0)
 
-    def test_disconnect_returns_unavailable(self):
+    def test_disconnect_returns_unavailable_and_clears_preview(self):
         self.printer.handlers["klippy:ready"]()
+        self.bridge.cmd_JOB_PREVIEW(FakeCommand("demo.gcode"))
         self.printer.handlers["klippy:disconnect"]()
-        self.assertFalse(self.bridge.get_status(4.0)["available"])
+        status = self.bridge.get_status(4.0)
+        self.assertFalse(status["available"])
+        self.assertFalse(status["job_preview"]["available"])
+        self.assertEqual(status["job_preview"]["error"], "klippy_disconnected")
 
 
 if __name__ == "__main__":

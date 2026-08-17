@@ -1,0 +1,258 @@
+name: AD5X IFS UI target smoke
+
+on:
+  pull_request:
+    branches:
+      - ad5x-klipperscreen-spike
+    paths:
+      - '.github/workflows/ad5x-ifs-ui-target-smoke.yml'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/apply-ad5x-ifs-gcodes-patch.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/build-stage4.sh'
+      - 'tools/ad5x-display-spike/klipperscreen/requirements-startup.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  KLIPPERSCREEN_REF: ed40799f92f8a5044082aee75b832a9e97084c7f
+  STAGE3_ROOTFS_ARTIFACT_ID: '9254039722'
+  STAGE3_ROOTFS_ZIP_SHA256: bb11794acf51b2d622117f149cce00e634759dddb49397e91785bdd7254e8ff7
+  KS_NETWORK_ARTIFACT_ID: '9263797247'
+  KS_NETWORK_ZIP_SHA256: 3798e13c9c0a02e631d0fe87840225f044241b30be414fa46117abdda023acba
+  KS_NETWORK_TAR_SHA256: 08bc9be98629c0c275fffe4b17a9de8962957a5ea1a7e2158172ad037b4ea83f
+  KS_CAIRO_ARTIFACT_ID: '9268998995'
+  KS_CAIRO_ZIP_SHA256: f1bebd0c1d0acb35200f19c4b7fbff47a5535a3f45042fa10125d6419ab690b1
+  KS_CAIRO_TAR_SHA256: 1751ee284e333e42c0b6470007a90bff67fc85d096adbe0c84b7e514b7211a1d
+
+jobs:
+  target-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout Plugins_AD5X
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned upstream KlipperScreen
+        uses: actions/checkout@v4
+        with:
+          repository: KlipperScreen/KlipperScreen
+          ref: ${{ env.KLIPPERSCREEN_REF }}
+          path: .ci/KlipperScreen
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install host tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends librsvg2-bin qemu-user rsync unzip xvfb
+
+      - name: Build architecture-neutral app layer
+        env:
+          UPSTREAM_REF: ${{ env.KLIPPERSCREEN_REF }}
+        run: |
+          set -euo pipefail
+          chmod +x tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          tools/ad5x-display-spike/klipperscreen/build-stage4.sh
+          test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs.py
+          test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_manage.py
+          test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_metadata.py
+          test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_preprint.py
+
+      - name: Add safe IFS pre-print route to pinned upstream chooser
+        run: |
+          set -euo pipefail
+          APP=out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app
+          python3 tools/ad5x-display-spike/klipperscreen/apply-ad5x-ifs-gcodes-patch.py "$APP" \
+            | tee out/klipperscreen/ifs-gcodes-patch.txt
+          grep -Fq '"IFS план"' "$APP/panels/gcodes.py"
+          grep -Fq '"ad5x_ifs_preprint"' "$APP/panels/gcodes.py"
+          python3 -m compileall -q "$APP"
+          find "$APP" -type d -name '__pycache__' -prune -exec rm -rf {} +
+
+      - name: Download accepted Stage 3 rootfs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out/stage3
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE3_ROOTFS_ARTIFACT_ID}/zip" \
+            -o out/stage3/rootfs-artifact.zip
+          echo "${STAGE3_ROOTFS_ZIP_SHA256}  out/stage3/rootfs-artifact.zip" | sha256sum -c -
+          unzip -q out/stage3/rootfs-artifact.zip -d out/stage3/artifact
+          mkdir -p out/stage3/rootfs
+          gzip -dc out/stage3/artifact/ad5x-gtk-rootfs.tar.gz | tar -xf - -C out/stage3/rootfs
+          test -x out/stage3/rootfs/usr/bin/python3
+
+      - name: Add proven Python network delta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out/ks-network
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${KS_NETWORK_ARTIFACT_ID}/zip" \
+            -o out/ks-network/artifact.zip
+          echo "${KS_NETWORK_ZIP_SHA256}  out/ks-network/artifact.zip" | sha256sum -c -
+          unzip -q out/ks-network/artifact.zip -d out/ks-network/artifact
+          NET_TAR=out/ks-network/artifact/ad5x-klipperscreen-python-network.tar.gz
+          echo "${KS_NETWORK_TAR_SHA256}  $NET_TAR" | sha256sum -c -
+          gzip -dc "$NET_TAR" | tar -xf - -C out/klipperscreen/bundle-root
+
+      - name: Add proven PyGObject Cairo bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out/ks-cairo
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${KS_CAIRO_ARTIFACT_ID}/zip" \
+            -o out/ks-cairo/artifact.zip
+          echo "${KS_CAIRO_ZIP_SHA256}  out/ks-cairo/artifact.zip" | sha256sum -c -
+          unzip -q out/ks-cairo/artifact.zip -d out/ks-cairo/artifact
+          CAIRO_TAR=out/ks-cairo/artifact/ad5x-klipperscreen-cairo-bridge.tar.gz
+          echo "${KS_CAIRO_TAR_SHA256}  $CAIRO_TAR" | sha256sum -c -
+          gzip -dc "$CAIRO_TAR" | tar -xf - -C out/klipperscreen/bundle-root
+
+      - name: Freeze exact tested hardware bundle
+        run: |
+          set -euo pipefail
+          tar --sort=name --mtime='UTC 2020-01-01' \
+            --owner=0 --group=0 --numeric-owner \
+            -C out/klipperscreen/bundle-root \
+            -czf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz opt
+          sha256sum out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            | tee out/klipperscreen/SHA256SUMS
+
+          tar -tzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            > out/klipperscreen/frozen-bundle-files.txt
+          grep -Fqx 'opt/ad5x-klipperscreen/app/panels/ad5x_ifs_preprint.py' \
+            out/klipperscreen/frozen-bundle-files.txt
+          grep -Eq '(_gi_cairo|cairo)' out/klipperscreen/frozen-bundle-files.txt || {
+            echo 'ERROR: proven Cairo bridge missing from frozen hardware bundle' >&2
+            exit 1
+          }
+
+          tar -xOzf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            opt/ad5x-klipperscreen/app/panels/gcodes.py \
+            > out/klipperscreen/frozen-gcodes.py
+          grep -Fq '"IFS план"' out/klipperscreen/frozen-gcodes.py
+          grep -Fq '"ad5x_ifs_preprint"' out/klipperscreen/frozen-gcodes.py
+          echo 'AD5X_IFS_FROZEN_BUNDLE_OK'
+
+      - name: Construct IFS Manager UI in MIPS GTK X11 runtime
+        run: |
+          set -euo pipefail
+          TARGET="$PWD/out/stage3/rootfs"
+          APPROOT="$PWD/out/klipperscreen/bundle-root/opt/ad5x-klipperscreen"
+          DYNL="$APPROOT/lib/python3.12/lib-dynload"
+          SITE="$APPROOT/lib/python3.12/site-packages"
+          APP="$APPROOT/app"
+          mkdir -p out/qemu-home out/qemu-runtime
+          chmod 700 out/qemu-runtime
+
+          Xvfb :99 -screen 0 800x480x24 -nolisten tcp >out/klipperscreen/ifs-ui-xvfb.log 2>&1 &
+          XVFB_PID=$!
+          trap 'kill "$XVFB_PID" 2>/dev/null || true' EXIT
+          sleep 1
+
+          env \
+            DISPLAY=:99 \
+            GDK_BACKEND=x11 \
+            HOME="$PWD/out/qemu-home" \
+            XDG_RUNTIME_DIR="$PWD/out/qemu-runtime" \
+            QEMU_LD_PREFIX="$TARGET" \
+            PYTHONHOME="$TARGET/usr" \
+            PYTHONPATH="$DYNL:$SITE:$TARGET/usr/lib/python3.12/site-packages:$APP" \
+            LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \
+            GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
+            XDG_DATA_DIRS="$TARGET/usr/share" \
+            FONTCONFIG_PATH="$TARGET/etc/fonts" \
+            qemu-mipsel "$TARGET/usr/bin/python3" \
+              "$PWD/tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py" \
+              | tee out/klipperscreen/qemu-ifs-ui-smoke.txt
+
+          grep -q '^QEMU_AD5X_IFS_PANEL_CONSTRUCT_OK 17$' out/klipperscreen/qemu-ifs-ui-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_MANAGER_CONTRACT_UI_OK 3$' out/klipperscreen/qemu-ifs-ui-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_ACTION_GATES_OK$' out/klipperscreen/qemu-ifs-ui-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_MANAGE_PANEL_OK 17$' out/klipperscreen/qemu-ifs-ui-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_METADATA_PANEL_OK 3$' out/klipperscreen/qemu-ifs-ui-smoke.txt
+
+          env \
+            DISPLAY=:99 \
+            GDK_BACKEND=x11 \
+            HOME="$PWD/out/qemu-home" \
+            XDG_RUNTIME_DIR="$PWD/out/qemu-runtime" \
+            QEMU_LD_PREFIX="$TARGET" \
+            PYTHONHOME="$TARGET/usr" \
+            PYTHONPATH="$DYNL:$SITE:$TARGET/usr/lib/python3.12/site-packages:$APP" \
+            LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \
+            GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
+            XDG_DATA_DIRS="$TARGET/usr/share" \
+            FONTCONFIG_PATH="$TARGET/etc/fonts" \
+            qemu-mipsel "$TARGET/usr/bin/python3" \
+              "$PWD/tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py" \
+              | tee out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+
+          grep -q '^QEMU_AD5X_IFS_PREPRINT_PANEL_OK 1$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_PREPRINT_START_GATED_OK$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+          echo 'AD5X_IFS_MIPS_GTK_UI_OK'
+
+      - name: Write exact-head hardware manifest
+        env:
+          EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo "purpose=ifs-readonly-preprint-hardware-acceptance-01"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "head=${EXACT_HEAD}"
+            echo "klipperscreen_ref=${KLIPPERSCREEN_REF}"
+            echo "job_preview=enabled"
+            echo "resolved_tool_map=enabled"
+            echo "ifs_preprint_route=enabled"
+            echo "generic_print_path=preserved"
+            echo "ifs_launch_write=disabled"
+            echo "zmod_projection_write=disabled"
+            echo "spoolman=disabled"
+          } > out/klipperscreen/HARDWARE_BUILD.txt
+          cat out/klipperscreen/HARDWARE_BUILD.txt
+          sha256sum out/klipperscreen/HARDWARE_BUILD.txt \
+            >> out/klipperscreen/SHA256SUMS
+
+      - name: Upload hardware acceptance bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-ifs-hardware-${{ github.event.pull_request.head.sha || github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz
+            out/klipperscreen/SHA256SUMS
+            out/klipperscreen/HARDWARE_BUILD.txt
+            out/klipperscreen/ifs-gcodes-patch.txt
+            out/klipperscreen/qemu-ifs-ui-smoke.txt
+            out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+            out/klipperscreen/frozen-bundle-files.txt
+            out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/BUILDINFO.txt

@@ -1,0 +1,53 @@
+name: AD5X IFS resolved map apply
+
+on:
+  push:
+    branches:
+      - feature/ifs-manager-v1
+    paths:
+      - '.github/workflows/ad5x-ifs-preview-map-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/ifs-manager-v1
+      - name: Apply and test full resolved tool-map preview
+        run: |
+          set -euo pipefail
+          python3 tools/ad5x-display-spike/klipperscreen/tmp_preview_map_patch.py
+
+          grep -F '"allowed_tool_count": tool_count' klipper/extras/ad5x_ifs.py
+          grep -F '"resolved_tool_map": [int(slot) for slot in tools]' klipper/extras/ad5x_ifs.py
+          grep -F 'block("invalid_resolved_tool_map")' moonraker/components/plugins_ad5x_ifs_model.py
+
+          python3 -m py_compile \
+            klipper/extras/ad5x_ifs.py \
+            moonraker/components/plugins_ad5x_ifs_model.py
+          git diff --check
+
+          python3 -m unittest -v \
+            tests.test_ad5x_ifs_bridge \
+            tests.test_plugins_ad5x_ifs_job_preview \
+            tests.test_plugins_ad5x_ifs_launch_contract \
+            tests.test_plugins_ad5x_ifs_preprint_plan \
+            tests.test_plugins_ad5x_ifs_backend
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            klipper/extras/ad5x_ifs.py \
+            moonraker/components/plugins_ad5x_ifs_model.py \
+            tests/test_ad5x_ifs_bridge.py \
+            tests/test_plugins_ad5x_ifs_job_preview.py \
+            tests/test_plugins_ad5x_ifs_launch_contract.py
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'resolved-map patch produced no staged changes'; exit 1; }
+          git commit -m 'feat(ifs): preserve complete Z-Mod resolved tool map'
+          git push origin HEAD:feature/ifs-manager-v1

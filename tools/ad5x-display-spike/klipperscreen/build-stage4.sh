@@ -28,6 +28,12 @@ install -m 0644 \
 install -m 0644 \
     tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py \
     "$APP/panels/ad5x_ifs_manage.py"
+install -m 0644 \
+    tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py \
+    "$APP/panels/ad5x_ifs_metadata.py"
+install -m 0644 \
+    tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py \
+    "$APP/panels/ad5x_ifs_preprint.py"
 
 # The first hardware proof only needs dependencies imported unconditionally by the
 # upstream shell. Install them into an architecture-neutral private site-packages.
@@ -196,8 +202,10 @@ chmod +x "$APPROOT/run-klipperscreen-test.sh"
     echo "display_blanking_owner=ad5x-launcher-backlight"
     echo "xset_required=false"
     echo "spoolman_dynamic_svg_gradient=deferred"
-    echo "ifs_panel=plugins-ad5x-normalized-actions"
-    echo "ifs_manage_panel=plugins-ad5x-diagnostics-and-spoolman-entry"
+    echo "ifs_panel=plugins-ad5x-manager-contract"
+    echo "ifs_manage_panel=plugins-ad5x-diagnostics"
+    echo "ifs_metadata_panel=plugins-ad5x-manual-store-editor"
+    echo "ifs_preprint_panel=plugins-ad5x-zmod-delegated-readonly-plan"
 } > "$APPROOT/BUILDINFO.txt"
 
 python3 -m compileall -q "$APP"
@@ -215,6 +223,8 @@ find "$OUT/bundle-root" -mindepth 1 -maxdepth 1 -printf '%f\n' | grep -qx 'opt'
 find "$OUT/bundle-root/opt" -mindepth 1 -maxdepth 1 -printf '%f\n' | grep -qx 'ad5x-klipperscreen'
 test -s "$APP/panels/ad5x_ifs.py"
 test -s "$APP/panels/ad5x_ifs_manage.py"
+test -s "$APP/panels/ad5x_ifs_metadata.py"
+test -s "$APP/panels/ad5x_ifs_preprint.py"
 grep -Fqx 'panel: ad5x_ifs' "$APPROOT/KlipperScreen.conf"
 test ! -e "$OUT/bundle-root/usr"
 test ! -e "$OUT/bundle-root/lib"
