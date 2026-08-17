@@ -4,6 +4,9 @@ from pathlib import Path
 import sys
 
 
+PATCH_MARKER = "_ad5x_static_spool_icon"
+
+
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
     if count != 1:
@@ -21,6 +24,9 @@ def main() -> int:
         raise SystemExit(f"spoolman.py not found: {target}")
 
     text = target.read_text(encoding="utf-8")
+    if PATCH_MARKER in text and "spool_name = GLib.markup_escape_text" in text:
+        print("AD5X_SPOOLMAN_RUNTIME_PATCH_ALREADY_OK")
+        return 0
 
     old_icon = '''    def _set_cell_icon(self, column, cell, model, it, data):
         spool = model.get_value(it, 0)
@@ -37,7 +43,7 @@ def main() -> int:
         if os.environ.get("AD5X_KLIPPERSCREEN_PNG_ONLY", "1") == "1":
             icon = getattr(self, "_ad5x_static_spool_icon", None)
             if icon is None:
-                icon_size = self._gtk.img_scale * self.bts * 2
+                icon_size = int(self._gtk.img_scale * self.bts * 2)
                 icon = self._gtk.PixbufFromIcon("spool", icon_size, icon_size)
                 self._ad5x_static_spool_icon = icon
             cell.set_property("pixbuf", icon)
