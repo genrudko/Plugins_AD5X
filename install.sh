@@ -832,5 +832,5 @@ SUCCESS=1
 trap - EXIT HUP INT TERM
 echo "AD5X Custom применён. Backup: $B"
 echo 'Plugins AD5X backend + IFS Manager model применены через managed copy и controlled Moonraker lifecycle.'
-echo 'IFS Klipper bridge установлен managed-copy; он активируется при следующем firmware restart / включении принтера.'
-echo 'Для активации остальных camera/power-on изменений требуется полное выключение и включение принтера.'
+echo 'IFS Klipper bridge установлен managed-copy; загрузка изменённого Python extra требует полного перезапуска процесса Klipper — firmware restart недостаточен.'
+echo 'Надёжный AD5X путь: полное выключение и включение принтера; оно также активирует остальные camera/power-on изменения.'
