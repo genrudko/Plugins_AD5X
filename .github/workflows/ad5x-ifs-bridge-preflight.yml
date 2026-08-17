@@ -26,6 +26,7 @@ on:
       - 'tests/test_plugins_ad5x_ifs_model.py'
       - 'tests/test_plugins_ad5x_ifs_manager_contract.py'
       - 'tests/test_plugins_ad5x_ifs_projection.py'
+      - 'tests/test_plugins_ad5x_ifs_preprint_plan.py'
       - '.github/workflows/ad5x-ifs-bridge-preflight.yml'
   workflow_dispatch:
 
@@ -77,6 +78,7 @@ jobs:
             tests.test_plugins_ad5x_ifs_model \
             tests.test_plugins_ad5x_ifs_manager_contract \
             tests.test_plugins_ad5x_ifs_projection \
+            tests.test_plugins_ad5x_ifs_preprint_plan \
             tests.test_ad5x_ifs_bridge \
             tests.test_installer_backend_lifecycle \
             tests.test_installer_ifs_bridge_lifecycle \
