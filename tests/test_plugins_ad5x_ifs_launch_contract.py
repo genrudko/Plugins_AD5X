@@ -36,6 +36,8 @@ def preview(*, weak=False, duplicate=False, material_failure=False, color_failur
             {"tool": 0, "slot": 3},
             {"tool": 1, "slot": 1},
         ],
+        "allowed_tool_count": 2,
+        "resolved_tool_map": [3, 1],
         "auto_assign": {
             "flags": 1,
             "any_success": True,
@@ -65,6 +67,8 @@ class IFSLaunchContractTests(unittest.TestCase):
             "error": "",
             "messages": [],
             "assignments": list(first["assignments"]),
+            "allowed_tool_count": first["allowed_tool_count"],
+            "resolved_tool_map": list(first["resolved_tool_map"]),
             "requirements": list(first["requirements"]),
             "source": "zmod",
             "filename": first["filename"],
@@ -182,6 +186,20 @@ class IFSLaunchContractTests(unittest.TestCase):
                 )
                 self.assertFalse(gate["candidate"])
                 self.assertIn(expected, gate["blockers"])
+
+    def test_invalid_resolved_tool_map_blocks_launch_candidate(self):
+        source = preview()
+        source["resolved_tool_map"] = [3, 9]
+        plan = model.build_preprint_plan(source, slots())
+        gate = model.build_job_launch_gate(
+            source,
+            plan,
+            module_state="ready",
+            print_state="standby",
+            operation_state="idle",
+        )
+        self.assertFalse(gate["candidate"])
+        self.assertIn("invalid_resolved_tool_map", gate["blockers"])
 
     def test_capability_keeps_start_and_mapping_write_disabled(self):
         caps = model.get_ifs_capabilities()

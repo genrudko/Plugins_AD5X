@@ -31,6 +31,8 @@ PREVIEW = {
         {"tool": 0, "slot": 3},
         {"tool": 1, "slot": 1},
     ],
+    "allowed_tool_count": 2,
+    "resolved_tool_map": [3, 1],
     "auto_assign": {
         "flags": 1,
         "any_success": True,

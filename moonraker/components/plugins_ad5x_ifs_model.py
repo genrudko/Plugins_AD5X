@@ -492,6 +492,11 @@ def build_job_preview_token(job_preview: Optional[Dict[str, Any]]) -> str:
         "filename": preview.get("filename") if isinstance(preview.get("filename"), str) else "",
         "requirements": requirements,
         "assignments": assignments,
+        "allowed_tool_count": int(preview.get("allowed_tool_count") or 0),
+        "resolved_tool_map": [
+            int(slot) for slot in (preview.get("resolved_tool_map") or [])
+            if isinstance(slot, int) and not isinstance(slot, bool)
+        ],
         "auto_assign": {
             "flags": int(auto.get("flags") or 0),
             "any_success": bool(auto.get("any_success", False)),
@@ -535,6 +540,21 @@ def build_job_launch_gate(
 
     if not preview.get("available", False) or not token:
         block("preview_unavailable")
+
+    allowed_tool_count = preview.get("allowed_tool_count")
+    resolved_tool_map = preview.get("resolved_tool_map")
+    if (
+        isinstance(allowed_tool_count, bool)
+        or not isinstance(allowed_tool_count, int)
+        or allowed_tool_count <= 0
+        or not isinstance(resolved_tool_map, list)
+        or len(resolved_tool_map) != allowed_tool_count
+        or any(
+            isinstance(slot, bool) or not isinstance(slot, int) or slot < 1 or slot > SLOT_COUNT
+            for slot in (resolved_tool_map or [])
+        )
+    ):
+        block("invalid_resolved_tool_map")
     if expected_preview_token is not None and expected_preview_token != token:
         block("stale_preview")
     if module_state != "ready":

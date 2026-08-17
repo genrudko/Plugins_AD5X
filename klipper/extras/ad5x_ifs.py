@@ -72,6 +72,8 @@ class AD5XIFS:
             "filename": "",
             "requirements": [],
             "assignments": [],
+            "allowed_tool_count": 0,
+            "resolved_tool_map": [],
             "auto_assign": {
                 "flags": 0,
                 "any_success": False,
@@ -233,6 +235,8 @@ class AD5XIFS:
                 "filename": filename,
                 "requirements": requirements,
                 "assignments": assignments,
+                "allowed_tool_count": tool_count,
+                "resolved_tool_map": [int(slot) for slot in tools],
                 "auto_assign": self._auto_assign_state(flags),
                 "messages": messages,
                 "error": "",

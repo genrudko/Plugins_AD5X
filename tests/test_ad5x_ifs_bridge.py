@@ -190,6 +190,8 @@ class AD5XIFSBridgeTests(unittest.TestCase):
             preview["assignments"],
             [{"tool": 0, "slot": 2}, {"tool": 1, "slot": 1}],
         )
+        self.assertEqual(preview["allowed_tool_count"], 2)
+        self.assertEqual(preview["resolved_tool_map"], [2, 1])
         self.assertTrue(preview["auto_assign"]["any_success"])
         self.assertTrue(preview["auto_assign"]["weak_color"])
         self.assertFalse(preview["auto_assign"]["material_failure"])
