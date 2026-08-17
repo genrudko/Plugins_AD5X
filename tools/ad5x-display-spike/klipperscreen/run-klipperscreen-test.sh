@@ -7,6 +7,7 @@ APP="$APPROOT/app"
 PYTHON=/bin/python3
 CONFIG="$APPROOT/KlipperScreen.conf"
 LOG=/tmp/KlipperScreen.log
+HELIX_INIT=/etc/init.d/S80helixscreen
 
 export PATH="$RUNTIME/bin${PATH:+:$PATH}"
 export LD_LIBRARY_PATH="$APPROOT/lib:$RUNTIME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -79,6 +80,19 @@ BACKLIGHT=/sys/class/backlight/backlight_gpio0
 BACKLIGHT_BRIGHTNESS=""
 BACKLIGHT_POWER=""
 XORG_PID=""
+HELIX_WAS_RUNNING=0
+
+helix_running() {
+    for proc in /proc/[0-9]*; do
+        [ -r "$proc/cmdline" ] || continue
+        cmd="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
+        cmd_lower="$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')"
+        case "$cmd_lower" in
+            *helix*screen*) return 0 ;;
+        esac
+    done
+    return 1
+}
 
 if [ -r "$BACKLIGHT/brightness" ] && [ -w "$BACKLIGHT/brightness" ] && \
    [ -r "$BACKLIGHT/max_brightness" ] && \
@@ -96,8 +110,39 @@ cleanup() {
         echo "$BACKLIGHT_BRIGHTNESS" > "$BACKLIGHT/brightness" 2>/dev/null || true
         echo "$BACKLIGHT_POWER" > "$BACKLIGHT/bl_power" 2>/dev/null || true
     fi
+    if [ "$HELIX_WAS_RUNNING" -eq 1 ]; then
+        if [ -x "$HELIX_INIT" ]; then
+            "$HELIX_INIT" start >/tmp/ad5x-klipperscreen-helix-start.log 2>&1 || \
+                echo "WARNING: failed to restore HelixScreen; see /tmp/ad5x-klipperscreen-helix-start.log" >&2
+        else
+            echo "WARNING: HelixScreen was running but $HELIX_INIT is unavailable during cleanup" >&2
+        fi
+    fi
 }
 trap cleanup EXIT INT TERM HUP
+
+# HelixScreen and KlipperScreen must never compete for the AD5X LCD/input stack.
+# Hardware acceptance proved that this launcher, not the operator, must own the
+# transition and restore the previous UI on exit.
+if helix_running; then
+    [ -x "$HELIX_INIT" ] || {
+        echo "ERROR: HelixScreen is running but $HELIX_INIT is unavailable" >&2
+        exit 1
+    }
+    HELIX_WAS_RUNNING=1
+    echo "HelixScreen is running; stopping it before starting AD5X Xorg/KlipperScreen"
+    "$HELIX_INIT" stop >/tmp/ad5x-klipperscreen-helix-stop.log 2>&1 || true
+    i=0
+    while helix_running && [ "$i" -lt 10 ]; do
+        i=$((i + 1))
+        sleep 1
+    done
+    if helix_running; then
+        echo "ERROR: HelixScreen did not stop; refusing competing display startup" >&2
+        exit 1
+    fi
+    echo "HELIX_STOPPED_FOR_KLIPPERSCREEN"
+fi
 
 if [ -n "$BACKLIGHT_BRIGHTNESS" ] && [ -n "$BACKLIGHT_POWER" ]; then
     echo "$(cat "$BACKLIGHT/max_brightness")" > "$BACKLIGHT/brightness"
@@ -148,7 +193,7 @@ echo "Xorg is ready. Starting upstream KlipperScreen with Z-Mod Python:"
 "$PYTHON" --version
 echo "Config: $CONFIG"
 echo "Log: $LOG"
-echo "Press Ctrl-C to stop; the launcher will restore the LCD backlight state."
+echo "Press Ctrl-C to stop; the launcher will restore the previous display state."
 echo
 
 cd "$APP"
