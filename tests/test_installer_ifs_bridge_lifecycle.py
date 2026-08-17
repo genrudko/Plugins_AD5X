@@ -141,6 +141,12 @@ class IFSBridgeInstallerLifecycleTests(unittest.TestCase):
         self.assertIn('snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py', text)
         self.assertIn('restore_snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py', text)
 
+    def test_installer_does_not_claim_firmware_restart_reloads_python_extra(self) -> None:
+        text = INSTALLER.read_text(encoding="utf-8")
+        self.assertNotIn("firmware restart / включении принтера", text)
+        self.assertIn("полного перезапуска процесса Klipper", text)
+        self.assertIn("полное выключение и включение принтера", text)
+
 
 if __name__ == "__main__":
     unittest.main()
