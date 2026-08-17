@@ -168,6 +168,20 @@ class AD5XIFSBridgeTests(unittest.TestCase):
             ],
         )
 
+    def test_incomplete_zmod_startup_state_fails_closed(self):
+        self.printer.handlers["klippy:ready"]()
+        data = self.printer.objects["zmod_ifs"].ifs_data
+
+        def incomplete_get_values():
+            raise AttributeError("'IfsData' object has no attribute 'lastResponseRaw'")
+
+        data.get_values = incomplete_get_values
+        status = self.bridge.get_status(1.5)
+        self.assertFalse(status["available"])
+        self.assertEqual(status["state"], "unavailable")
+        self.assertEqual(status["slots"], [])
+        self.assertEqual(status["active_slot"], 0)
+
     def test_job_preview_delegates_scan_and_matching_to_zmod_without_persisting(self):
         self.printer.handlers["klippy:ready"]()
         original_file_colors = list(self.printer.zmod_color.file_colors)
