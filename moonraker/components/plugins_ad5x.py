@@ -55,7 +55,7 @@ IFS_METADATA_STORE_MAX_BYTES = 64 * 1024
 
 SAFE_FILAMENT_OP_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
 SAFE_JOB_PREVIEW_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
-IFS_JOB_PREVIEW_COMMAND = "AD5X_IFS_JOB_PREVIEW"
+IFS_JOB_PREVIEW_COMMAND = "ADIFS_JOB_PREVIEW"
 IFS_ACTION_COMMANDS = {
     "select_slot": "SET_EXTRUDER_SLOT SLOT={slot}",
     "load_slot": "INSERT_PRUTOK_IFS PRUTOK={slot}",
