@@ -9,7 +9,9 @@ on:
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'
+      - 'tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py'
       - 'tools/ad5x-display-spike/klipperscreen/build-stage4.sh'
       - 'tools/ad5x-display-spike/klipperscreen/requirements-startup.txt'
   workflow_dispatch:
@@ -65,6 +67,7 @@ jobs:
           test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs.py
           test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_manage.py
           test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_metadata.py
+          test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_preprint.py
 
       - name: Download accepted Stage 3 rootfs
         env:
@@ -157,4 +160,23 @@ jobs:
           grep -q '^QEMU_AD5X_IFS_ACTION_GATES_OK$' out/klipperscreen/qemu-ifs-ui-smoke.txt
           grep -q '^QEMU_AD5X_IFS_MANAGE_PANEL_OK 17$' out/klipperscreen/qemu-ifs-ui-smoke.txt
           grep -q '^QEMU_AD5X_IFS_METADATA_PANEL_OK 3$' out/klipperscreen/qemu-ifs-ui-smoke.txt
+
+          env \
+            DISPLAY=:99 \
+            GDK_BACKEND=x11 \
+            HOME="$PWD/out/qemu-home" \
+            XDG_RUNTIME_DIR="$PWD/out/qemu-runtime" \
+            QEMU_LD_PREFIX="$TARGET" \
+            PYTHONHOME="$TARGET/usr" \
+            PYTHONPATH="$DYNL:$SITE:$TARGET/usr/lib/python3.12/site-packages:$APP" \
+            LD_LIBRARY_PATH="$APPROOT/lib:$TARGET/usr/lib:$TARGET/lib" \
+            GI_TYPELIB_PATH="$TARGET/usr/lib/girepository-1.0" \
+            XDG_DATA_DIRS="$TARGET/usr/share" \
+            FONTCONFIG_PATH="$TARGET/etc/fonts" \
+            qemu-mipsel "$TARGET/usr/bin/python3" \
+              "$PWD/tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py" \
+              | tee out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+
+          grep -q '^QEMU_AD5X_IFS_PREPRINT_PANEL_OK 1$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+          grep -q '^QEMU_AD5X_IFS_PREPRINT_START_GATED_OK$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
           echo 'AD5X_IFS_MIPS_GTK_UI_OK'
