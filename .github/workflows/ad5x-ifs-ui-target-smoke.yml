@@ -10,6 +10,7 @@ on:
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_manage_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_metadata_panel.py'
       - 'tools/ad5x-display-spike/klipperscreen/ad5x_ifs_preprint_panel.py'
+      - 'tools/ad5x-display-spike/klipperscreen/apply-ad5x-ifs-gcodes-patch.py'
       - 'tools/ad5x-display-spike/klipperscreen/ifs-panel-target-smoke.py'
       - 'tools/ad5x-display-spike/klipperscreen/ifs-preprint-target-smoke.py'
       - 'tools/ad5x-display-spike/klipperscreen/build-stage4.sh'
@@ -68,6 +69,24 @@ jobs:
           test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_manage.py
           test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_metadata.py
           test -s out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app/panels/ad5x_ifs_preprint.py
+
+      - name: Add safe IFS pre-print route to pinned upstream chooser
+        run: |
+          set -euo pipefail
+          APP=out/klipperscreen/bundle-root/opt/ad5x-klipperscreen/app
+          python3 tools/ad5x-display-spike/klipperscreen/apply-ad5x-ifs-gcodes-patch.py "$APP" \
+            | tee out/klipperscreen/ifs-gcodes-patch.txt
+          grep -Fq '"IFS план"' "$APP/panels/gcodes.py"
+          grep -Fq '"ad5x_ifs_preprint"' "$APP/panels/gcodes.py"
+          python3 -m compileall -q "$APP"
+          find "$APP" -type d -name '__pycache__' -prune -exec rm -rf {} +
+
+          tar --sort=name --mtime='UTC 2020-01-01' \
+            --owner=0 --group=0 --numeric-owner \
+            -C out/klipperscreen/bundle-root \
+            -czf out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz opt
+          sha256sum out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz \
+            | tee out/klipperscreen/SHA256SUMS
 
       - name: Download accepted Stage 3 rootfs
         env:
@@ -180,3 +199,40 @@ jobs:
           grep -q '^QEMU_AD5X_IFS_PREPRINT_PANEL_OK 1$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
           grep -q '^QEMU_AD5X_IFS_PREPRINT_START_GATED_OK$' out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
           echo 'AD5X_IFS_MIPS_GTK_UI_OK'
+
+      - name: Write exact-head hardware manifest
+        env:
+          EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo "purpose=ifs-readonly-preprint-hardware-acceptance-01"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "head=${EXACT_HEAD}"
+            echo "klipperscreen_ref=${KLIPPERSCREEN_REF}"
+            echo "job_preview=enabled"
+            echo "resolved_tool_map=enabled"
+            echo "ifs_preprint_route=enabled"
+            echo "generic_print_path=preserved"
+            echo "ifs_launch_write=disabled"
+            echo "zmod_projection_write=disabled"
+            echo "spoolman=disabled"
+          } > out/klipperscreen/HARDWARE_BUILD.txt
+          cat out/klipperscreen/HARDWARE_BUILD.txt
+          sha256sum out/klipperscreen/HARDWARE_BUILD.txt \
+            >> out/klipperscreen/SHA256SUMS
+
+      - name: Upload hardware acceptance bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ad5x-ifs-hardware-${{ github.event.pull_request.head.sha || github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            out/klipperscreen/ad5x-klipperscreen-stage4.tar.gz
+            out/klipperscreen/SHA256SUMS
+            out/klipperscreen/HARDWARE_BUILD.txt
+            out/klipperscreen/ifs-gcodes-patch.txt
+            out/klipperscreen/qemu-ifs-ui-smoke.txt
+            out/klipperscreen/qemu-ifs-preprint-ui-smoke.txt
+            out/klipperscreen/BUILDINFO.txt
