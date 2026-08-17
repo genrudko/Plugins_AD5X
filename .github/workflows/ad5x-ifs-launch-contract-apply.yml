@@ -21,8 +21,7 @@ jobs:
       - name: Apply and test launch gate model
         run: |
           set -euo pipefail
-          PAYLOAD='eNqtVktu20AQ3f0VQ+5QNlLkQYpFQEdB06JIYha9Gys0Q1JBSkqREuR/XyEk5UVRxAWL7Y7mnDmzxxO9O9yKxvK6boMgmbkeJt5sTwLiaZJnJs4t5/NdEryta2vb5UFVtWpJ6fPWEpuKsORrg52cNzxENfM4sRlrxjxmcw5p2c5A9pD+ZjQqFiZth9SB9MYS2Ta4wDQ0tpZd6obVAXDNvdLm5Bbsj0pY4BwoQRXLvrOoaGIXkNsS5WmOAy7mBHxSIZQpCGBwoMBxu3G8iL0cO5Pqg/fE+hTE42xeCY8gXKrxZ0kF7qFWokK1tBF7/BcUjm1Rj2VxuqLXnY+7zj+0BjhgGwLrB3W+6zJkXaHwe6SXM99EEipEvu15RU1+yKziJYIdyHNIF1R2I9zc9iQ7nPOIuWNYNURt6ZkKzlxwJxue2E7PxgLozZwFPwfJF3Mugvcy0yaT99xjJc9G/bpbRulUIcg8S7cskiMBEaWFQ3wZ6EA+Cm43yluAjjhnb06bmKLpbfK/Ho7q2RCod4V4l2yLbd6L6dC1h/gp7L1dUbfmZ/s05rfmZvsf66YXD09cf77+kPUHiE7suISxQk56q87OeZ3gyH/7vZBa23H/rPTLqaOa4ZbTNeYQtjT47XH5/+jL0FySaMJq0gGZG6+ImLjNwoJeu2Ni1m6UtJGvMzvKN9Vx52w+ShNCfXKUl6ZwfeOIvVqS/JgcuwtdrjJpw8c9m4C3FecHbJIy2J/Wss9sxBzSIuxvQz9YMVEJuBaNO5ZNJKCrMDhZJi+qh+aoVA92juDI4Gbhj+jcqI4CJyteA584Im53o/A5dPlCvPmCpsb1YfM4F4g/MHBvV7ChRTIIQI3aGHOh6xrepgPUavb6iU3mj0XUkvQcWaWdnwjxxr+vY2abJ7gRjfrttE0cd2kOP83vfz7/Wi+fTr+Wq2Wz6HgQXoOfte17x6rb12uodMfAuMxvSsYb9GH2jJ+CAtvQgDNmDvDSf6BYeZP+f/eP++s+Xj09af3f+BYN5qUE=' 
-          printf '%s' "$PAYLOAD" | base64 -d | python3 -c 'import sys,zlib; exec(zlib.decompress(sys.stdin.buffer.read()).decode())'
+          python3 tools/ad5x-display-spike/klipperscreen/tmp_launch_contract_patch.py
           python3 -m py_compile moonraker/components/plugins_ad5x_ifs_model.py
           git diff --check
           python3 -m unittest -v \
