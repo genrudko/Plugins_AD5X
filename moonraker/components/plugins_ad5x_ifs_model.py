@@ -392,6 +392,9 @@ def normalize_module(
             )
         )
     module["slots"] = normalized_slots
+    module["preprint_plan"] = build_preprint_plan(
+        module.get("job_preview"), normalized_slots
+    )
 
     mapping = metadata.get("tool_mapping")
     if isinstance(mapping, list):
@@ -424,6 +427,168 @@ def normalize_module(
     }
     return module
 
+
+
+def build_preprint_plan(
+    job_preview: Optional[Dict[str, Any]],
+    slots: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    # Join Z-Mod job requirements/assignments with normalized physical slots.
+    # Z-Mod exposes aggregate quality flags, so per-tool match quality is never invented.
+    preview = job_preview if isinstance(job_preview, dict) else {}
+    source = preview.get("source") if isinstance(preview.get("source"), str) else "zmod"
+    filename = preview.get("filename") if isinstance(preview.get("filename"), str) else ""
+    error = preview.get("error") if isinstance(preview.get("error"), str) else ""
+    auto_assign = preview.get("auto_assign")
+    auto_assign = dict(auto_assign) if isinstance(auto_assign, dict) else {}
+    messages = [str(item) for item in (preview.get("messages") or [])][-32:]
+    if not preview.get("available", False):
+        return {
+            "available": False,
+            "source": source or "zmod",
+            "filename": filename,
+            "status": "unavailable",
+            "rows": [],
+            "warnings": [],
+            "summary": {"required_tools": 0, "assigned_tools": 0, "ready_tools": 0},
+            "auto_assign": auto_assign,
+            "messages": messages,
+            "error": error or "not_scanned",
+        }
+
+    normalized_slots = [item for item in (slots or []) if isinstance(item, dict)]
+    slot_map = {
+        item.get("slot"): item
+        for item in normalized_slots
+        if isinstance(item.get("slot"), int) and not isinstance(item.get("slot"), bool)
+    }
+
+    assignments = {}
+    for item in preview.get("assignments") or []:
+        if not isinstance(item, dict):
+            continue
+        tool = item.get("tool")
+        slot = item.get("slot")
+        if (
+            isinstance(tool, int)
+            and not isinstance(tool, bool)
+            and tool >= 0
+            and isinstance(slot, int)
+            and not isinstance(slot, bool)
+            and slot > 0
+        ):
+            assignments[tool] = slot
+
+    requirements = []
+    for item in preview.get("requirements") or []:
+        if not isinstance(item, dict):
+            continue
+        tool = item.get("tool")
+        if isinstance(tool, bool) or not isinstance(tool, int) or tool < 0:
+            continue
+        color = _normalize_hex_color(item.get("color")) or ""
+        material = item.get("material")
+        material = material.strip().upper() if isinstance(material, str) else ""
+        requirements.append({"tool": tool, "color": color, "material": material})
+    requirements.sort(key=lambda item: item["tool"])
+
+    warnings: List[str] = []
+    def warn(code: str) -> None:
+        if code not in warnings:
+            warnings.append(code)
+
+    if auto_assign.get("material_failure"):
+        warn("material_failure")
+    if auto_assign.get("color_failure"):
+        warn("color_failure")
+    if auto_assign.get("weak_color"):
+        warn("weak_color")
+    if auto_assign.get("duplicate_slot"):
+        warn("duplicate_slot")
+
+    rows = []
+    assigned_count = 0
+    ready_count = 0
+    for requirement in requirements:
+        tool = requirement["tool"]
+        slot_number = assignments.get(tool)
+        assignment = None
+        state = "unassigned"
+        if slot_number is None:
+            warn("unassigned_tool")
+        else:
+            assigned_count += 1
+            slot_data = slot_map.get(slot_number)
+            if slot_data is None:
+                state = "slot_missing"
+                warn("assigned_slot_missing")
+                assignment = {
+                    "slot": slot_number,
+                    "present": False,
+                    "metadata_status": "none",
+                    "spool": {},
+                    "appearance": {},
+                }
+            else:
+                present = bool(slot_data.get("present", False))
+                state = "ready" if present else "slot_empty"
+                if present:
+                    ready_count += 1
+                else:
+                    warn("assigned_slot_empty")
+                spool = slot_data.get("spool")
+                appearance = slot_data.get("appearance")
+                assignment = {
+                    "slot": slot_number,
+                    "present": present,
+                    "metadata_status": slot_data.get("metadata_status") or "none",
+                    "spool": dict(spool) if isinstance(spool, dict) else {},
+                    "appearance": dict(appearance) if isinstance(appearance, dict) else {},
+                }
+        rows.append({
+            "tool": tool,
+            "requirement": {
+                "material": requirement["material"],
+                "color": requirement["color"],
+            },
+            "assignment": assignment,
+            "state": state,
+        })
+
+    if not requirements:
+        warn("no_requirements")
+
+    blocking_warnings = {
+        "material_failure",
+        "color_failure",
+        "unassigned_tool",
+        "assigned_slot_missing",
+        "assigned_slot_empty",
+        "no_requirements",
+    }
+    if any(code in blocking_warnings for code in warnings):
+        status = "blocked"
+    elif warnings:
+        status = "warning"
+    else:
+        status = "ready"
+
+    return {
+        "available": True,
+        "source": source or "zmod",
+        "filename": filename,
+        "status": status,
+        "rows": rows,
+        "warnings": warnings,
+        "summary": {
+            "required_tools": len(requirements),
+            "assigned_tools": assigned_count,
+            "ready_tools": ready_count,
+        },
+        "auto_assign": auto_assign,
+        "messages": messages,
+        "error": error,
+    }
 
 def build_zmod_compat_projection(
     slot: int,
