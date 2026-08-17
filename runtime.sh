@@ -239,19 +239,23 @@ camera_recover()
 
         load_zmod_camera_tools
         PRIMARY_DEVICE="$(configured_primary_camera_device 2>/dev/null || true)"
-        SECONDARY="$(find_named_capture_device "$SECONDARY_CAMERA_NAME" "$PRIMARY_DEVICE" 2>/dev/null || true)"
 
-        if [ -z "$SECONDARY" ]; then
-            if [ -n "$PRIMARY_DEVICE" ] && [ -r "/sys/class/video4linux/$PRIMARY_DEVICE/name" ]; then
-                PRIMARY_NAME="$(cat "/sys/class/video4linux/$PRIMARY_DEVICE/name" 2>/dev/null || true)"
-                case "$PRIMARY_NAME" in
-                    *"$SECONDARY_CAMERA_NAME"*)
-                        log "Single-camera mode detected: $SECONDARY_CAMERA_NAME is already stock Camera 1 on /dev/$PRIMARY_DEVICE; Camera 2 recovery disabled"
-                        return 0
-                        ;;
-                esac
-            fi
+        # A single UVC camera may expose multiple /dev/videoN nodes.  If the
+        # configured stock primary has the identity that used to belong to
+        # Camera 2, treat the machine as single-camera before scanning sibling
+        # nodes.  Excluding only /dev/video0 would still allow the same physical
+        # camera to be rediscovered through /dev/video1.
+        if [ -n "$PRIMARY_DEVICE" ] && [ -r "/sys/class/video4linux/$PRIMARY_DEVICE/name" ]; then
+            PRIMARY_NAME="$(cat "/sys/class/video4linux/$PRIMARY_DEVICE/name" 2>/dev/null || true)"
+            case "$PRIMARY_NAME" in
+                *"$SECONDARY_CAMERA_NAME"*)
+                    log "Single-camera mode detected: $SECONDARY_CAMERA_NAME is already stock Camera 1 on /dev/$PRIMARY_DEVICE; Camera 2 recovery disabled"
+                    return 0
+                    ;;
+            esac
         fi
+
+        SECONDARY="$(find_named_capture_device "$SECONDARY_CAMERA_NAME" "$PRIMARY_DEVICE" 2>/dev/null || true)"
 
         if [ -n "$SECONDARY" ]; then
             log "Camera 2 device ready after stock Camera 1: /dev/$SECONDARY"
