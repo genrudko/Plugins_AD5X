@@ -3,7 +3,7 @@
 **Date:** 2026-08-17  
 **Issue:** #13 — `CALIBRATION-SUBSYSTEM-002`  
 **Evidence class:** reboot/power-cycle recovery anomaly  
-**Status:** OPEN / DIAGNOSTIC EVIDENCE ONLY  
+**Status:** RECOVERED ON SUBSEQUENT COLD BOOT / ROOT CAUSE OPEN / DIAGNOSTIC EVIDENCE ONLY  
 **Authority:** does not authorize production Plugins AD5X motion or writes
 
 ## Trigger
@@ -12,9 +12,9 @@ A full printer power-cycle was performed after the prior clean Gate C evidence r
 
 The printer remained on the same reserved LAN address `192.168.1.196`.
 
-A Telegram startup notification was observed after reboot, showing that at least part of the post-boot software/network path executed. No conclusion is drawn about which exact component emitted it.
+A Telegram startup notification was observed after the anomalous reboot, showing that at least part of the post-boot software/network path executed. No conclusion is drawn about which exact component emitted it.
 
-## External observations from the Windows client
+## External observations during the anomalous boot
 
 ### Network reachability
 
@@ -126,30 +126,114 @@ MAC:       hmac-sha2-256
 
 and again stalled while waiting for `SSH2_MSG_KEX_ECDH_REPLY`.
 
-Therefore the failure is not specific to the ECDSA host-key path. Both ECDSA and RSA host-key selections fail before the server returns the key-exchange reply. The `curve25519-sha256` KEX path remains common to all observed SSH failures and has not yet been independently excluded.
+A fourth diagnostic attempt forced an alternate KEX algorithm already advertised by Dropbear:
 
-All observed SSH failures occurred before user authentication. Therefore the evidence does not support a password/key/authorized-keys root cause.
+```text
+KexAlgorithms=diffie-hellman-group14-sha256
+```
+
+The peers negotiated:
+
+```text
+KEX:       diffie-hellman-group14-sha256
+host key:  ecdsa-sha2-nistp256
+cipher:    aes128-ctr
+MAC:       hmac-sha2-256
+```
+
+The client again stalled waiting for the server key-exchange reply.
+
+Therefore the failure is not specific to the ECDSA host-key path, RSA host-key path, or the `curve25519-sha256` KEX path. All observed SSH failures occurred before user authentication, so the evidence does not support a password/key/authorized-keys root cause.
+
+### Stock FlashForge network ports during the anomalous state
+
+External TCP probes showed:
+
+```text
+8898/tcp  closed
+8899/tcp  closed
+```
+
+Therefore the stock FlashForge network-control path was not available as an alternate recovery channel in the observed anomalous state.
+
+## Subsequent cold-boot recovery observation
+
+The printer was then powered off again and left unpowered for a longer interval before the next power-on. The owner explicitly observed that this off interval was longer than during the preceding failed recovery attempt.
+
+A Windows boot watcher was started before power-on. It monitored ICMP, TCP ports `22`, `80`, `443`, `7125`, `8080`, `8898`, `8899`, HTTP service responses and SSH key exchange without issuing printer-control commands.
+
+Watcher start / owner power-on prompt:
+
+```text
+10:45:56.743  NOW POWER ON THE PRINTER
+```
+
+Observed boot timeline:
+
+```text
+10:45:57.085  PING DOWN
+10:45:57.354  TCP 22 CLOSED
+10:45:57.609  TCP 80 CLOSED
+10:45:57.860  TCP 443 CLOSED
+10:45:58.113  TCP 7125 CLOSED
+10:45:58.366  TCP 8080 CLOSED
+10:45:58.618  TCP 8898 CLOSED
+10:45:58.871  TCP 8899 CLOSED
+
+10:48:16.094  TCP 8899 OPEN
+10:48:16.450  PING UP rtt=1ms
+10:48:16.455  TCP 22 OPEN
+10:48:16.458  TCP 80 OPEN
+10:48:16.711  TCP 7125 OPEN
+10:48:18.365  HTTP 80 -> HTTP/1.1 200 OK
+10:48:18.385  MOONRAKER 7125 -> HTTP/1.1 200 OK
+10:48:19.491  SSH 22 -> KEX_OK
+
+10:49:00.069  TCP 8080 OPEN
+10:49:03.036  CAMERA 8080 -> HTTP/1.0 200 OK
+
+10:49:48.683  TCP 8899 CLOSED
+```
+
+Relative to the watcher power-on prompt, the first observed stock `8899` listener appeared after approximately `139.35 s`; ICMP, SSH, Z-Mod HTTP and Moonraker followed within about `0.62 s`. Healthy Z-Mod HTTP and Moonraker HTTP responses were observed at approximately `141.62-141.64 s`, and a complete SSH key exchange succeeded at approximately `142.75 s`.
+
+The camera HTTP service appeared materially later, at approximately `183.33 s`, with a successful HTTP response at approximately `186.29 s`.
+
+Port `8898` did not open during the watcher interval. Port `8899` opened early in the responsive phase and later closed at `10:49:48.683`; this transient behavior is retained as raw boot evidence and is not interpreted as a fault by itself.
+
+The watcher logged repeated `PING UP` lines when RTT changed because the probe state string included the RTT value. Those lines are not repeated state transitions and have no diagnostic meaning beyond continued ICMP reachability.
 
 ## Current interpretation
 
-The evidence supports a **partial post-power-cycle recovery failure**:
+The evidence establishes two distinct outcomes across consecutive power cycles:
 
-- IP/network reachability is present;
-- the MJPG camera HTTP server responds normally;
-- the Z-Mod static Fluidd HTTP server responds normally;
-- Moonraker accepts TCP on `7125` but does not provide a healthy HTTP response;
-- Dropbear accepts TCP, sends its banner, and begins SSH key exchange, but stalls before the server key-exchange reply;
-- switching the SSH host-key algorithm from ECDSA to RSA does not change the failure;
-- normal Fluidd operation is therefore unavailable because the static frontend cannot obtain a working Moonraker backend.
+1. one boot reached only a **partial recovery state**, where static/lightweight HTTP services were responsive but Moonraker and SSH could not complete normal request/handshake processing;
+2. a subsequent cold boot after a longer unpowered interval reached a **healthy network/runtime state**, including Moonraker HTTP `200 OK` and successful SSH key exchange.
 
-This evidence does **not yet establish the root cause**. Candidate mechanisms such as CPU starvation, storage/I/O stall, entropy/randomness starvation, blocked startup logic, service deadlock, a specific key-exchange path failure, or a Z-Mod/chroot recovery defect remain hypotheses only until directly distinguished.
+The longer unpowered interval is therefore a real correlating condition, but it is **not yet a proven cause**. It would be premature to claim capacitor discharge, IFS state, IFS back-powering, peripheral MCU state, storage/I/O recovery, entropy availability, or any other mechanism without direct evidence.
+
+The successful boot timeline also shows that this AD5X can take roughly `2 min 20 s` before its main network/runtime services first become reachable after a cold start. That timing does not explain the preceding anomaly by itself, because the anomalous state persisted through repeated later probes rather than merely being checked too early.
+
+IFS-related software/hardware remains one candidate because the current machine composition includes Z-Mod IFS handling and Plugins AD5X IFS work, but this event does **not** establish IFS causality. No component is assigned root cause at this stage.
 
 ## Gate C disposition
 
-The intended reboot/time-separated repeatability measurement is **not started and not valid as a calibration run** while runtime recovery is abnormal.
+The failed recovery event itself is **not a calibration run** and does not count as Gate C repeatability evidence.
 
-No Z homing/probing, mesh mutation, Z-offset mutation, or Plugins AD5X production motion/write action should be performed until the runtime anomaly is understood or the printer returns to a clearly healthy baseline.
+The subsequent cold boot restored a usable baseline, but the intended reboot/time-separated calibration measurement has still not started. Before any Z homing/probing or calibration motion, capture the recovered live runtime state and relevant logs/process/resource evidence, then perform a fresh clean preflight.
+
+No production Plugins AD5X motion or write gate is opened by this evidence.
 
 ## Next diagnostic objective
 
-Prefer non-mutating external tests first. In particular, distinguish whether the SSH failure follows the currently common `curve25519-sha256` key-exchange path by forcing an alternate KEX algorithm already advertised by Dropbear. If a read-only SSH path can be recovered, capture process state, load, memory, storage/I/O indicators, service process state, logs, and entropy availability before restarting services or power-cycling again.
+While SSH and Moonraker are healthy, capture the current successful-boot process/resource state and persistent logs before another restart or calibration action. The highest-value observations are:
+
+- uptime/load/memory;
+- filesystem usage and basic kernel messages;
+- entropy availability;
+- process list, especially Moonraker/Klipper/Z-Mod/IFS-related processes;
+- listening sockets where available;
+- recent Moonraker and Klipper logs;
+- current Moonraker/Klipper readiness.
+
+Only after preserving that evidence should the time-separated Gate C measurement resume.
