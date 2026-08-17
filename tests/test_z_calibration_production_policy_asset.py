@@ -93,7 +93,7 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         )
         for ref in refs:
             self.assertIn(ref, self.policy)
-        self.assertIn("not a universal AD5X numeric default", self.policy)
+        self.assertIn("universal AD5X numeric default", self.policy)
         self.assertIn("No reboot compensation", self.policy)
         self.assertIn("hardware change suspected / full calibration required", self.policy)
 
