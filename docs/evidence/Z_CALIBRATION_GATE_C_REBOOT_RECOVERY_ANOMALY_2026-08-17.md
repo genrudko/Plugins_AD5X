@@ -92,7 +92,7 @@ Windows OpenSSH connected to port `22` and received:
 Remote protocol version 2.0, remote software version dropbear_2019.78
 ```
 
-The peers exchanged `SSH2_MSG_KEXINIT` and negotiated:
+The peers exchanged `SSH2_MSG_KEXINIT` and negotiated on the normal attempt:
 
 ```text
 KEX:       curve25519-sha256
@@ -109,7 +109,26 @@ SSH2_MSG_KEX_ECDH_REPLY
 
 and timed out. A second independent SSH attempt reproduced the same stall at the same protocol phase.
 
-This occurred before user authentication. Therefore the observation does not support a password/key/authorized-keys root cause.
+A third diagnostic attempt forced the alternate server host-key algorithm:
+
+```text
+HostKeyAlgorithms=ssh-rsa
+```
+
+The peers then negotiated:
+
+```text
+KEX:       curve25519-sha256
+host key:  ssh-rsa
+cipher:    aes128-ctr
+MAC:       hmac-sha2-256
+```
+
+and again stalled while waiting for `SSH2_MSG_KEX_ECDH_REPLY`.
+
+Therefore the failure is not specific to the ECDSA host-key path. Both ECDSA and RSA host-key selections fail before the server returns the key-exchange reply. The `curve25519-sha256` KEX path remains common to all observed SSH failures and has not yet been independently excluded.
+
+All observed SSH failures occurred before user authentication. Therefore the evidence does not support a password/key/authorized-keys root cause.
 
 ## Current interpretation
 
@@ -119,10 +138,11 @@ The evidence supports a **partial post-power-cycle recovery failure**:
 - the MJPG camera HTTP server responds normally;
 - the Z-Mod static Fluidd HTTP server responds normally;
 - Moonraker accepts TCP on `7125` but does not provide a healthy HTTP response;
-- Dropbear accepts TCP, sends its banner, and begins SSH key exchange, but stalls before `SSH2_MSG_KEX_ECDH_REPLY`;
+- Dropbear accepts TCP, sends its banner, and begins SSH key exchange, but stalls before the server key-exchange reply;
+- switching the SSH host-key algorithm from ECDSA to RSA does not change the failure;
 - normal Fluidd operation is therefore unavailable because the static frontend cannot obtain a working Moonraker backend.
 
-This evidence does **not yet establish the root cause**. Candidate mechanisms such as CPU starvation, storage/I/O stall, entropy/randomness starvation, blocked startup logic, service deadlock, or a Z-Mod/chroot recovery defect remain hypotheses only until directly distinguished.
+This evidence does **not yet establish the root cause**. Candidate mechanisms such as CPU starvation, storage/I/O stall, entropy/randomness starvation, blocked startup logic, service deadlock, a specific key-exchange path failure, or a Z-Mod/chroot recovery defect remain hypotheses only until directly distinguished.
 
 ## Gate C disposition
 
@@ -132,4 +152,4 @@ No Z homing/probing, mesh mutation, Z-offset mutation, or Plugins AD5X productio
 
 ## Next diagnostic objective
 
-Prefer non-mutating external tests first. If a read-only SSH path can be recovered, capture process state, load, memory, storage/I/O indicators, service process state, logs, and entropy availability before restarting services or power-cycling again.
+Prefer non-mutating external tests first. In particular, distinguish whether the SSH failure follows the currently common `curve25519-sha256` key-exchange path by forcing an alternate KEX algorithm already advertised by Dropbear. If a read-only SSH path can be recovered, capture process state, load, memory, storage/I/O indicators, service process state, logs, and entropy availability before restarting services or power-cycling again.
