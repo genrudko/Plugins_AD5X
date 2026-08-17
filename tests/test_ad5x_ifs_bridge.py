@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "klipper" / "extras" / "ad5x_ifs.py"
+KLIPPER_ARGS_RE = re.compile(r"([A-Z_]+|[A-Z*])")
 
 
 def load_module():
@@ -143,6 +145,17 @@ class AD5XIFSBridgeTests(unittest.TestCase):
         )
         self.assertIn(bridge_module.JOB_PREVIEW_COMMAND, self.printer.gcode.commands)
 
+    def test_preview_command_survives_klipper_extended_command_parser(self):
+        # Klipper gcode.py uses args_r = re.compile('([A-Z_]+|[A-Z*])').
+        # A digit inside an extended token is therefore a hardware-visible bug:
+        # AD5X_IFS_JOB_PREVIEW was parsed as AD5 on the real AD5X/Z-Mod runtime.
+        command = bridge_module.JOB_PREVIEW_COMMAND
+        line = f'{command} FILENAME="demo.gcode"'
+        parts = KLIPPER_ARGS_RE.split(line.upper())
+        parsed = "".join(parts[:3]).strip()
+        self.assertEqual(parsed, command)
+        self.assertRegex(command, r"^[A-Z_]+$")
+
     def test_unavailable_before_ready(self):
         status = self.bridge.get_status(0.0)
         self.assertFalse(status["available"])
@@ -210,7 +223,7 @@ class AD5XIFSBridgeTests(unittest.TestCase):
         self.assertTrue(preview["auto_assign"]["weak_color"])
         self.assertFalse(preview["auto_assign"]["material_failure"])
         self.assertIn("canonical Z-Mod assignment", preview["messages"][-1])
-        self.assertEqual(gcmd.responses, ["AD5X_IFS_JOB_PREVIEW_OK"])
+        self.assertEqual(gcmd.responses, ["ADIFS_JOB_PREVIEW_OK"])
 
         # Preview temporarily supplies file_colors to the canonical matcher and
         # restores the source object's previous state afterwards.
