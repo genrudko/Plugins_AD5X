@@ -18,6 +18,7 @@ MOONRAKER_COMPONENTS_DIR="${AD5X_MOONRAKER_COMPONENTS_DIR:-/opt/config/base/moon
 MOONRAKER_INCLUDES="${AD5X_MOONRAKER_INCLUDES:-/opt/config/mod_data/plugins.moonraker.conf}"
 MOONRAKER_HTTP_BASE="${AD5X_MOONRAKER_HTTP_BASE:-http://127.0.0.1:7125}"
 MOONRAKER_READY_TIMEOUT="${AD5X_MOONRAKER_READY_TIMEOUT:-90}"
+MOONRAKER_STOP_TIMEOUT="${AD5X_MOONRAKER_STOP_TIMEOUT:-30}"
 MODE="${1:-}"
 
 OBSERVER_SOURCE="$SOURCE_DIR/moonraker/components/plugins_ad5x_zcal.py"
@@ -148,6 +149,23 @@ except Exception:
 mods=d.get("modules") or {}
 print("http=200;backend_version=%s;ifs=%s" % (d.get("backend_version"), int("ifs" in mods)))
 PY
+}
+moonraker_process_count(){
+    COUNT=0
+    for P in /proc/[0-9]*; do
+        [ -r "$P/cmdline" ] || continue
+        CMD="$(tr '\0' ' ' <"$P/cmdline" 2>/dev/null || true)"
+        case "$CMD" in *moonraker.py*) COUNT=$((COUNT + 1)) ;; esac
+    done
+    printf '%s\n' "$COUNT"
+}
+wait_moonraker_stopped(){
+    LIMIT="${1:-$MOONRAKER_STOP_TIMEOUT}"; COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        [ "$(moonraker_process_count)" -eq 0 ] && return 0
+        COUNT=$((COUNT + 1)); sleep 1
+    done
+    return 1
 }
 wait_moonraker_ready(){
     LIMIT="$MOONRAKER_READY_TIMEOUT"; COUNT=0
@@ -324,6 +342,7 @@ rollback(){
         set +e
         echo 'ОШИБКА: standalone ZCal backend transition failed; restoring snapshot.' >&2
         stop_moonraker >/dev/null 2>&1 || true
+        wait_moonraker_stopped >/dev/null 2>&1 || true
         restore_file "$OBSERVER_DEST" observer.py "$B" >/dev/null 2>&1 || true
         restore_file "$CORE_DEST" core.py "$B" >/dev/null 2>&1 || true
         restore_file "$CONFIG_DEST" config.conf "$B" >/dev/null 2>&1 || true
@@ -351,6 +370,7 @@ case "$MODE" in
         fi
 
         stop_moonraker || fail 'Moonraker stop failed'
+        wait_moonraker_stopped || fail 'Moonraker stop timeout'
         copy_atomic "$OBSERVER_SOURCE" "$OBSERVER_DEST" 0644 || fail 'observer deploy failed'
         copy_atomic "$CORE_SOURCE" "$CORE_DEST" 0644 || fail 'core deploy failed'
         copy_atomic "$CONFIG_SOURCE" "$CONFIG_DEST" 0644 || fail 'config deploy failed'
@@ -379,6 +399,7 @@ case "$MODE" in
         case "$ORIGINAL_INCLUDE_COUNT" in 0|1) ;; *) fail 'invalid original include provenance' ;; esac
 
         stop_moonraker || fail 'Moonraker stop failed'
+        wait_moonraker_stopped || fail 'Moonraker stop timeout'
         restore_file "$OBSERVER_DEST" observer.py "$ORIGINAL" || fail 'observer restore failed'
         restore_file "$CORE_DEST" core.py "$ORIGINAL" || fail 'core restore failed'
         restore_file "$CONFIG_DEST" config.conf "$ORIGINAL" || fail 'config restore failed'
