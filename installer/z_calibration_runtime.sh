@@ -3,7 +3,8 @@
 #
 # install.sh owns the observed Moonraker stop/start lifecycle. This helper
 # extends that transaction with the proven pure-Klipper saved+check policy,
-# winning _USER_START_PRINT owner patch, and owned saved-variable state.
+# winning _USER_START_PRINT owner patch, owned saved-variable state, and a
+# bounded Klipper reload/verification boundary for every lifecycle transition.
 
 ZCAL_RC_PREFLIGHT_READY=0
 ZCAL_RC_PREFLIGHT_JSON=""
@@ -181,23 +182,141 @@ zcal_rc_uninstall(){
     zcal_core_init_paths
     zcal_rc_functions_only && return 0
     PY="$(python_bin)" || return 1
+
+    # A manually deployed accepted RC may predate the canonical ownership
+    # manifest. Adopt it only through the already-proven preflight/legacy
+    # backup path, then immediately restore the recorded baseline.
+    if [ ! -f "$ZCAL_RC_STATE_DIR/manifest.json" ]; then
+        PLAN="$(zcal_rc_plan_file)"
+        [ -f "$PLAN" ] || return 1
+        "$PY" -B "$ZCAL_RC_PRODUCTIZER" apply \
+            --plan "$PLAN" \
+            --policy-source "$ZCAL_RC_POLICY_SOURCE" >/dev/null || return 1
+    fi
+
     "$PY" -B "$ZCAL_RC_PRODUCTIZER" uninstall \
         --state-dir "$ZCAL_RC_STATE_DIR" \
-        --variables-file "$ZCAL_RC_VARIABLES_FILE"
+        --variables-file "$ZCAL_RC_VARIABLES_FILE" \
+        --keep-state
+}
+
+zcal_rc_query_live_policy(){
+    wget -q -T 5 -O - \
+        "$MOONRAKER_HTTP_BASE/printer/objects/query?configfile&save_variables&gcode_macro%20_AD5X_Z_SAVED_CHECK_POLICY" \
+        2>/dev/null
 }
 
 zcal_rc_live_verify(){
     zcal_core_init_paths
     zcal_rc_functions_only && return 0
-    LIVE="$(
-        wget -q -T 5 -O - \
-            "$MOONRAKER_HTTP_BASE/printer/objects/query?configfile&save_variables&gcode_macro%20_AD5X_Z_SAVED_CHECK_POLICY" \
-            2>/dev/null
-    )" || return 1
-    [ -n "$LIVE" ] || return 1
     PY="$(python_bin)" || return 1
-    printf '%s' "$LIVE" | "$PY" -B "$ZCAL_RC_PRODUCTIZER" verify-live \
-        --state-dir "$ZCAL_RC_STATE_DIR" >/dev/null
+    LIMIT="${AD5X_ZCAL_VERIFY_TIMEOUT:-30}"
+    COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        LIVE="$(zcal_rc_query_live_policy 2>/dev/null || true)"
+        if [ -n "$LIVE" ] && printf '%s' "$LIVE" | "$PY" -B "$ZCAL_RC_PRODUCTIZER" verify-live \
+            --state-dir "$ZCAL_RC_STATE_DIR" >/dev/null 2>&1; then
+            return 0
+        fi
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    return 1
+}
+
+zcal_rc_live_verify_uninstalled(){
+    zcal_core_init_paths
+    zcal_rc_functions_only && return 0
+    PY="$(python_bin)" || return 1
+    LIMIT="${AD5X_ZCAL_VERIFY_TIMEOUT:-30}"
+    COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        LIVE="$(zcal_rc_query_live_policy 2>/dev/null || true)"
+        if [ -n "$LIVE" ] && printf '%s' "$LIVE" | "$PY" -B "$ZCAL_RC_PRODUCTIZER" verify-uninstalled \
+            --state-dir "$ZCAL_RC_STATE_DIR" >/dev/null 2>&1; then
+            return 0
+        fi
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    return 1
+}
+
+zcal_rc_finalize_uninstall(){
+    zcal_core_init_paths
+    zcal_rc_functions_only && return 0
+    PY="$(python_bin)" || return 1
+    "$PY" -B "$ZCAL_RC_PRODUCTIZER" finalize-uninstall \
+        --state-dir "$ZCAL_RC_STATE_DIR"
+}
+
+zcal_rc_wait_klippy_connected(){
+    LIMIT="${1:-$MOONRAKER_READY_TIMEOUT}"
+    COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        INFO="$(moonraker_server_info 2>/dev/null || true)"
+        COMPACT="$(printf '%s' "$INFO" | tr -d '[:space:]')"
+        case "$COMPACT" in
+            *'"klippy_connected":true'*) return 0 ;;
+        esac
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    return 1
+}
+
+zcal_rc_firmware_restart(){
+    zcal_rc_functions_only && return 0
+    zcal_rc_wait_klippy_connected || return 1
+    wget -q -T 10 --post-data='' -O - \
+        "$MOONRAKER_HTTP_BASE/printer/firmware_restart" >/dev/null 2>&1 || return 1
+    wait_klippy_ready
+}
+
+# Override the generic transition only after this helper is sourced. A
+# Moonraker restart alone does not reload Klipper config. Every productization
+# mutation therefore crosses a bounded FIRMWARE_RESTART boundary before the
+# transition's live verifier may succeed.
+run_moonraker_transition(){
+    TRANSITION_FN="$1"
+    VERIFY_FN="$2"
+    if [ "$(moonraker_process_count)" -gt 0 ]; then
+        MOONRAKER_WAS_RUNNING=1
+        MOONRAKER_TRANSITION_STARTED=1
+        stop_moonraker || return 1
+    else
+        MOONRAKER_TRANSITION_STARTED=1
+    fi
+    wait_moonraker_stopped || return 1
+    "$TRANSITION_FN" || return 1
+    start_moonraker || return 1
+    wait_moonraker_http || return 1
+    zcal_rc_firmware_restart || return 1
+    "$VERIFY_FN"
+}
+
+# Rollback must restore not just bytes on disk but the effective Klipper
+# config. Reload the restored state through the same observed boundary.
+restore_moonraker_after_rollback(){
+    [ "$MOONRAKER_TRANSITION_STARTED" -eq 1 ] || return 0
+    if [ "$(moonraker_process_count 2>/dev/null || echo 0)" -gt 0 ]; then
+        stop_moonraker >/dev/null 2>&1 || true
+        wait_moonraker_stopped "$MOONRAKER_STOP_TIMEOUT" >/dev/null 2>&1 || true
+    fi
+    [ "$MOONRAKER_WAS_RUNNING" -eq 1 ] || return 0
+    start_moonraker >/dev/null 2>&1 || return 1
+    wait_moonraker_http "$MOONRAKER_READY_TIMEOUT" >/dev/null 2>&1 || return 1
+    zcal_rc_firmware_restart >/dev/null 2>&1 || return 1
+    wait_klippy_ready "$MOONRAKER_READY_TIMEOUT" >/dev/null 2>&1
+}
+
+# Uninstall only becomes successful after the original hook/settings are the
+# effective runtime state and the RC policy macro is gone. Keep the manifest
+# until that check passes so rollback still has exact provenance.
+verify_backend_absent(){
+    [ "$(backend_component_state 2>/dev/null || true)" = absent ] || return 1
+    zcal_rc_live_verify_uninstalled || return 1
+    zcal_rc_finalize_uninstall
 }
 
 zcal_core_deploy_managed_copy(){

@@ -22,6 +22,8 @@ on:
       - 'tests/test_installer_backend_lifecycle.py'
       - 'tests/test_z_calibration_lifecycle_assets.py'
       - 'tests/test_z_calibration_productization.py'
+      - 'tests/test_z_calibration_productization_reload.py'
+      - 'tests/test_z_calibration_lifecycle_reload.py'
       - 'tests/test_z_calibration_production_policy_asset.py'
       - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
       - '.github/workflows/z-calibration-core.yml'
@@ -44,6 +46,8 @@ on:
       - 'tests/test_installer_backend_lifecycle.py'
       - 'tests/test_z_calibration_lifecycle_assets.py'
       - 'tests/test_z_calibration_productization.py'
+      - 'tests/test_z_calibration_productization_reload.py'
+      - 'tests/test_z_calibration_lifecycle_reload.py'
       - 'tests/test_z_calibration_production_policy_asset.py'
       - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
       - '.github/workflows/z-calibration-core.yml'
@@ -74,6 +78,8 @@ jobs:
           tests/test_z_calibration_orchestrator_atomicity.py
           tests/test_z_calibration_lifecycle_assets.py
           tests/test_z_calibration_productization.py
+          tests/test_z_calibration_productization_reload.py
+          tests/test_z_calibration_lifecycle_reload.py
           tests/test_z_calibration_production_policy_asset.py
       - name: Check shell syntax
         run: sh -n install.sh installer/z_calibration_runtime.sh

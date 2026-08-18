@@ -589,6 +589,8 @@ def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
 def uninstall(
     state_dir: Path,
     variables_file: Path,
+    *,
+    keep_state: bool = False,
 ) -> None:
     manifest = _load_manifest(state_dir)
     if manifest is None:
@@ -627,7 +629,42 @@ def uninstall(
     else:
         policy_dest.unlink(missing_ok=True)
 
-    shutil.rmtree(state_dir)
+    if not keep_state:
+        shutil.rmtree(state_dir)
+
+
+def verify_uninstalled(live_payload: str, state_dir: Path) -> None:
+    manifest = _load_manifest(state_dir)
+    if manifest is None:
+        raise ProductizationError("productization manifest missing during uninstall verify")
+    runtime, status = _runtime_payload(live_payload)
+    original = (state_dir / "original_hook").read_bytes()
+    baseline_commands = _hook_range_and_commands(original)[1]
+    if runtime["commands"] != baseline_commands:
+        raise ProductizationError(
+            f"uninstalled hook mismatch: {runtime['commands']!r} != {baseline_commands!r}"
+        )
+    if status.get("gcode_macro _AD5X_Z_SAVED_CHECK_POLICY") is not None:
+        raise ProductizationError("RC policy macro still loaded after uninstall")
+
+    variables = runtime["variables"]
+    for key, name in (
+        ("original_mesh_test", "mesh_test"),
+        ("original_cc_enabled", "cc_enabled"),
+    ):
+        spec = manifest[key]
+        present = name in variables
+        if bool(spec.get("present")) != present:
+            raise ProductizationError(f"{name} presence was not restored")
+        if present and variables.get(name) != spec.get("value"):
+            raise ProductizationError(
+                f"{name} value was not restored: {variables.get(name)!r} != {spec.get('value')!r}"
+            )
+
+
+def finalize_uninstall(state_dir: Path) -> None:
+    if _load_manifest(state_dir) is not None:
+        shutil.rmtree(state_dir)
 
 
 def _snapshot_one(path: Path, root: Path, name: str) -> None:
@@ -726,6 +763,13 @@ def main(argv: list[str] | None = None) -> int:
     uns = sub.add_parser("uninstall")
     uns.add_argument("--state-dir", required=True, type=Path)
     uns.add_argument("--variables-file", required=True, type=Path)
+    uns.add_argument("--keep-state", action="store_true")
+
+    verify_uns = sub.add_parser("verify-uninstalled")
+    verify_uns.add_argument("--state-dir", required=True, type=Path)
+
+    finalize_uns = sub.add_parser("finalize-uninstall")
+    finalize_uns.add_argument("--state-dir", required=True, type=Path)
 
     snap = sub.add_parser("txn-snapshot")
     snap.add_argument("--plan", required=True, type=Path)
@@ -757,7 +801,11 @@ def main(argv: list[str] | None = None) -> int:
             json.dump(manifest, sys.stdout, sort_keys=True)
             sys.stdout.write("\n")
         elif args.cmd == "uninstall":
-            uninstall(args.state_dir, args.variables_file)
+            uninstall(args.state_dir, args.variables_file, keep_state=args.keep_state)
+        elif args.cmd == "verify-uninstalled":
+            verify_uninstalled(sys.stdin.read(), args.state_dir)
+        elif args.cmd == "finalize-uninstall":
+            finalize_uninstall(args.state_dir)
         elif args.cmd == "txn-snapshot":
             transaction_snapshot(_load_plan(args.plan), args.backup)
         elif args.cmd == "txn-restore":
