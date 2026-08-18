@@ -20,7 +20,7 @@ else:
     _ZCORE_IMPORT_ERROR = None
 
 API_VERSION = "1.0"
-MODULE_VERSION = "0.1.2"
+MODULE_VERSION = "0.1.3"
 Z_MODULE_SCHEMA_VERSION = "1.1"
 
 Z_SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/z_calibration/snapshot"
@@ -31,6 +31,7 @@ Z_CHANGED_NOTIFY_NAME = "plugins_ad5x_z_calibration_changed"
 
 Z_DIAGNOSTIC_CAPACITY = 64
 Z_EFFECTIVE_OFFSET_TOLERANCE = 1e-6
+ZMOD_SLICER_OFFSET_SENTINEL = 99.0
 Z_RC_POLICY_OBJECT = "gcode_macro _AD5X_Z_SAVED_CHECK_POLICY"
 Z_RC_POLICY_ID = "zcal-saved-check-v1-20260817"
 Z_USER_START_CONFIG_KEY = "gcode_macro _user_start_print"
@@ -83,6 +84,20 @@ def _optional_float(value: Any) -> Optional[float]:
     if value is None:
         return None
     return _finite(value, "optional_float")
+
+
+def _normalize_slicer_request(value: Any) -> Optional[float]:
+    requested = _optional_float(value)
+    if requested is None:
+        return None
+    if math.isclose(
+        requested,
+        ZMOD_SLICER_OFFSET_SENTINEL,
+        rel_tol=0.0,
+        abs_tol=Z_EFFECTIVE_OFFSET_TOLERANCE,
+    ):
+        return None
+    return requested
 
 
 def _macro_commands(raw_gcode: Any) -> list[str]:
@@ -182,7 +197,14 @@ def _derive_zmod_provenance(
     origin = gcode_move.get("homing_origin")
     if not isinstance(origin, (list, tuple)) or len(origin) < 3:
         raise ValueError("invalid gcode_move.homing_origin")
-    actual = _finite(origin[2], "actual_effective")
+    reported_homing_origin_z = _finite(origin[2], "reported_homing_origin_z")
+
+    toolhead = _mapping(status, "toolhead")
+    homed_axes = toolhead.get("homed_axes")
+    if not isinstance(homed_axes, str):
+        raise ValueError("invalid toolhead.homed_axes")
+    z_homed = "z" in homed_axes.lower()
+    actual_effective = reported_homing_origin_z if z_homed else None
 
     save_variables = _mapping(status, "save_variables")
     variables = _mapping(save_variables, "variables")
@@ -205,7 +227,7 @@ def _derive_zmod_provenance(
         else False
     )
     requested_job = (
-        _optional_float(start_macro.get("zzoffset"))
+        _normalize_slicer_request(start_macro.get("zzoffset"))
         if isinstance(start_macro, Mapping)
         else None
     )
@@ -243,7 +265,9 @@ def _derive_zmod_provenance(
         persistent_user=persistent_user if persistent_known else 0.0,
         slicer_job=0.0,
         live_adjustment=0.0,
-    ).reconcile_actual(actual, tolerance=tolerance)
+    )
+    if actual_effective is not None:
+        composition = composition.reconcile_actual(actual_effective, tolerance=tolerance)
 
     missing_known = []
     if not auto_known:
@@ -255,6 +279,8 @@ def _derive_zmod_provenance(
         provenance_status = "unsupported_zmod_offset_path"
     elif missing_known:
         provenance_status = "partial"
+    elif not z_homed:
+        provenance_status = "not_homed"
     elif abs(composition.external_unknown) > tolerance:
         provenance_status = "external_unknown"
     else:
@@ -288,33 +314,44 @@ def _derive_zmod_provenance(
         ),
     }
     sources = {
-        "effective": "gcode_move.homing_origin.z",
+        "effective": (
+            "gcode_move.homing_origin.z" if z_homed else "unavailable:not_homed"
+        ),
         "persistent_user": persistent_source,
         "auto_alignment": (
             "gcode_macro _TEST_POINT.temp_z_offset" if auto_known else "unavailable"
         ),
         "slicer_job": slicer_source,
         "live_adjustment": (
-            "derived_zero:no_residual"
-            if abs(composition.external_unknown) <= tolerance
-            else "not_attributable:residual_is_external_unknown"
+            "not_attributable:not_homed"
+            if not z_homed
+            else (
+                "derived_zero:no_residual"
+                if abs(composition.external_unknown) <= tolerance
+                else "not_attributable:residual_is_external_unknown"
+            )
         ),
-        "external_unknown": "reconciliation_residual",
+        "external_unknown": (
+            "not_evaluated:not_homed" if not z_homed else "reconciliation_residual"
+        ),
     }
     provenance = {
         "status": provenance_status,
         "model": "zmod-saved-check-observer-v1",
         "sources": sources,
         "missing_components": missing_known,
-        "actual_effective": actual,
+        "actual_effective": actual_effective,
+        "reported_homing_origin_z": reported_homing_origin_z,
         "requested_slicer_z_offset": requested_job,
         "slicer_z_offset_effect": slicer_effect,
         "rc_path": rc_path,
     }
     runtime = {
-        "actual_effective": actual,
+        "actual_effective": actual_effective,
+        "reported_homing_origin_z": reported_homing_origin_z,
+        "effective_valid": z_homed,
         "print_state": _mapping(status, "print_stats").get("state"),
-        "homed_axes": _mapping(status, "toolhead").get("homed_axes"),
+        "homed_axes": homed_axes,
     }
     job = {
         "phase": runtime["print_state"],
@@ -347,6 +384,7 @@ class PluginsAD5XZCalibration:
             "klippy": "unknown",
             "print_state": "unknown",
             "homed_axes": "",
+            "effective_valid": False,
         }
         self._z_job: Dict[str, Any] = {
             "phase": "unknown",
@@ -359,6 +397,7 @@ class PluginsAD5XZCalibration:
             "sources": {},
             "missing_components": [],
             "actual_effective": None,
+            "reported_homing_origin_z": None,
             "requested_slicer_z_offset": None,
             "slicer_z_offset_effect": "unknown",
             "rc_path": {},
@@ -423,6 +462,7 @@ class PluginsAD5XZCalibration:
                 "provenance_status": "unavailable",
             }
         else:
+            effective_valid = bool(self._z_runtime.get("effective_valid", False))
             offset_state = {
                 "auto_alignment": self._z_offsets.auto_alignment,
                 "persistent_user": self._z_offsets.persistent_user,
@@ -430,7 +470,11 @@ class PluginsAD5XZCalibration:
                 "live_adjustment": self._z_offsets.live_adjustment,
                 "external_unknown": self._z_offsets.external_unknown,
                 "known_total": self._z_offsets.known_total,
-                "effective": self._z_offsets.effective if runtime_available else None,
+                "effective": (
+                    self._z_offsets.effective
+                    if runtime_available and effective_valid
+                    else None
+                ),
                 "provenance_status": (
                     self._z_provenance.get("status", "unavailable")
                     if runtime_available
@@ -563,6 +607,7 @@ class PluginsAD5XZCalibration:
                 "klippy": "ready",
                 "print_state": print_state,
                 "homed_axes": homed_axes,
+                "effective_valid": bool(runtime.get("effective_valid", False)),
             }
             self._z_job = job
             if self._z_last_error in {
@@ -576,6 +621,7 @@ class PluginsAD5XZCalibration:
                 "ready",
                 print_state,
                 homed_axes,
+                bool(runtime.get("effective_valid", False)),
                 round(offsets.effective, 9),
                 round(offsets.persistent_user, 9),
                 round(offsets.auto_alignment, 9),
@@ -597,6 +643,9 @@ class PluginsAD5XZCalibration:
                     correlation_id="runtime",
                     payload={
                         "actual_effective": provenance.get("actual_effective"),
+                        "reported_homing_origin_z": provenance.get(
+                            "reported_homing_origin_z"
+                        ),
                         "persistent_user": offsets.persistent_user,
                         "auto_alignment": offsets.auto_alignment,
                         "slicer_job": offsets.slicer_job,
@@ -642,6 +691,7 @@ class PluginsAD5XZCalibration:
             "sources": {},
             "missing_components": [],
             "actual_effective": None,
+            "reported_homing_origin_z": None,
             "requested_slicer_z_offset": None,
             "slicer_z_offset_effect": "unknown",
             "rc_path": {},
@@ -650,6 +700,7 @@ class PluginsAD5XZCalibration:
             "klippy": "unavailable",
             "print_state": "unknown",
             "homed_axes": "",
+            "effective_valid": False,
         }
         self._z_job = {
             "phase": "unknown",

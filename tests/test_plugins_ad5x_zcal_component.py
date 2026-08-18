@@ -226,7 +226,35 @@ class PluginsAD5XZCalComponentTests(unittest.TestCase):
         self.assertAlmostEqual(offset["external_unknown"], 0.0)
         self.assertAlmostEqual(offset["effective"], -0.015834)
         self.assertEqual(offset["provenance_status"], "reconciled")
+        self.assertIsNone(state["job"]["requested_slicer_z_offset"])
+        self.assertEqual(
+            state["job"]["slicer_z_offset_effect"],
+            "ignored_by_zmod_global_offset_path",
+        )
+        self.assertTrue(state["runtime"]["effective_valid"])
         self.assertEqual(klippy.gcode, [])
+
+    def test_zmod_99_sentinel_is_not_exposed_as_slicer_offset(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(requested_job=99.0))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        self.assertIsNone(state["job"]["requested_slicer_z_offset"])
+        self.assertIsNone(state["provenance"]["requested_slicer_z_offset"])
+        self.assertAlmostEqual(state["offset"]["slicer_job"], 0.0)
+
+    def test_explicit_slicer_offset_is_observed_but_not_composed_on_global_path(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(requested_job=0.05))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        self.assertAlmostEqual(state["job"]["requested_slicer_z_offset"], 0.05)
+        self.assertAlmostEqual(
+            state["provenance"]["requested_slicer_z_offset"], 0.05
+        )
+        self.assertEqual(
+            state["job"]["slicer_z_offset_effect"],
+            "ignored_by_zmod_global_offset_path",
+        )
+        self.assertAlmostEqual(state["offset"]["slicer_job"], 0.0)
 
     def test_reconcile_is_read_only_and_records_diagnostic(self) -> None:
         klippy = FakeKlippyAPI(ready_payload())
@@ -255,7 +283,7 @@ class PluginsAD5XZCalComponentTests(unittest.TestCase):
         self.assertAlmostEqual(state["offset"]["external_unknown"], 0.01)
         self.assertEqual(state["offset"]["provenance_status"], "external_unknown")
 
-    def test_post_restart_standby_state_is_not_fabricated_as_babystepping(self) -> None:
+    def test_post_restart_unhomed_state_does_not_fabricate_effective_or_residual(self) -> None:
         klippy = FakeKlippyAPI(
             ready_payload(
                 persistent=-0.016,
@@ -269,11 +297,26 @@ class PluginsAD5XZCalComponentTests(unittest.TestCase):
         state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
         self.assertAlmostEqual(state["offset"]["persistent_user"], -0.016)
         self.assertAlmostEqual(state["offset"]["live_adjustment"], 0.0)
-        self.assertAlmostEqual(state["offset"]["external_unknown"], 0.016)
+        self.assertAlmostEqual(state["offset"]["external_unknown"], 0.0)
+        self.assertIsNone(state["offset"]["effective"])
+        self.assertEqual(state["offset"]["provenance_status"], "not_homed")
+        self.assertEqual(state["provenance"]["status"], "not_homed")
+        self.assertIsNone(state["provenance"]["actual_effective"])
+        self.assertAlmostEqual(state["provenance"]["reported_homing_origin_z"], 0.0)
+        self.assertEqual(
+            state["provenance"]["sources"]["effective"],
+            "unavailable:not_homed",
+        )
         self.assertEqual(
             state["provenance"]["sources"]["live_adjustment"],
-            "not_attributable:residual_is_external_unknown",
+            "not_attributable:not_homed",
         )
+        self.assertEqual(
+            state["provenance"]["sources"]["external_unknown"],
+            "not_evaluated:not_homed",
+        )
+        self.assertFalse(state["runtime"]["effective_valid"])
+        self.assertIsNone(state["job"]["requested_slicer_z_offset"])
 
     def test_constructor_has_no_klippy_io(self) -> None:
         klippy = FakeKlippyAPI(ready_payload())
