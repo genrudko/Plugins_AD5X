@@ -2,21 +2,16 @@
 
 ## Scope
 
-This evidence records the controlled hardware productization pass after Owner RC acceptance, the shared-backend ownership collision discovered on the AD5X target, the repository coexistence repair, successful standalone Z Calibration observer deployment, update/repair idempotence, and exact uninstall restore on real hardware.
+This evidence records the controlled Z Calibration backend productization sequence on the real Flashforge AD5X: shared-backend collision discovery, additive standalone repair, lifecycle acceptance, exact uninstall restore, reinstall/fresh adoption, and final full power-cycle persistence/regression.
 
-The subsequent reinstall/fresh-adoption hardware PASS is recorded separately in:
+Detailed later-stage evidence:
 
 ```text
 docs/evidence/Z_CALIBRATION_BACKEND_REINSTALL_2026-08-19.md
+docs/evidence/Z_CALIBRATION_BACKEND_POWERCYCLE_2026-08-19.md
 ```
 
 ## Canonical RC adoption — hardware PASS
-
-Exact source used for the controlled RC ownership adoption:
-
-```text
-67577e02e5f11f6847748c5e359b780eb14f0730
-```
 
 Accepted winning state:
 
@@ -27,11 +22,13 @@ CC_ENABLED = 0
 policy_id = zcal-saved-check-v1-20260817
 ```
 
-## Shared-backend collision and repair
+Z-Mod remains the sole physical Auto-Z/contact owner. Plugins AD5X owns only the fail-closed policy/guard and read-only observer.
 
-Live discovery proved that Moonraker was serving the IFS backend `0.1.6` from `plugins_ad5x.py`, while the then-current ZCal feature line had independently evolved the same file. Replacing the live file would have destroyed the active IFS contract.
+## Shared-backend collision and accepted repair
 
-The accepted repair is additive coexistence:
+Hardware discovery proved that Moonraker was serving the active IFS backend `0.1.6` from `plugins_ad5x.py`, while the then-current ZCal feature line had independently evolved the same shared path. Replacing the live shared host would have destroyed the active IFS contract.
+
+The accepted coexistence repair is additive:
 
 ```text
 plugins_ad5x.py
@@ -44,7 +41,7 @@ plugins_ad5x_zcal.py
   GET  /server/plugins_ad5x/z_calibration/diagnostics
 ```
 
-Canonical lifecycle:
+Canonical backend lifecycle:
 
 ```text
 installer/z_calibration_backend_lifecycle.sh
@@ -57,52 +54,45 @@ Hard invariants:
 - idle/terminal state required before mutation;
 - curl only, no wget;
 - no Git operation inside lifecycle;
-- no write/replacement of `plugins_ad5x.py`;
+- no write/replacement of shared `plugins_ad5x.py`;
 - no `FIRMWARE_RESTART`;
 - no Z write, probe, G0 or G1;
-- only standalone observer/core/config are owned;
+- standalone observer/core/config ownership only;
 - Moonraker stop -> bounded process-zero wait -> mutation/restore;
 - transaction backup + rollback;
 - shared backend compared before/after every transaction but never owned/pinned by ZCal;
-- observer verifier requires `motion_owner=zmod`, `motion_actions_enabled=false`, `offset_write_enabled=false`.
+- observer must remain `motion_owner=zmod`, `motion_actions_enabled=false`, `offset_write_enabled=false`.
 
-## Repository acceptance
+## Accepted implementation source
 
-Accepted implementation/hardware source:
+All physical backend lifecycle gates were executed from the exact accepted implementation SHA:
 
 ```text
 45c57eebec24c26094d448fd4c679f5d3545f7d0
 ```
 
-Exact-head CI:
+Exact-head CI for that implementation:
 
 ```text
 Z Calibration Core    run 32181810994  SUCCESS
 Z Calibration Actions run 32181811662  SUCCESS
 ```
 
-All hardware lifecycle gates intentionally use this exact implementation SHA. Later branch-head commits are evidence-only and do not alter runtime/lifecycle code.
+Later branch-head commits are evidence-only and do not alter accepted runtime/lifecycle code.
 
-## Standalone lifecycle — real AD5X hardware PASS
+## Real AD5X lifecycle acceptance
 
-### Install
+### Install — PASS
 
 ```text
-backend_install_rc = 0
-backend_status_rc = 0
+install_rc = 0
+status_rc = 0
 snapshot / reconcile / diagnostics = 200 / 200 / 200
 ```
 
-Observer remained read-only and Z-Mod-owned:
+Observer remained read-only and Z-Mod-owned.
 
-```text
-calibration.state = observer
-motion_owner = zmod
-motion_actions_enabled = false
-offset_write_enabled = false
-```
-
-### Update idempotence
+### Update idempotence — PASS
 
 ```text
 update_rc = 0
@@ -112,7 +102,7 @@ endpoints = 200 / 200 / 200
 
 Original ownership snapshot, managed hashes, shared IFS backend and live IFS worktree remained unchanged.
 
-### Repair idempotence
+### Repair idempotence — PASS
 
 ```text
 repair_rc = 0
@@ -122,18 +112,10 @@ endpoints = 200 / 200 / 200
 
 Original ownership snapshot, managed hashes, shared IFS backend and live IFS worktree again remained unchanged.
 
-### Uninstall + exact pre-install restore
-
-Canonical uninstall:
+### Uninstall + exact pre-install restore — PASS
 
 ```text
 uninstall_rc = 0
-backup = /opt/config/mod_data/ad5x_custom/backups/zcal-backend-uninstall-20260818-235827-24317
-```
-
-Exact restored standalone state:
-
-```text
 snapshot / reconcile / diagnostics = 404 / 404 / 404
 plugins_ad5x_zcal.py = absent
 plugins_ad5x_zcalibration.py = absent
@@ -151,17 +133,99 @@ original tree sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577
 original include count = 0
 ```
 
-The first uninstall acceptance harness produced a false negative because it checked the pure-Klipper RC include in Moonraker's include file. Corrected read-only acceptance proved the canonical RC include remained exactly once in:
+The first uninstall acceptance harness red result was a false negative caused by checking the pure-Klipper RC include in Moonraker's include file. Corrected read-only acceptance proved the RC include remained exactly once in `/opt/config/mod_data/plugins.cfg`, and RC status remained healthy.
+
+### Reinstall / fresh adoption — PASS
+
+The accepted uninstall left a clean `404/absent` baseline, which the reinstall adopted again correctly:
 
 ```text
-/opt/config/mod_data/plugins.cfg
+reinstall_rc = 0
+reinstall_status_rc = 0
+snapshot / reconcile / diagnostics = 200 / 200 / 200
+z_endpoint_original_http = 404
+fresh original include count = 0
+fresh original tree sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577def7140
 ```
 
-and RC Productization remained active and verified.
+Managed runtime hashes matched the accepted exact source.
+
+### Full physical power-cycle persistence/regression — PASS
+
+Verification after a physical printer power-off / power-on cycle observed:
+
+```text
+system_uptime_seconds = 254.76
+server_info_http = 200
+klippy_connected = true
+klippy_state = ready
+failed_components = []
+warnings = []
+backend status rc = 0
+RC Productization status rc = 0
+```
+
+Fresh ownership provenance survived cold boot unchanged:
+
+```text
+schema = 1
+z_endpoint_original_http = 404
+shared_signature_at_adoption = http=200;backend_version=0.1.6;ifs=1
+original tree sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577def7140
+original include count = 0
+```
+
+Managed files and includes survived unchanged:
+
+```text
+plugins_ad5x_zcal.py sha256 = 5ea297835814570ff74b18e5a12fc51a1735617ce4272744b93eb72ad49b20da
+plugins_ad5x_zcalibration.py sha256 = 50095b5099565f5a1b398dff02fc57f308f810f0fd6c6719af49a4f758e1f527
+zcal_backend.moonraker.conf sha256 = d9a27445b881a66ca6b30fa84b187c8d69f85f4ca3e8b83e913263f68e616669
+standalone Moonraker include count = 1
+pure-Klipper RC include count = 1
+```
+
+Standalone endpoints after cold boot:
+
+```text
+snapshot / reconcile / diagnostics = 200 / 200 / 200
+```
+
+Observer remained healthy/read-only:
+
+```text
+available = true
+health = ok
+calibration.state = observer
+motion_owner = zmod
+motion_actions_enabled = false
+offset_write_enabled = false
+offset_hook_status = loaded
+```
+
+Observer-vs-raw provenance after cold boot passed completely:
+
+```text
+persistent_user = -0.016
+auto_alignment = 0.0
+live_adjustment = 0.0
+external_unknown = +0.016
+effective = 0.0
+persistent_matches_raw = true
+auto_matches_raw = true
+effective_matches_raw = true
+live_not_fabricated = true
+residual_matches = true
+motion_owner_zmod = true
+motion_disabled = true
+offset_write_disabled = true
+```
+
+The standby/unhomed `+0.016 mm` residual remains intentionally classified as `external_unknown`, not fabricated as babystepping/live adjustment.
 
 ## Shared IFS invariant
 
-Across install/update/repair/uninstall:
+Across install/update/repair/uninstall/reinstall and the full cold boot:
 
 ```text
 http=200;backend_version=0.1.6;ifs=1
@@ -178,13 +242,25 @@ tracked diff sha256 = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b78
 untracked = none
 ```
 
-No Klipper firmware restart, Z write, probe or motion command was issued during lifecycle acceptance.
+## Final gate status
 
-## Current state
+Accepted on real AD5X hardware:
 
-The exact uninstall gate is accepted. A subsequent clean reinstall/fresh-adoption hardware gate also passed and is documented in `Z_CALIBRATION_BACKEND_REINSTALL_2026-08-19.md`.
+1. RC Productization ownership adoption;
+2. standalone backend install;
+3. update idempotence;
+4. repair idempotence;
+5. uninstall + exact pre-install restore;
+6. reinstall + fresh `404/absent` adoption;
+7. full physical power-cycle persistence/regression.
 
-Current hardware state after that reinstall:
+Final result:
+
+```text
+physical backend lifecycle/provenance gate set = COMPLETE
+```
+
+Current hardware state:
 
 ```text
 standalone Z Calibration backend = INSTALLED
@@ -193,4 +269,4 @@ shared IFS backend = active
 printer = healthy/standby
 ```
 
-Next independent gate: full printer power-cycle persistence/regression. Frontend productization remains blocked until that gate passes.
+The physical lifecycle/provenance blocker for frontend/API productization is closed. Frontend work must consume the accepted standalone read-only Z Calibration API and must not reimplement safety, Z-offset arithmetic, contact motion, or ownership logic.
