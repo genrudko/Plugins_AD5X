@@ -201,6 +201,8 @@ Coverage includes:
 - shared backend is a per-transaction invariant rather than ZCal-owned state;
 - rollback/uninstall provenance assets are present.
 
+Both Z Calibration workflows now include this evidence path in their trigger set so the final evidence-only branch head is revalidated by the same complete repository suite before the next hardware gate.
+
 ## Next hardware gate
 
 Do not use generic `install.sh` for this gate.
