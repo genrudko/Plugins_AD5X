@@ -2,7 +2,7 @@
 
 ## Scope
 
-This evidence records the controlled hardware productization pass after Owner RC acceptance, the shared-backend ownership collision discovered on the AD5X target, the repository coexistence repair, and the first successful standalone Z Calibration observer deployment on real hardware.
+This evidence records the controlled hardware productization pass after Owner RC acceptance, the shared-backend ownership collision discovered on the AD5X target, the repository coexistence repair, successful standalone Z Calibration observer deployment, and standalone backend update/repair idempotence on real hardware.
 
 ## Canonical RC adoption — hardware PASS
 
@@ -212,8 +212,8 @@ http=200;backend_version=0.1.6;ifs=1
 Standalone endpoints after install:
 
 ```text
-GET  /server/plugins_ad5x/z_calibration/snapshot    -> 200
-POST /server/plugins_ad5x/z_calibration/reconcile  -> 200
+GET  /server/plugins_ad5x/z_calibration/snapshot     -> 200
+POST /server/plugins_ad5x/z_calibration/reconcile   -> 200
 GET  /server/plugins_ad5x/z_calibration/diagnostics -> 200
 ```
 
@@ -249,26 +249,6 @@ effective        =  0.000
 status           = external_unknown
 ```
 
-Raw Klipper/Z-Mod sources in the same gate:
-
-```text
-print_state       = standby
-homed_axes        = ""
-effective_Z       = 0.0
-persistent_Z      = -0.016
-temp_z_offset     = 0.0
-screen            = false
-load_zoffset      = 1
-MESH_TEST         = 3
-PRINT_LEVELING    = 0
-CC_ENABLED        = 0
-START.zzoffset    = 99.0
-force_kamp        = false
-force_leveling    = false
-policy_id         = zcal-saved-check-v1-20260817
-active_mesh       = auto
-```
-
 Observer-vs-raw checks all passed:
 
 ```text
@@ -298,7 +278,110 @@ config_installed_sha256 = d9a27445b881a66ca6b30fa84b187c8d69f85f4ca3e8b83e913263
 include_count = 1
 ```
 
-Live IFS Git worktree after the complete gate remained exactly:
+Live IFS Git worktree after the complete install gate remained exactly:
+
+```text
+branch = feature/ifs-manager-v1
+HEAD   = d3887210f8f269ca27d6f2c8386f2edd3d3fa048
+status = clean
+tracked diff sha256 = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+untracked = none
+```
+
+No Klipper firmware restart, Z write, probe or motion command was issued.
+
+## Update + repair idempotence — real AD5X hardware PASS
+
+The same accepted exact implementation source was used:
+
+```text
+45c57eebec24c26094d448fd4c679f5d3545f7d0
+```
+
+Baseline ownership before the idempotence gate:
+
+```text
+schema = 1
+shared_signature_at_adoption = http=200;backend_version=0.1.6;ifs=1
+z_endpoint_original_http = 404
+original_tree_sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577def7140
+include_count = 1
+```
+
+Baseline managed hashes:
+
+```text
+plugins_ad5x_zcal.py = 5ea297835814570ff74b18e5a12fc51a1735617ce4272744b93eb72ad49b20da
+plugins_ad5x_zcalibration.py = 50095b5099565f5a1b398dff02fc57f308f810f0fd6c6719af49a4f758e1f527
+zcal_backend.moonraker.conf = d9a27445b881a66ca6b30fa84b187c8d69f85f4ca3e8b83e913263f68e616669
+```
+
+Pre-status passed:
+
+```text
+pre_status_rc = 0
+```
+
+`update` result:
+
+```text
+update_rc = 0
+update_status_rc = 0
+shared_before = http=200;backend_version=0.1.6;ifs=1
+shared_after  = http=200;backend_version=0.1.6;ifs=1
+shared runtime sha256 = 0c68c99739e77d2c751b447cbf52921201b4e4aba6e053382aa60310b8cb3623
+original_tree_sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577def7140
+include_count = 1
+endpoints = 200 / 200 / 200
+```
+
+Managed runtime hashes after `update` remained exactly equal to the accepted source hashes.
+
+`repair` result:
+
+```text
+repair_rc = 0
+repair_status_rc = 0
+shared_before = http=200;backend_version=0.1.6;ifs=1
+shared_after  = http=200;backend_version=0.1.6;ifs=1
+shared runtime sha256 = 0c68c99739e77d2c751b447cbf52921201b4e4aba6e053382aa60310b8cb3623
+original_tree_sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577def7140
+include_count = 1
+endpoints = 200 / 200 / 200
+```
+
+Managed runtime hashes after `repair` also remained exactly equal to the accepted source hashes.
+
+Final observer-vs-raw reconciliation after both lifecycle transitions:
+
+```text
+persistent_matches_raw = true
+auto_matches_raw = true
+effective_matches_raw = true
+live_not_fabricated = true
+residual_matches = true
+motion_owner_zmod = true
+motion_disabled = true
+offset_write_disabled = true
+persistent_user = -0.016
+auto_alignment = 0.0
+live_adjustment = 0.0
+external_unknown = 0.016
+effective = 0.0
+provenance_status = external_unknown
+expected_external_unknown = 0.016
+```
+
+The ownership baseline/original snapshot remained unchanged across both operations.
+
+The shared IFS backend remained byte-for-byte unchanged:
+
+```text
+http=200;backend_version=0.1.6;ifs=1
+plugins_ad5x.py sha256 = 0c68c99739e77d2c751b447cbf52921201b4e4aba6e053382aa60310b8cb3623
+```
+
+The live IFS Git worktree remained exactly:
 
 ```text
 branch = feature/ifs-manager-v1
@@ -318,14 +401,14 @@ Accepted:
 - shared-backend collision diagnosis;
 - standalone backend repository repair;
 - standalone observer install on real AD5X;
+- standalone backend `update` idempotence on real AD5X;
+- standalone backend `repair` idempotence on real AD5X;
 - shared IFS coexistence byte-for-byte;
-- live observer provenance against raw Klipper/Z-Mod objects.
+- live observer provenance against raw Klipper/Z-Mod objects after repeated Moonraker-only lifecycle transitions.
 
 Still pending as separate gates:
 
-1. standalone `update` idempotence;
-2. standalone `repair` idempotence;
-3. uninstall + exact original-state restore (`404`, absent runtime/config/include state);
-4. reinstall;
-5. power-cycle regression;
-6. frontend productization only after the physical lifecycle/provenance gates are complete.
+1. uninstall + exact original-state restore (`404`, absent runtime/config/include state);
+2. reinstall;
+3. power-cycle regression;
+4. frontend productization only after the physical lifecycle/provenance gates are complete.
