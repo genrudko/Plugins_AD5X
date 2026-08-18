@@ -2,7 +2,7 @@
 
 ## Scope
 
-This evidence records the controlled hardware productization pass after Owner RC acceptance, the shared-backend ownership collision discovered on the AD5X target, the repository coexistence repair, successful standalone Z Calibration observer deployment, and standalone backend update/repair idempotence on real hardware.
+This evidence records the controlled hardware productization pass after Owner RC acceptance, the shared-backend ownership collision discovered on the AD5X target, the repository coexistence repair, successful standalone Z Calibration observer deployment, update/repair idempotence, and exact uninstall restore on real hardware.
 
 ## Canonical RC adoption — hardware PASS
 
@@ -105,6 +105,8 @@ Exact-head CI:
 Z Calibration Core    run 32181810994  SUCCESS
 Z Calibration Actions run 32181811662  SUCCESS
 ```
+
+All hardware lifecycle gates below intentionally continue to use this exact implementation SHA. Later branch-head commits are evidence-only and do not alter runtime/lifecycle code.
 
 ## Standalone install — real AD5X hardware PASS
 
@@ -250,7 +252,101 @@ effective = 0.0
 provenance_status = external_unknown
 ```
 
-Across install/update/repair the live IFS worktree remained exactly:
+## Uninstall + exact pre-install restore — real AD5X hardware PASS
+
+The standalone backend was uninstalled from the same accepted exact source:
+
+```text
+45c57eebec24c26094d448fd4c679f5d3545f7d0
+```
+
+Pre-uninstall ownership provenance:
+
+```text
+manifest_sha256 = 72de679bf69619a989792114ce6681fb8db8bf35389756c8f576b35da030534b
+original_tree_sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577def7140
+original_include_count = 0
+original observer/core/config = absent
+z_endpoint_original_http = 404
+```
+
+Canonical uninstall result:
+
+```text
+uninstall_rc = 0
+backup = /opt/config/mod_data/ad5x_custom/backups/zcal-backend-uninstall-20260818-235827-24317
+```
+
+Moonraker/Klippy remained healthy after the Moonraker-only transition:
+
+```text
+server_info_http = 200
+klippy_connected = true
+klippy_state = ready
+failed_components = []
+warnings = []
+```
+
+Exact standalone restore:
+
+```text
+snapshot    = 404
+reconcile   = 404
+diagnostics = 404
+plugins_ad5x_zcal.py = absent
+plugins_ad5x_zcalibration.py = absent
+zcal_backend.moonraker.conf = absent
+standalone Moonraker include count = 0
+ownership state dir = absent
+standalone bytecode = absent
+standalone status rc = 1 (expected inactive state)
+```
+
+The ownership state was archived with exact provenance:
+
+```text
+archived manifest sha256 = 72de679bf69619a989792114ce6681fb8db8bf35389756c8f576b35da030534b
+archived original tree sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577def7140
+archived original include count = 0
+```
+
+The first uninstall acceptance harness incorrectly checked the pure-Klipper RC policy include in Moonraker's `plugins.moonraker.conf`, yielding a false negative. The canonical RC lifecycle actually owns that include in:
+
+```text
+/opt/config/mod_data/plugins.cfg
+```
+
+Corrected read-only acceptance proved:
+
+```text
+standalone_include_in_moonraker = 0
+rc_policy_include_in_klipper = 1
+rc_policy_include_in_moonraker = 0
+rc_productization_status_rc = 0
+```
+
+Raw pure-Klipper RC state after backend uninstall remained exactly:
+
+```text
+mesh_test = 3
+cc_enabled = 0
+load_zoffset = 1
+print_leveling = 0
+screen = false
+force_kamp = false
+force_leveling = false
+policy_id = zcal-saved-check-v1-20260817
+_USER_START_PRINT = CC_APPLY_PROFILE, _AD5X_Z_SAVED_CHECK_POLICY
+```
+
+Shared IFS remained byte-for-byte unchanged:
+
+```text
+http=200;backend_version=0.1.6;ifs=1
+plugins_ad5x.py sha256 = 0c68c99739e77d2c751b447cbf52921201b4e4aba6e053382aa60310b8cb3623
+```
+
+Across install/update/repair/uninstall the live IFS worktree remained exactly:
 
 ```text
 branch = feature/ifs-manager-v1
@@ -260,7 +356,7 @@ tracked diff sha256 = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b78
 untracked = none
 ```
 
-No Klipper firmware restart, Z write, probe or motion command was issued.
+No Klipper firmware restart, Z write, probe or motion command was issued during the standalone lifecycle gates.
 
 ## Gate status
 
@@ -272,12 +368,22 @@ Accepted:
 - standalone observer `install` on real AD5X;
 - standalone backend `update` idempotence on real AD5X;
 - standalone backend `repair` idempotence on real AD5X;
+- standalone backend `uninstall` with exact pre-install restore on real AD5X;
+- corrected proof that the original uninstall red result was acceptance-harness false negative only;
 - shared IFS coexistence byte-for-byte;
 - observer provenance against raw Klipper/Z-Mod after repeated Moonraker-only transitions.
 
+Current hardware state after accepted uninstall:
+
+```text
+standalone Z Calibration backend = intentionally UNINSTALLED
+pure-Klipper RC Productization = active
+shared IFS backend = active
+printer = healthy/standby
+```
+
 Still pending as separate gates:
 
-1. `uninstall` + exact pre-install restore (`404`, standalone assets absent, include absent);
-2. reinstall;
-3. power-cycle regression;
-4. frontend productization only after physical lifecycle/provenance gates are complete.
+1. standalone reinstall from accepted exact implementation SHA;
+2. power-cycle regression after reinstall;
+3. frontend productization only after lifecycle/provenance gates are complete.
