@@ -25,6 +25,7 @@ on:
       - 'tests/test_z_calibration_cleanup_safety.py'
       - 'tests/test_z_calibration_hardware_evidence.py'
       - 'docs/Z_CALIBRATION_HARDWARE_EVIDENCE_RUN_V1.md'
+      - 'docs/evidence/Z_CALIBRATION_BACKEND_COEXISTENCE_REPAIR_2026-08-18.md'
       - '.github/workflows/z-calibration-actions.yml'
   pull_request:
     paths:
@@ -48,6 +49,7 @@ on:
       - 'tests/test_z_calibration_cleanup_safety.py'
       - 'tests/test_z_calibration_hardware_evidence.py'
       - 'docs/Z_CALIBRATION_HARDWARE_EVIDENCE_RUN_V1.md'
+      - 'docs/evidence/Z_CALIBRATION_BACKEND_COEXISTENCE_REPAIR_2026-08-18.md'
       - '.github/workflows/z-calibration-actions.yml'
   workflow_dispatch:
 
