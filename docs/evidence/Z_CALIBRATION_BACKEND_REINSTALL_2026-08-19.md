@@ -198,13 +198,20 @@ No Klipper firmware restart, Z write, probe or motion command was issued.
 
 Reinstall / fresh-adoption hardware gate: **PASS**.
 
-Current hardware state:
+The backend was intentionally left installed for the independent full power-cycle persistence/regression gate.
+
+That subsequent gate also passed and is recorded in:
+
+```text
+docs/evidence/Z_CALIBRATION_BACKEND_POWERCYCLE_2026-08-19.md
+```
+
+Current hardware state after completed physical lifecycle acceptance:
 
 ```text
 standalone Z Calibration backend = INSTALLED
 pure-Klipper RC Productization = active
 shared IFS backend = active
 printer = healthy/standby
+physical backend lifecycle/provenance gate set = COMPLETE
 ```
-
-The backend intentionally remains installed for the next independent gate: full printer power-cycle persistence/regression.
