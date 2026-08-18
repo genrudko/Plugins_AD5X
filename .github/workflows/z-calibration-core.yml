@@ -11,14 +11,17 @@ on:
       - 'plugins_ad5x.moonraker.conf'
       - 'ad5x_custom.cfg'
       - 'z_calibration.cfg'
+      - 'z_calibration_rc_policy.cfg'
       - 'install.sh'
       - 'installer/z_calibration_runtime.sh'
+      - 'installer/z_calibration_productization.py'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_z_calibration_core.py'
       - 'tests/test_z_calibration_orchestrator.py'
       - 'tests/test_z_calibration_orchestrator_atomicity.py'
       - 'tests/test_installer_backend_lifecycle.py'
       - 'tests/test_z_calibration_lifecycle_assets.py'
+      - 'tests/test_z_calibration_productization.py'
       - 'tests/test_z_calibration_production_policy_asset.py'
       - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
       - '.github/workflows/z-calibration-core.yml'
@@ -30,14 +33,17 @@ on:
       - 'plugins_ad5x.moonraker.conf'
       - 'ad5x_custom.cfg'
       - 'z_calibration.cfg'
+      - 'z_calibration_rc_policy.cfg'
       - 'install.sh'
       - 'installer/z_calibration_runtime.sh'
+      - 'installer/z_calibration_productization.py'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_z_calibration_core.py'
       - 'tests/test_z_calibration_orchestrator.py'
       - 'tests/test_z_calibration_orchestrator_atomicity.py'
       - 'tests/test_installer_backend_lifecycle.py'
       - 'tests/test_z_calibration_lifecycle_assets.py'
+      - 'tests/test_z_calibration_productization.py'
       - 'tests/test_z_calibration_production_policy_asset.py'
       - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
       - '.github/workflows/z-calibration-core.yml'
@@ -61,11 +67,13 @@ jobs:
           moonraker/components/plugins_ad5x.py
           moonraker/components/plugins_ad5x_zcalibration.py
           moonraker/components/plugins_ad5x_zorchestrator.py
+          installer/z_calibration_productization.py
           tests/test_plugins_ad5x_component.py
           tests/test_z_calibration_core.py
           tests/test_z_calibration_orchestrator.py
           tests/test_z_calibration_orchestrator_atomicity.py
           tests/test_z_calibration_lifecycle_assets.py
+          tests/test_z_calibration_productization.py
           tests/test_z_calibration_production_policy_asset.py
       - name: Check shell syntax
         run: sh -n install.sh installer/z_calibration_runtime.sh
