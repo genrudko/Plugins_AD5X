@@ -46,96 +46,54 @@ policy_id          = zcal-saved-check-v1-20260817
 max_auto_alignment = 0.12
 ```
 
-## Live backend discovery — architectural blocker
+## Shared-backend collision and repair
 
-Moonraker/Klippy were healthy, but the active shared backend was IFS `0.1.6`:
+Live discovery proved that Moonraker was serving the IFS backend `0.1.6` from `plugins_ad5x.py`, while the then-current ZCal feature line had independently evolved the same file. ZCal endpoints were `404`; replacing the live file would have destroyed the active IFS contract.
 
-```text
-GET /server/plugins_ad5x/snapshot -> 200
-backend_version = 0.1.6
-modules = [ifs]
-
-POST /server/plugins_ad5x/z_calibration/reconcile -> 404
-GET  /server/plugins_ad5x/z_calibration/diagnostics -> 404
-```
-
-The live IFS feature line and the then-current ZCal feature line had independently evolved the same path:
-
-```text
-moonraker/components/plugins_ad5x.py
-```
-
-Replacing the live IFS file with the ZCal implementation would have restored Z endpoints by destroying the active IFS backend contract. This was rejected as an ownership collision, not treated as a Z-offset failure.
-
-Raw target state at discovery remained healthy:
-
-```text
-print_state      = standby
-homed_axes       = ""
-effective_Z      = 0.0
-persistent_Z     = -0.016
-temp_z_offset    = 0.0
-screen           = false
-load_zoffset     = 1
-MESH_TEST        = 3
-PRINT_LEVELING   = 0
-CC_ENABLED       = 0
-START.zzoffset   = 99.0
-force_kamp       = false
-force_leveling   = false
-policy_id        = zcal-saved-check-v1-20260817
-active_mesh      = auto
-```
-
-## Repair decision
-
-Z Calibration no longer owns the shared backend host.
-
-Repository composition:
+The accepted repair is additive coexistence:
 
 ```text
 plugins_ad5x.py
-  shared/platform host only
+  shared/platform/IFS host
 
 plugins_ad5x_zcal.py
-  standalone read-only Z Calibration Moonraker component
+  standalone read-only Z Calibration component
   GET  /server/plugins_ad5x/z_calibration/snapshot
   POST /server/plugins_ad5x/z_calibration/reconcile
   GET  /server/plugins_ad5x/z_calibration/diagnostics
 ```
 
-Standalone Moonraker activation:
+Activation:
 
 ```text
 [plugins_ad5x_zcal]
 ```
 
-Canonical backend lifecycle:
+Canonical lifecycle:
 
 ```text
 installer/z_calibration_backend_lifecycle.sh
 install | update | repair | uninstall | status
 ```
 
-Hard lifecycle invariants:
+Hard invariants:
 
-- target is the Z-Mod chroot;
-- printer must be idle/terminal before mutation;
-- curl only; no wget dependency;
-- no Git operation inside the canonical lifecycle;
+- Z-Mod chroot target;
+- idle/terminal state required before mutation;
+- curl only, no wget;
+- no Git operation inside lifecycle;
 - no write/replacement of `plugins_ad5x.py`;
 - no `FIRMWARE_RESTART`;
-- no Z write, probe, G0 or G1 command;
-- only `plugins_ad5x_zcal.py`, `plugins_ad5x_zcalibration.py` and the generated standalone Moonraker config are owned;
-- Moonraker stop is followed by a bounded process-zero wait before Python component mutation or restore;
-- destination ownership is fail-closed;
-- install/update/repair/uninstall are transactional with rollback backup;
-- shared backend signature is compared before/after every ZCal transaction but is not owned or version-pinned by ZCal;
-- live verifier requires `observer`, `motion_owner=zmod`, `motion_actions_enabled=false`, and `offset_write_enabled=false`.
+- no Z write, probe, G0 or G1;
+- only standalone observer/core/config are owned;
+- Moonraker stop -> bounded process-zero wait -> mutation/restore;
+- transaction backup + rollback;
+- shared backend compared before/after every transaction but never owned/pinned by ZCal;
+- observer verifier requires `motion_owner=zmod`, `motion_actions_enabled=false`, `offset_write_enabled=false`.
 
-## Repository acceptance for coexistence repair
+## Repository acceptance
 
-Final hardware source SHA:
+Accepted implementation/hardware source:
 
 ```text
 45c57eebec24c26094d448fd4c679f5d3545f7d0
@@ -148,44 +106,27 @@ Z Calibration Core    run 32181810994  SUCCESS
 Z Calibration Actions run 32181811662  SUCCESS
 ```
 
-The final test head includes explicit regression proof of:
+## Standalone install — real AD5X hardware PASS
+
+Pre-install standalone state:
 
 ```text
-Moonraker stop -> bounded process-zero wait -> mutate/restore
-```
-
-for install/update/repair, uninstall and rollback.
-
-## Standalone observer deployment — real AD5X hardware PASS
-
-Exact staged source:
-
-```text
-45c57eebec24c26094d448fd4c679f5d3545f7d0
-```
-
-Pre-deployment state:
-
-```text
-print_state = standby
-shared snapshot HTTP = 200
-shared backend_version = 0.1.6
-shared modules = [ifs]
-shared runtime sha256 = 0c68c99739e77d2c751b447cbf52921201b4e4aba6e053382aa60310b8cb3623
-standalone Z snapshot HTTP = 404
-standalone runtime files = absent
+Z snapshot HTTP = 404
+plugins_ad5x_zcal.py = absent
+plugins_ad5x_zcalibration.py = absent
+zcal_backend.moonraker.conf = absent
 standalone include count = 0
-standalone manifest = absent
+manifest = absent
 ```
 
-Canonical lifecycle result:
+Install/status:
 
 ```text
 backend_install_rc = 0
 backend_status_rc  = 0
 ```
 
-Moonraker/Klippy after the backend-only restart:
+Moonraker/Klippy:
 
 ```text
 klippy_connected  = true
@@ -194,35 +135,24 @@ failed_components = []
 warnings          = []
 ```
 
-Shared IFS backend after restart:
-
-```text
-GET /server/plugins_ad5x/snapshot -> 200
-backend_version = 0.1.6
-modules = [ifs]
-shared runtime sha256 = 0c68c99739e77d2c751b447cbf52921201b4e4aba6e053382aa60310b8cb3623
-```
-
-The API signature remained exactly:
+Shared IFS invariant before/after:
 
 ```text
 http=200;backend_version=0.1.6;ifs=1
+plugins_ad5x.py sha256 = 0c68c99739e77d2c751b447cbf52921201b4e4aba6e053382aa60310b8cb3623
 ```
 
-Standalone endpoints after install:
+Standalone endpoints:
 
 ```text
-GET  /server/plugins_ad5x/z_calibration/snapshot     -> 200
-POST /server/plugins_ad5x/z_calibration/reconcile   -> 200
-GET  /server/plugins_ad5x/z_calibration/diagnostics -> 200
+snapshot    = 200
+reconcile   = 200
+diagnostics = 200
 ```
 
-Observer state:
+Observer contract:
 
 ```text
-api_version            = 1.0
-module_version         = 0.1.2
-schema_version         = 1.1
 available              = true
 health                 = ok
 calibration.state      = observer
@@ -231,12 +161,10 @@ motion_actions_enabled = false
 offset_write_enabled   = false
 offset_hook_enabled    = true
 offset_hook_status     = loaded
-policy_status          = loaded
 policy_id              = zcal-saved-check-v1-20260817
-hook_commands          = CC_APPLY_PROFILE, _AD5X_Z_SAVED_CHECK_POLICY
 ```
 
-Observed provenance:
+Observed/raw-consistent provenance:
 
 ```text
 persistent_user  = -0.016
@@ -249,24 +177,9 @@ effective        =  0.000
 status           = external_unknown
 ```
 
-Observer-vs-raw checks all passed:
+All observer-vs-raw checks passed. The `+0.016` standby/unhomed residual is deliberately left as `external_unknown`; it is not fabricated as babystepping.
 
-```text
-persistent_matches_raw = true
-auto_matches_raw       = true
-effective_matches_raw  = true
-live_not_fabricated    = true
-residual_matches       = true
-motion_owner_zmod      = true
-motion_disabled        = true
-offset_write_disabled  = true
-```
-
-Expected and reported residual both equal `+0.016 mm`.
-
-This is an accepted standby/unhomed observation: the persisted `-0.016` trim exists in `save_variables`, while current `gcode_move.homing_origin.z` is `0.0`. The observer intentionally leaves the residual as `external_unknown` instead of fabricating a live-adjustment/babystepping source.
-
-Standalone ownership manifest after install:
+Ownership state after install:
 
 ```text
 schema = 1
@@ -278,27 +191,9 @@ config_installed_sha256 = d9a27445b881a66ca6b30fa84b187c8d69f85f4ca3e8b83e913263
 include_count = 1
 ```
 
-Live IFS Git worktree after the complete install gate remained exactly:
-
-```text
-branch = feature/ifs-manager-v1
-HEAD   = d3887210f8f269ca27d6f2c8386f2edd3d3fa048
-status = clean
-tracked diff sha256 = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-untracked = none
-```
-
-No Klipper firmware restart, Z write, probe or motion command was issued.
-
 ## Update + repair idempotence — real AD5X hardware PASS
 
-The same accepted exact implementation source was used:
-
-```text
-45c57eebec24c26094d448fd4c679f5d3545f7d0
-```
-
-Baseline ownership before the idempotence gate:
+Baseline ownership before the repeated lifecycle transitions:
 
 ```text
 schema = 1
@@ -308,21 +203,7 @@ original_tree_sha256 = c274b6b12b762c27181de3fc7dc943dea0d84e43e7c5a2bb119b8d577
 include_count = 1
 ```
 
-Baseline managed hashes:
-
-```text
-plugins_ad5x_zcal.py = 5ea297835814570ff74b18e5a12fc51a1735617ce4272744b93eb72ad49b20da
-plugins_ad5x_zcalibration.py = 50095b5099565f5a1b398dff02fc57f308f810f0fd6c6719af49a4f758e1f527
-zcal_backend.moonraker.conf = d9a27445b881a66ca6b30fa84b187c8d69f85f4ca3e8b83e913263f68e616669
-```
-
-Pre-status passed:
-
-```text
-pre_status_rc = 0
-```
-
-`update` result:
+`update`:
 
 ```text
 update_rc = 0
@@ -335,9 +216,7 @@ include_count = 1
 endpoints = 200 / 200 / 200
 ```
 
-Managed runtime hashes after `update` remained exactly equal to the accepted source hashes.
-
-`repair` result:
+`repair`:
 
 ```text
 repair_rc = 0
@@ -350,9 +229,9 @@ include_count = 1
 endpoints = 200 / 200 / 200
 ```
 
-Managed runtime hashes after `repair` also remained exactly equal to the accepted source hashes.
+Managed hashes remained equal to the accepted exact source after both transitions.
 
-Final observer-vs-raw reconciliation after both lifecycle transitions:
+Final observer-vs-raw checks after `update` and `repair`:
 
 ```text
 persistent_matches_raw = true
@@ -369,19 +248,9 @@ live_adjustment = 0.0
 external_unknown = 0.016
 effective = 0.0
 provenance_status = external_unknown
-expected_external_unknown = 0.016
 ```
 
-The ownership baseline/original snapshot remained unchanged across both operations.
-
-The shared IFS backend remained byte-for-byte unchanged:
-
-```text
-http=200;backend_version=0.1.6;ifs=1
-plugins_ad5x.py sha256 = 0c68c99739e77d2c751b447cbf52921201b4e4aba6e053382aa60310b8cb3623
-```
-
-The live IFS Git worktree remained exactly:
+Across install/update/repair the live IFS worktree remained exactly:
 
 ```text
 branch = feature/ifs-manager-v1
@@ -400,15 +269,15 @@ Accepted:
 - canonical RC ownership adoption;
 - shared-backend collision diagnosis;
 - standalone backend repository repair;
-- standalone observer install on real AD5X;
+- standalone observer `install` on real AD5X;
 - standalone backend `update` idempotence on real AD5X;
 - standalone backend `repair` idempotence on real AD5X;
 - shared IFS coexistence byte-for-byte;
-- live observer provenance against raw Klipper/Z-Mod objects after repeated Moonraker-only lifecycle transitions.
+- observer provenance against raw Klipper/Z-Mod after repeated Moonraker-only transitions.
 
 Still pending as separate gates:
 
-1. uninstall + exact original-state restore (`404`, absent runtime/config/include state);
+1. `uninstall` + exact pre-install restore (`404`, standalone assets absent, include absent);
 2. reinstall;
 3. power-cycle regression;
-4. frontend productization only after the physical lifecycle/provenance gates are complete.
+4. frontend productization only after physical lifecycle/provenance gates are complete.
