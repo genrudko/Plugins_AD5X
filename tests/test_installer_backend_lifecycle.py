@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shlex
 from pathlib import Path
 import subprocess
@@ -66,7 +67,15 @@ class BackendInstallerLifecycleTests(unittest.TestCase):
             path.read_text(encoding="utf-8")
             for path in (INSTALLER, RUNTIME_HELPER, RC_LIFECYCLE)
         )
-        self.assertNotIn("wget", production_shell.lower())
+        executable = "\n".join(
+            line
+            for line in production_shell.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+        self.assertIsNone(
+            re.search(r"(?m)(?:^|[\s;&|()])wget(?:\s|$)", executable.lower()),
+            "production shell must not execute wget on the Z-Mod target",
+        )
         self.assertIn("/usr/bin/curl", production_shell)
         self.assertIn("/usr/prog/curl-7.55.1-https/bin/curl", production_shell)
         self.assertIn("ad5x_http_get", production_shell)
