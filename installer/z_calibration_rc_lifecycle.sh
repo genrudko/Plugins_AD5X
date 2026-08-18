@@ -6,6 +6,9 @@
 # remains on an unrelated feature branch (for example IFS work). The shared
 # productizer/runtime helper owns hook/policy/settings semantics; this script
 # owns the bounded filesystem transaction + Klipper reload boundary.
+#
+# Target runtime is the Z-Mod chroot on Flashforge AD5X. HTTP access uses the
+# curl contract from Z-Mod itself; wget is intentionally not a dependency.
 set -eu
 
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -39,10 +42,10 @@ fail(){ echo "ОШИБКА: $*" >&2; exit 1; }
 python_bin(){
     if [ -n "${AD5X_PYTHON_BIN:-}" ] && [ -x "$AD5X_PYTHON_BIN" ]; then
         echo "$AD5X_PYTHON_BIN"
-    elif [ -x /root/moonraker-env/bin/python3 ]; then
-        echo /root/moonraker-env/bin/python3
     elif command -v python3 >/dev/null 2>&1; then
         command -v python3
+    elif [ -x /root/moonraker-env/bin/python3 ]; then
+        echo /root/moonraker-env/bin/python3
     else
         return 1
     fi
@@ -59,7 +62,7 @@ remove_exact_line(){
     awk -v line="$L" '$0 != line { print }' "$F" >"$F.tmp"
     mv "$F.tmp" "$F"
 }
-moonraker_server_info(){ wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/server/info" 2>/dev/null; }
+moonraker_server_info(){ ad5x_http_get 3 "$MOONRAKER_HTTP_BASE/server/info" 2>/dev/null; }
 klippy_ready_from_json(){
     COMPACT="$(printf '%s' "$1" | tr -d '[:space:]')"
     case "$COMPACT" in *'"klippy_connected":true'*) : ;; *) return 1 ;; esac
@@ -77,7 +80,7 @@ wait_klippy_ready(){
     return 1
 }
 check_idle(){
-    STATE_JSON="$(wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null)" \
+    STATE_JSON="$(ad5x_http_get 3 "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null)" \
         || fail 'не удалось подтвердить idle state: Moonraker print_stats недоступен'
     PY="$(python_bin)" || fail 'Python недоступен'
     PRINT_STATE="$(printf '%s' "$STATE_JSON" | "$PY" -B -c '
