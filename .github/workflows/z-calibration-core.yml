@@ -33,6 +33,7 @@ on:
       - 'tests/test_z_calibration_backend_lifecycle.py'
       - 'tests/test_z_calibration_production_policy_asset.py'
       - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
+      - 'docs/evidence/Z_CALIBRATION_BACKEND_COEXISTENCE_REPAIR_2026-08-18.md'
       - '.github/workflows/z-calibration-core.yml'
   pull_request:
     paths:
@@ -64,6 +65,7 @@ on:
       - 'tests/test_z_calibration_backend_lifecycle.py'
       - 'tests/test_z_calibration_production_policy_asset.py'
       - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
+      - 'docs/evidence/Z_CALIBRATION_BACKEND_COEXISTENCE_REPAIR_2026-08-18.md'
       - '.github/workflows/z-calibration-core.yml'
   workflow_dispatch:
 
