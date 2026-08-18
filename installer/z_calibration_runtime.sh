@@ -5,9 +5,41 @@
 # extends that transaction with the proven pure-Klipper saved+check policy,
 # winning _USER_START_PRINT owner patch, owned saved-variable state, and a
 # bounded Klipper reload/verification boundary for every lifecycle transition.
+#
+# Target runtime contract: Flashforge AD5X + Z-Mod chroot. Z-Mod 1.7 uses curl
+# (inside chroot normally /usr/bin/curl; stock AD5X fallback lives under
+# /usr/prog/curl-7.55.1-https/bin/curl). Do not introduce wget dependencies.
 
 ZCAL_RC_PREFLIGHT_READY=0
 ZCAL_RC_PREFLIGHT_JSON=""
+
+ad5x_curl_bin(){
+    if [ -n "${AD5X_CURL_BIN:-}" ]; then
+        [ -x "$AD5X_CURL_BIN" ] || return 1
+        printf '%s\n' "$AD5X_CURL_BIN"
+    elif command -v curl >/dev/null 2>&1; then
+        command -v curl
+    elif [ -x /usr/bin/curl ]; then
+        printf '%s\n' /usr/bin/curl
+    elif [ -x /usr/prog/curl-7.55.1-https/bin/curl ]; then
+        printf '%s\n' /usr/prog/curl-7.55.1-https/bin/curl
+    else
+        return 1
+    fi
+}
+
+ad5x_http_get(){
+    TIMEOUT="$1"; URL="$2"
+    CURL_BIN="$(ad5x_curl_bin)" || return 1
+    "$CURL_BIN" -f -sS -m "$TIMEOUT" "$URL"
+}
+
+ad5x_http_post(){
+    TIMEOUT="$1"; URL="$2"
+    CURL_BIN="$(ad5x_curl_bin)" || return 1
+    "$CURL_BIN" -f -sS -m "$TIMEOUT" -X POST \
+        -H 'Content-Type: application/json' "$URL"
+}
 
 zcal_core_init_paths(){
     ZCAL_CORE_SOURCE="${ZCAL_CORE_SOURCE:-$PLUGIN_DIR/moonraker/components/plugins_ad5x_zcalibration.py}"
@@ -66,7 +98,7 @@ zcal_core_destination_owned(){
 }
 
 zcal_rc_query_preflight(){
-    wget -q -T 5 -O - \
+    ad5x_http_get 5 \
         "$MOONRAKER_HTTP_BASE/printer/objects/query?configfile&save_variables" 2>/dev/null
 }
 
@@ -201,7 +233,7 @@ zcal_rc_uninstall(){
 }
 
 zcal_rc_query_live_policy(){
-    wget -q -T 5 -O - \
+    ad5x_http_get 5 \
         "$MOONRAKER_HTTP_BASE/printer/objects/query?configfile&save_variables&gcode_macro%20_AD5X_Z_SAVED_CHECK_POLICY" \
         2>/dev/null
 }
@@ -268,7 +300,7 @@ zcal_rc_wait_klippy_connected(){
 zcal_rc_firmware_restart(){
     zcal_rc_functions_only && return 0
     zcal_rc_wait_klippy_connected || return 1
-    wget -q -T 10 --post-data='' -O - \
+    ad5x_http_post 10 \
         "$MOONRAKER_HTTP_BASE/printer/firmware_restart" >/dev/null 2>&1 || return 1
     wait_klippy_ready
 }
