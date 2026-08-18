@@ -3,7 +3,8 @@
 #
 # This lifecycle intentionally does NOT deploy or modify plugins_ad5x.py.
 # It installs a separate plugins_ad5x_zcal component beside any existing
-# shared/IFS backend and verifies that the shared backend survives unchanged.
+# shared/IFS backend and verifies that the shared backend survives each
+# individual ZCal transaction unchanged. It never owns/pins the shared backend.
 # Target runtime: Flashforge AD5X Z-Mod chroot.
 set -eu
 
@@ -256,7 +257,7 @@ import json, pathlib, sys
 p=pathlib.Path(sys.argv[1])
 d={
     "schema": 1,
-    "shared_signature": sys.argv[2],
+    "shared_signature_at_adoption": sys.argv[2],
     "z_endpoint_original_http": sys.argv[3],
     "observer_installed_sha256": sys.argv[4],
     "core_installed_sha256": sys.argv[5],
@@ -285,10 +286,7 @@ if [ "$MODE" = status ]; then
     owned_runtime_ok || fail 'standalone ZCal backend ownership/runtime mismatch'
     wait_moonraker_ready || fail 'Moonraker/Klippy not ready'
     verify_z_backend || fail 'standalone ZCal backend endpoint verification failed'
-    SHARED_NOW="$(shared_signature /tmp/zcal-shared-status.$$)"
-    rm -f /tmp/zcal-shared-status.$$
-    [ "$SHARED_NOW" = "$(manifest_value shared_signature)" ] || fail 'shared backend signature changed'
-    echo '[OK] standalone Z Calibration observer active; shared backend preserved'
+    echo '[OK] standalone Z Calibration observer active'
     exit 0
 fi
 
@@ -306,7 +304,6 @@ Z_ORIGINAL_HTTP="$(http_code GET "$MOONRAKER_HTTP_BASE/server/plugins_ad5x/z_cal
 
 if [ -f "$MANIFEST" ]; then
     owned_runtime_ok || fail 'existing standalone ZCal ownership is inconsistent'
-    [ "$SHARED_BEFORE" = "$(manifest_value shared_signature)" ] || fail 'shared backend changed since ZCal ownership began'
 else
     file_matches_source_or_absent "$OBSERVER_DEST" "$OBSERVER_SOURCE" || fail 'foreign standalone observer destination exists'
     file_matches_source_or_absent "$CORE_DEST" "$CORE_SOURCE" || fail 'foreign ZCal core destination exists'
@@ -390,7 +387,7 @@ case "$MODE" in
         start_moonraker || fail 'Moonraker start failed'
         wait_moonraker_ready || fail 'Moonraker/Klippy ready timeout'
         SHARED_AFTER="$(shared_signature "$B/shared-after.json")"
-        [ "$SHARED_AFTER" = "$(manifest_value shared_signature)" ] || fail 'shared backend changed during uninstall'
+        [ "$SHARED_AFTER" = "$SHARED_BEFORE" ] || fail 'shared backend changed during uninstall'
         Z_AFTER_HTTP="$(http_code GET "$MOONRAKER_HTTP_BASE/server/plugins_ad5x/z_calibration/snapshot" "$B/z-after.json")"
         [ "$Z_AFTER_HTTP" = "$(manifest_value z_endpoint_original_http)" ] || fail 'ZCal endpoint did not return to original availability'
         mv "$STATE_DIR" "$B/ownership-state-restored"
