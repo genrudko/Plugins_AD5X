@@ -1,0 +1,210 @@
+#!/bin/sh
+# Canonical pure-Klipper RC Productization lifecycle for Z Calibration.
+#
+# This entrypoint deliberately performs no Git operation. It may be executed
+# from an exact-commit staging directory while the live ad5x_custom worktree
+# remains on an unrelated feature branch (for example IFS work). The shared
+# productizer/runtime helper owns hook/policy/settings semantics; this script
+# owns the bounded filesystem transaction + Klipper reload boundary.
+set -eu
+
+SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SOURCE_DIR="${AD5X_ZCAL_SOURCE_DIR:-$(CDPATH= cd -- "$SELF_DIR/.." && pwd)}"
+STATE_ROOT="${AD5X_STATE_DIR:-/opt/config/mod_data/ad5x_custom}"
+GENERATED="$STATE_ROOT/generated"
+STATE="$STATE_ROOT/state"
+BACKUPS="$STATE_ROOT/backups"
+LOG_DIR="$STATE_ROOT/log"
+KLIPPER_INCLUDES="${AD5X_KLIPPER_INCLUDES:-/opt/config/mod_data/plugins.cfg}"
+MOONRAKER_HTTP_BASE="${AD5X_MOONRAKER_HTTP_BASE:-http://127.0.0.1:7125}"
+MOONRAKER_READY_TIMEOUT="${AD5X_MOONRAKER_READY_TIMEOUT:-90}"
+MOONRAKER_STOP_TIMEOUT="${AD5X_MOONRAKER_STOP_TIMEOUT:-30}"
+MOONRAKER_COMPONENTS_DIR="${AD5X_MOONRAKER_COMPONENTS_DIR:-/opt/config/base/moonraker/components}"
+PLUGIN_DIR="$SOURCE_DIR"
+MODE="${1:-}"
+B=""
+MOONRAKER_WAS_RUNNING=0
+MOONRAKER_TRANSITION_STARTED=0
+POLICY_INCLUDE='[include ad5x_custom/generated/zcal_owner_rc.cfg]'
+
+case "$MODE" in
+    install|update|repair|uninstall|status) ;;
+    *)
+        echo "usage: $0 {install|update|repair|uninstall|status}" >&2
+        exit 2
+        ;;
+esac
+
+fail(){ echo "ОШИБКА: $*" >&2; exit 1; }
+python_bin(){
+    if [ -n "${AD5X_PYTHON_BIN:-}" ] && [ -x "$AD5X_PYTHON_BIN" ]; then
+        echo "$AD5X_PYTHON_BIN"
+    elif [ -x /root/moonraker-env/bin/python3 ]; then
+        echo /root/moonraker-env/bin/python3
+    elif command -v python3 >/dev/null 2>&1; then
+        command -v python3
+    else
+        return 1
+    fi
+}
+sha256_file(){ sha256sum "$1" | awk '{print $1}'; }
+append_line(){
+    F="$1"; L="$2"
+    [ -f "$F" ] || : >"$F"
+    grep -Fqx "$L" "$F" 2>/dev/null || printf '%s\n' "$L" >>"$F"
+}
+remove_exact_line(){
+    F="$1"; L="$2"
+    [ -f "$F" ] || return 0
+    awk -v line="$L" '$0 != line { print }' "$F" >"$F.tmp"
+    mv "$F.tmp" "$F"
+}
+moonraker_server_info(){ wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/server/info" 2>/dev/null; }
+klippy_ready_from_json(){
+    COMPACT="$(printf '%s' "$1" | tr -d '[:space:]')"
+    case "$COMPACT" in *'"klippy_connected":true'*) : ;; *) return 1 ;; esac
+    case "$COMPACT" in *'"klippy_state":"ready"'*) return 0 ;; *) return 1 ;; esac
+}
+wait_klippy_ready(){
+    LIMIT="${1:-$MOONRAKER_READY_TIMEOUT}"
+    COUNT=0
+    while [ "$COUNT" -lt "$LIMIT" ]; do
+        INFO="$(moonraker_server_info 2>/dev/null || true)"
+        [ -n "$INFO" ] && klippy_ready_from_json "$INFO" && return 0
+        COUNT=$((COUNT + 1))
+        sleep 1
+    done
+    return 1
+}
+check_idle(){
+    STATE_JSON="$(wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null)" \
+        || fail 'не удалось подтвердить idle state: Moonraker print_stats недоступен'
+    PY="$(python_bin)" || fail 'Python недоступен'
+    PRINT_STATE="$(printf '%s' "$STATE_JSON" | "$PY" -B -c '
+import json, sys
+try:
+    data=json.load(sys.stdin)
+    state=data["result"]["status"]["print_stats"]["state"]
+except (json.JSONDecodeError, KeyError, TypeError):
+    raise SystemExit(1)
+if not isinstance(state, str) or not state:
+    raise SystemExit(1)
+sys.stdout.write(state)
+')" || fail 'невалидный Moonraker print_stats response'
+    case "$PRINT_STATE" in
+        standby|complete|error|cancelled) return 0 ;;
+        printing|paused) fail 'принтер сейчас печатает или стоит на паузе' ;;
+        *) fail "неизвестное print_stats.state=$PRINT_STATE" ;;
+    esac
+}
+
+mkdir -p "$GENERATED" "$STATE" "$BACKUPS" "$LOG_DIR"
+[ -s "$SOURCE_DIR/installer/z_calibration_runtime.sh" ] || fail 'runtime helper отсутствует в source staging'
+[ -s "$SOURCE_DIR/installer/z_calibration_productization.py" ] || fail 'productizer отсутствует в source staging'
+[ -s "$SOURCE_DIR/z_calibration_rc_policy.cfg" ] || fail 'canonical RC policy отсутствует в source staging'
+. "$SOURCE_DIR/installer/z_calibration_runtime.sh"
+zcal_core_init_paths
+
+include_count(){ grep -Fxc "$POLICY_INCLUDE" "$KLIPPER_INCLUDES" 2>/dev/null || true; }
+plan_baseline_source(){
+    PY="$(python_bin)" || return 1
+    "$PY" -B - "$(zcal_rc_plan_file)" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    print(json.load(f).get("baseline_source", ""))
+PY
+}
+prepare_include_provenance(){
+    COUNT="$(include_count)"
+    [ "$COUNT" -le 1 ] || fail 'duplicate generated RC policy include'
+    if [ -f "$ZCAL_RC_STATE_DIR/manifest.json" ]; then
+        [ -f "$ZCAL_RC_STATE_DIR/include-state" ] \
+            || fail 'Z Calibration ownership manifest exists without include provenance'
+        return 0
+    fi
+    BASELINE="$(plan_baseline_source)" || fail 'не удалось прочитать productization plan'
+    case "$BASELINE" in
+        legacy_backup) ORIGINAL=0 ;;
+        current) ORIGINAL="$COUNT" ;;
+        *) fail "неожиданный baseline_source=$BASELINE" ;;
+    esac
+    printf 'original_present=%s\n' "$ORIGINAL" >"$B/include-state.pending"
+}
+commit_include_provenance(){
+    [ -f "$ZCAL_RC_STATE_DIR/include-state" ] && return 0
+    [ -f "$B/include-state.pending" ] || return 1
+    cp -p "$B/include-state.pending" "$ZCAL_RC_STATE_DIR/include-state"
+}
+restore_owned_include_state(){
+    [ -f "$ZCAL_RC_STATE_DIR/include-state" ] || return 1
+    case "$(cat "$ZCAL_RC_STATE_DIR/include-state")" in
+        original_present=0) remove_exact_line "$KLIPPER_INCLUDES" "$POLICY_INCLUDE" ;;
+        original_present=1) append_line "$KLIPPER_INCLUDES" "$POLICY_INCLUDE" ;;
+        *) return 1 ;;
+    esac
+}
+
+operation_prepare(){
+    check_idle
+    zcal_rc_preflight || fail 'RC productization preflight failed closed'
+    STAMP="$(date +%Y%m%d-%H%M%S)"
+    B="$BACKUPS/zcal-productization-$MODE-$STAMP-$$"
+    mkdir -p "$B"
+    snapshot "$KLIPPER_INCLUDES" plugins.cfg
+    prepare_include_provenance
+}
+rollback_operation(){
+    set +e
+    echo 'ОШИБКА: RC Productization не завершён, восстанавливается transaction snapshot.' >&2
+    restore_snapshot "$KLIPPER_INCLUDES" plugins.cfg >/dev/null 2>&1 || true
+    if ! zcal_rc_firmware_restart >/dev/null 2>&1; then
+        echo 'CRITICAL: файлы rollback восстановлены, но effective Klipper state не удалось перезагрузить автоматически.' >&2
+    fi
+    echo "Rollback backup: $B" >&2
+}
+
+if [ "$MODE" = status ]; then
+    if [ ! -f "$ZCAL_RC_STATE_DIR/manifest.json" ]; then
+        echo '[INACTIVE] Z Calibration RC Productization ownership manifest отсутствует'
+        exit 1
+    fi
+    [ "$(include_count)" -eq 1 ] || fail 'generated RC policy include отсутствует/дублирован'
+    zcal_rc_live_verify || fail 'effective RC state не соответствует ownership manifest'
+    echo '[OK] Z Calibration RC Productization active and verified'
+    exit 0
+fi
+
+operation_prepare
+SUCCESS=0
+finish(){
+    RC=$?
+    trap - EXIT HUP INT TERM
+    if [ "$SUCCESS" -ne 1 ]; then
+        rollback_operation
+        [ "$RC" -ne 0 ] || RC=1
+    fi
+    exit "$RC"
+}
+trap finish EXIT HUP INT TERM
+
+case "$MODE" in
+    install|update|repair)
+        zcal_rc_apply || fail 'apply/update/repair mutation failed'
+        commit_include_provenance || fail 'include provenance commit failed'
+        [ "$(include_count)" -eq 1 ] || fail 'generated RC policy include invariant failed'
+        zcal_rc_firmware_restart || fail 'Klipper reload after RC apply failed'
+        zcal_rc_live_verify || fail 'effective RC state verification failed'
+        ;;
+    uninstall)
+        zcal_rc_uninstall || fail 'uninstall mutation failed'
+        commit_include_provenance || fail 'include provenance adoption failed'
+        restore_owned_include_state || fail 'generated include baseline restore failed'
+        zcal_rc_firmware_restart || fail 'Klipper reload after RC uninstall failed'
+        zcal_rc_live_verify_uninstalled || fail 'effective uninstall baseline verification failed'
+        zcal_rc_finalize_uninstall || fail 'ownership finalize failed'
+        ;;
+esac
+
+SUCCESS=1
+trap - EXIT HUP INT TERM
+echo "[OK] Z Calibration RC Productization $MODE complete. Backup: $B"

@@ -15,6 +15,7 @@ on:
       - 'install.sh'
       - 'installer/z_calibration_runtime.sh'
       - 'installer/z_calibration_productization.py'
+      - 'installer/z_calibration_rc_lifecycle.sh'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_z_calibration_core.py'
       - 'tests/test_z_calibration_orchestrator.py'
@@ -24,6 +25,7 @@ on:
       - 'tests/test_z_calibration_productization.py'
       - 'tests/test_z_calibration_productization_reload.py'
       - 'tests/test_z_calibration_lifecycle_reload.py'
+      - 'tests/test_z_calibration_rc_lifecycle.py'
       - 'tests/test_z_calibration_production_policy_asset.py'
       - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
       - '.github/workflows/z-calibration-core.yml'
@@ -39,6 +41,7 @@ on:
       - 'install.sh'
       - 'installer/z_calibration_runtime.sh'
       - 'installer/z_calibration_productization.py'
+      - 'installer/z_calibration_rc_lifecycle.sh'
       - 'tests/test_plugins_ad5x_component.py'
       - 'tests/test_z_calibration_core.py'
       - 'tests/test_z_calibration_orchestrator.py'
@@ -48,6 +51,7 @@ on:
       - 'tests/test_z_calibration_productization.py'
       - 'tests/test_z_calibration_productization_reload.py'
       - 'tests/test_z_calibration_lifecycle_reload.py'
+      - 'tests/test_z_calibration_rc_lifecycle.py'
       - 'tests/test_z_calibration_production_policy_asset.py'
       - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
       - '.github/workflows/z-calibration-core.yml'
@@ -80,8 +84,13 @@ jobs:
           tests/test_z_calibration_productization.py
           tests/test_z_calibration_productization_reload.py
           tests/test_z_calibration_lifecycle_reload.py
+          tests/test_z_calibration_rc_lifecycle.py
           tests/test_z_calibration_production_policy_asset.py
       - name: Check shell syntax
-        run: sh -n install.sh installer/z_calibration_runtime.sh
+        run: >-
+          sh -n
+          install.sh
+          installer/z_calibration_runtime.sh
+          installer/z_calibration_rc_lifecycle.sh
       - name: Run repository tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
