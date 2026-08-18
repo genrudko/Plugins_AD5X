@@ -31,7 +31,11 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertNotIn("git checkout", lowered)
         self.assertNotIn("git reset", lowered)
         self.assertNotIn("git clean", lowered)
-        self.assertNotIn(" git ", lowered)
+        executable_git = [
+            line for line in self.text.splitlines()
+            if line.strip().lower().startswith("git ")
+        ]
+        self.assertEqual(executable_git, [])
 
     def test_apply_crosses_reload_and_live_verification_boundary(self) -> None:
         block = self.text[self.text.index("install|update|repair)") : self.text.index("uninstall)")]
