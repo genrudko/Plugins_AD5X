@@ -76,6 +76,42 @@ class ZCalibrationBackendLifecycleTests(unittest.TestCase):
         self.assertIn("ownership-state-restored", self.script)
         self.assertIn("install|update|repair|uninstall|status", self.script)
 
+    def test_moonraker_stop_has_bounded_process_zero_gate(self) -> None:
+        self.assertIn('MOONRAKER_STOP_TIMEOUT="${AD5X_MOONRAKER_STOP_TIMEOUT:-30}"', self.script)
+        self.assertIn("moonraker_process_count(){", self.script)
+        self.assertIn("wait_moonraker_stopped(){", self.script)
+        self.assertIn('[ "$(moonraker_process_count)" -eq 0 ] && return 0', self.script)
+
+    def test_install_waits_for_moonraker_exit_before_first_mutation(self) -> None:
+        start = self.script.index('    install|update|repair)')
+        end = self.script.index('    uninstall)', start)
+        block = self.script[start:end]
+        stop = block.index("stop_moonraker || fail 'Moonraker stop failed'")
+        wait = block.index("wait_moonraker_stopped || fail 'Moonraker stop timeout'")
+        mutate = block.index('copy_atomic "$OBSERVER_SOURCE" "$OBSERVER_DEST" 0644')
+        self.assertLess(stop, wait)
+        self.assertLess(wait, mutate)
+
+    def test_uninstall_waits_for_moonraker_exit_before_restore(self) -> None:
+        start = self.script.index('    uninstall)')
+        end = self.script.index('\n        ;;\nesac', start)
+        block = self.script[start:end]
+        stop = block.index("stop_moonraker || fail 'Moonraker stop failed'")
+        wait = block.index("wait_moonraker_stopped || fail 'Moonraker stop timeout'")
+        restore = block.index('restore_file "$OBSERVER_DEST" observer.py "$ORIGINAL"')
+        self.assertLess(stop, wait)
+        self.assertLess(wait, restore)
+
+    def test_rollback_waits_for_moonraker_exit_before_restore(self) -> None:
+        start = self.script.index("rollback(){")
+        end = self.script.index("\ntrap rollback", start)
+        block = self.script[start:end]
+        stop = block.index("stop_moonraker")
+        wait = block.index("wait_moonraker_stopped")
+        restore = block.index('restore_file "$OBSERVER_DEST" observer.py "$B"')
+        self.assertLess(stop, wait)
+        self.assertLess(wait, restore)
+
 
 if __name__ == "__main__":
     unittest.main()
