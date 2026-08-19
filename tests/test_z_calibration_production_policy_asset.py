@@ -62,7 +62,7 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             self.assertNotEqual(restore_pos, -1, macro)
             branch_pos = preceding.rfind("{% ")
             self.assertGreater(restore_pos, branch_pos, macro)
-        self.assertEqual(guard.count("LOAD_GCODE_OFFSET"), 5)
+        self.assertEqual(guard.count("LOAD_GCODE_OFFSET"), 6)
 
     def test_policy_guard_is_pure_klipper_and_does_not_own_start_hook(self) -> None:
         self.assertIn('RESPOND PREFIX="info" MSG="Plugins AD5X saved+check PASS:', self.asset)
@@ -70,9 +70,53 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertNotIn("[gcode_macro _USER_START_PRINT]", self.asset)
         self.assertNotIn("[gcode_macro _USER_START_PRINT]", self.wrapper)
 
+    def test_preprint_setting_is_persistent_and_maps_to_zmod_modes(self) -> None:
+        self.assertIn("[gcode_macro AD5X_Z_SET_PREPRINT]", self.asset)
+        self.assertIn("variable_preprint_enabled_mode: 3", self.asset)
+        self.assertIn("variable_preprint_disabled_mode: 0", self.asset)
+        setter_start = self.asset.index("[gcode_macro AD5X_Z_SET_PREPRINT]")
+        check_start = self.asset.index("[gcode_macro AD5X_Z_CHECK]")
+        setter = self.asset[setter_start:check_start]
+        self.assertIn("SAVE_VARIABLE VARIABLE=mesh_test", setter)
+        self.assertIn("ENABLED", setter)
+        self.assertIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset VALUE=0.0", setter)
+        self.assertIn("LOAD_GCODE_OFFSET", setter)
+
+    def test_preprint_orchestrator_orders_final_mesh_before_z_policy(self) -> None:
+        guard_start = self.asset.index("[gcode_macro _AD5X_Z_SAVED_CHECK_POLICY]")
+        actions_start = self.asset.index("[gcode_macro _AD5X_Z_ACTION_CONTRACT]")
+        guard = self.asset[guard_start:actions_start]
+        self.assertIn("fresh_mesh_proven", guard)
+        self.assertIn("force_kamp == True", guard)
+        self.assertIn("force_leveling == True", guard)
+        self.assertIn("print_leveling != 0 and screen == False", guard)
+        self.assertIn("native_leveling_ambiguous", guard)
+        self.assertIn("_AD5X_Z_PREPRINT_FRESH_MESH", guard)
+        self.assertIn("_AD5X_Z_PREPRINT_DISABLED", guard)
+        self.assertLess(guard.index("mesh_test == 0"), guard.index("mesh_test != 3"))
+        self.assertLess(guard.index("fresh_mesh_proven %}"), guard.index("native_leveling_ambiguous %}"))
+
+    def test_fresh_mesh_path_resets_transient_alignment_without_second_probe(self) -> None:
+        start = self.asset.index("[gcode_macro _AD5X_Z_PREPRINT_FRESH_MESH]")
+        end = self.asset.index("[gcode_macro _AD5X_Z_SAVED_CHECK_POLICY]")
+        block = self.asset[start:end]
+        self.assertIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset VALUE=0.0", block)
+        self.assertIn("LOAD_GCODE_OFFSET", block)
+        self.assertNotIn("_MESH_TEST", block)
+        self.assertNotIn("PROBE", block)
+
+    def test_native_screen_leveling_choice_is_not_guessed(self) -> None:
+        guard_start = self.asset.index("[gcode_macro _AD5X_Z_SAVED_CHECK_POLICY]")
+        actions_start = self.asset.index("[gcode_macro _AD5X_Z_ACTION_CONTRACT]")
+        guard = self.asset[guard_start:actions_start]
+        self.assertIn("print_leveling != 0 and screen != False", guard)
+        ambiguous = guard.index("native_leveling_ambiguous %}")
+        abort = guard.index("_AD5X_Z_RC_ABORT_PATH", ambiguous)
+        self.assertLess(ambiguous, abort)
+
     def test_semantic_actions_delegate_only_to_zmod_owned_physical_paths(self) -> None:
         self.assertIn("[gcode_macro _AD5X_Z_ACTION_CONTRACT]", self.asset)
-        self.assertIn("variable_contract_version: 1", self.asset)
+        self.assertIn("variable_contract_version: 2", self.asset)
         self.assertIn('variable_runtime_profile: "ad5x_runtime"', self.asset)
         self.assertIn("[gcode_macro AD5X_Z_CHECK]", self.asset)
         self.assertIn("[gcode_macro AD5X_Z_BUILD_RUNTIME_MESH]", self.asset)
