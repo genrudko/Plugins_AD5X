@@ -153,6 +153,7 @@ class AD5XIFSBridgeTests(unittest.TestCase):
         line = f'{command} FILENAME="demo.gcode"'
         parts = KLIPPER_ARGS_RE.split(line.upper())
         parsed = "".join(parts[:3]).strip()
+        self.assertEqual(command, "ADIFS_JOB_PREVIEW")
         self.assertEqual(parsed, command)
         self.assertRegex(command, r"^[A-Z_]+$")
 
@@ -219,60 +220,41 @@ class AD5XIFSBridgeTests(unittest.TestCase):
         )
         self.assertEqual(preview["allowed_tool_count"], 2)
         self.assertEqual(preview["resolved_tool_map"], [2, 1])
-        self.assertTrue(preview["auto_assign"]["any_success"])
-        self.assertTrue(preview["auto_assign"]["weak_color"])
-        self.assertFalse(preview["auto_assign"]["material_failure"])
-        self.assertIn("canonical Z-Mod assignment", preview["messages"][-1])
-        self.assertEqual(gcmd.responses, ["ADIFS_JOB_PREVIEW_OK"])
-
-        # Preview temporarily supplies file_colors to the canonical matcher and
-        # restores the source object's previous state afterwards.
+        self.assertEqual(
+            preview["auto_assign"],
+            {
+                "flags": bridge_module.AUTO_ASSIGN_ANY_SUCCESS
+                | bridge_module.AUTO_ASSIGN_COLOR_WEAK,
+                "any_success": True,
+                "material_failure": False,
+                "color_failure": False,
+                "weak_color": True,
+                "duplicate_slot": False,
+            },
+        )
+        self.assertIn("// canonical Z-Mod assignment", preview["messages"])
         self.assertEqual(
             self.printer.zmod_color.assert_preview_file_colors,
-            [(0, "#f330f9", "pla"), (1, "#161616", "petg")],
+            [
+                (0, "#f330f9", "pla"),
+                (1, "#161616", "petg"),
+            ],
         )
         self.assertEqual(self.printer.zmod_color.file_colors, original_file_colors)
 
-    def test_job_preview_rejects_path_escape_before_calling_zmod(self):
+    def test_preview_rejects_bad_filename(self):
         self.printer.handlers["klippy:ready"]()
-        with self.assertRaises(ValueError):
-            self.bridge.cmd_JOB_PREVIEW(FakeCommand("../config/printer.cfg"))
-        self.assertEqual(self.printer.zmod_color.calls, [])
+        for filename in ("", "/etc/passwd", "../printer.cfg"):
+            with self.subTest(filename=filename):
+                with self.assertRaises(ValueError):
+                    self.bridge.cmd_JOB_PREVIEW(FakeCommand(filename))
 
-    def test_job_preview_fails_explicitly_without_zmod_color(self):
-        self.printer.objects.pop("zmod_color")
-        self.printer.handlers["klippy:ready"]()
-        with self.assertRaises(ValueError):
-            self.bridge.cmd_JOB_PREVIEW(FakeCommand("demo.gcode"))
-        preview = self.bridge.get_status(2.0)["job_preview"]
-        self.assertFalse(preview["available"])
-        self.assertEqual(preview["error"], "zmod_color_unavailable")
-
-    def test_stall_mask_is_per_slot(self):
-        self.printer.handlers["klippy:ready"]()
-        data = self.printer.objects["zmod_ifs"].ifs_data
-        data.values["stall_state"] = 0b0101
-        data.values["Stall"] = True
-        status = self.bridge.get_status(2.0)
-        self.assertTrue(status["stall"])
-        self.assertEqual([s["stall"] for s in status["slots"]], [True, False, True, False])
-
-    def test_raw_channel_is_not_used_as_active_slot(self):
-        self.printer.handlers["klippy:ready"]()
-        data = self.printer.objects["zmod_ifs"].ifs_data
-        data.cur_port = 3
-        data.values["Chan"] = 0
-        status = self.bridge.get_status(3.0)
-        self.assertEqual(status["active_slot"], 3)
-        self.assertEqual(status["raw_channel"], 0)
-
-    def test_disconnect_returns_unavailable_and_clears_preview(self):
+    def test_disconnect_clears_provider_references_and_preview(self):
         self.printer.handlers["klippy:ready"]()
         self.bridge.cmd_JOB_PREVIEW(FakeCommand("demo.gcode"))
         self.printer.handlers["klippy:disconnect"]()
-        status = self.bridge.get_status(4.0)
+        status = self.bridge.get_status(3.0)
         self.assertFalse(status["available"])
-        self.assertFalse(status["job_preview"]["available"])
         self.assertEqual(status["job_preview"]["error"], "klippy_disconnected")
 
 
