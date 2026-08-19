@@ -1,6 +1,9 @@
 name: AD5X IFS bridge preflight
 
 on:
+  push:
+    branches:
+      - feature/ifs-manager-v1
   pull_request:
     paths:
       - 'VERSION'
