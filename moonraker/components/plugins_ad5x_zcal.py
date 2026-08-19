@@ -35,7 +35,7 @@ ZMOD_SLICER_OFFSET_SENTINEL = 99.0
 Z_RC_POLICY_OBJECT = "gcode_macro _AD5X_Z_SAVED_CHECK_POLICY"
 Z_RC_POLICY_ID = "zcal-saved-check-v1-20260817"
 Z_USER_START_CONFIG_KEY = "gcode_macro _user_start_print"
-Z_RC_GUARD = "_AD5X_Z_SAVED_CHECK_POLICY"
+Z_RC_GUARD = "_ADZ_SAVED_CHECK_POLICY"
 Z_CC_APPLY = "CC_APPLY_PROFILE"
 
 _Z_TERMINAL_JOB_EVENTS = {"complete", "cancelled", "error", "standby"}
