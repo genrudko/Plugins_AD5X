@@ -475,6 +475,11 @@ class PluginsAD5XZCalibration:
                     if runtime_available and effective_valid
                     else None
                 ),
+                "effective_offset": (
+                    self._z_offsets.effective
+                    if runtime_available and effective_valid
+                    else None
+                ),
                 "provenance_status": (
                     self._z_provenance.get("status", "unavailable")
                     if runtime_available
