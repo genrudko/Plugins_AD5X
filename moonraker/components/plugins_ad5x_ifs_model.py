@@ -218,6 +218,7 @@ def get_ifs_capabilities() -> Dict[str, Any]:
         "mapping": {
             "tool_to_slot": True,
             "preprint_preview": True,
+            "draft_preprint_mapping": True,
             "apply_preprint_mapping": False,
             "endless_spool": False,
         },
@@ -564,6 +565,102 @@ def build_job_preview_token(job_preview: Optional[Dict[str, Any]]) -> str:
         ensure_ascii=True,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def build_job_mapping_draft(
+    job_preview: Optional[Dict[str, Any]],
+    resolved_tool_map: Any,
+    expected_preview_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate a complete manual T->slot draft without mutating Z-Mod."""
+    import hashlib
+    import json
+
+    preview = job_preview if isinstance(job_preview, dict) else {}
+    token = build_job_preview_token(preview)
+    blockers: List[str] = []
+    warnings: List[str] = []
+
+    def block(code: str) -> None:
+        if code not in blockers:
+            blockers.append(code)
+
+    if not preview.get("available", False) or not token:
+        block("preview_unavailable")
+    if expected_preview_token is not None and expected_preview_token != token:
+        block("stale_preview")
+
+    allowed = preview.get("allowed_tool_count")
+    valid_count = (
+        isinstance(allowed, int)
+        and not isinstance(allowed, bool)
+        and allowed > 0
+    )
+    if not valid_count:
+        block("invalid_allowed_tool_count")
+
+    normalized: List[int] = []
+    if (
+        not isinstance(resolved_tool_map, list)
+        or not valid_count
+        or len(resolved_tool_map) != allowed
+        or any(
+            isinstance(slot, bool)
+            or not isinstance(slot, int)
+            or slot < 1
+            or slot > SLOT_COUNT
+            for slot in (resolved_tool_map if isinstance(resolved_tool_map, list) else [])
+        )
+    ):
+        block("invalid_resolved_tool_map")
+    else:
+        normalized = [int(slot) for slot in resolved_tool_map]
+
+    requirements = []
+    for item in preview.get("requirements") or []:
+        if not isinstance(item, dict):
+            continue
+        tool = item.get("tool")
+        if isinstance(tool, bool) or not isinstance(tool, int) or tool < 0:
+            continue
+        if valid_count and tool >= allowed:
+            block("invalid_requirement_tool")
+            continue
+        requirements.append(tool)
+
+    assignments = []
+    if normalized:
+        assignments = [
+            {"tool": tool, "slot": normalized[tool]}
+            for tool in sorted(set(requirements))
+        ]
+        used = [item["slot"] for item in assignments]
+        if len(used) != len(set(used)):
+            warnings.append("manual_duplicate_slot")
+
+    provider_map = preview.get("resolved_tool_map")
+    if not isinstance(provider_map, list):
+        provider_map = []
+    canonical = json.dumps(
+        {"preview_token": token, "resolved_tool_map": normalized},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    draft_token = hashlib.sha256(canonical).hexdigest() if not blockers and normalized else ""
+    return {
+        "available": bool(preview.get("available", False) and token),
+        "status": "ready" if not blockers else "blocked",
+        "mapping_source": "manual",
+        "filename": preview.get("filename") if isinstance(preview.get("filename"), str) else "",
+        "preview_token": token,
+        "draft_token": draft_token,
+        "allowed_tool_count": allowed if valid_count else 0,
+        "resolved_tool_map": normalized,
+        "provider_resolved_tool_map": list(provider_map),
+        "assignments": assignments,
+        "modified": bool(normalized and normalized != provider_map),
+        "blockers": blockers,
+        "warnings": warnings,
+    }
 
 
 def build_job_launch_gate(

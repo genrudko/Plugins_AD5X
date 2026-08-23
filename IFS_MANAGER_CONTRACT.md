@@ -299,7 +299,8 @@ Auto hides healthy mappings. Hybrid exposes a compact summary and `Измени�
 Current write state remains conservative:
 
 - preview: enabled;
-- manual draft/apply: disabled until implemented/accepted;
+- manual draft: enabled through the read-only `/server/plugins_ad5x/ifs/job/mapping/draft` contract and bound to the exact provider preview token;
+- manual apply: disabled until hardware acceptance;
 - production `PRINT_ZCOLOR` launch: disabled until hardware acceptance;
 - preview tokens must include all mutable dependencies and be revalidated immediately before any future start.
 

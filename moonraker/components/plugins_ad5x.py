@@ -15,6 +15,9 @@ from ..common import RequestType, TransportType
 try:
     from .plugins_ad5x_ifs_model import (
         IFS_SCHEMA_VERSION,
+        build_job_launch_gate,
+        build_job_mapping_draft,
+        build_preprint_plan,
         normalize_appearance,
         normalize_module,
         normalize_spool_metadata,
@@ -32,6 +35,9 @@ except ImportError:
     _model_module = importlib.util.module_from_spec(_model_spec)
     _model_spec.loader.exec_module(_model_module)
     IFS_SCHEMA_VERSION = _model_module.IFS_SCHEMA_VERSION
+    build_job_launch_gate = _model_module.build_job_launch_gate
+    build_job_mapping_draft = _model_module.build_job_mapping_draft
+    build_preprint_plan = _model_module.build_preprint_plan
     normalize_appearance = _model_module.normalize_appearance
     normalize_module = _model_module.normalize_module
     normalize_spool_metadata = _model_module.normalize_spool_metadata
@@ -90,6 +96,7 @@ SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/snapshot"
 IFS_ACTION_ENDPOINT = "/server/plugins_ad5x/ifs/action"
 IFS_METADATA_ENDPOINT = "/server/plugins_ad5x/ifs/metadata"
 IFS_JOB_PREVIEW_ENDPOINT = "/server/plugins_ad5x/ifs/job/preview"
+IFS_JOB_MAPPING_DRAFT_ENDPOINT = "/server/plugins_ad5x/ifs/job/mapping/draft"
 IFS_SPOOLMAN_STATUS_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/status"
 IFS_SPOOLMAN_LIBRARY_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/library"
 IFS_SPOOLMAN_BIND_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/bind"
@@ -166,6 +173,13 @@ class PluginsAD5X:
             IFS_JOB_PREVIEW_ENDPOINT,
             RequestType.POST,
             self._handle_ifs_job_preview,
+            transports=TransportType.HTTP | TransportType.WEBSOCKET,
+            auth_required=True,
+        )
+        self.server.register_endpoint(
+            IFS_JOB_MAPPING_DRAFT_ENDPOINT,
+            RequestType.POST,
+            self._handle_ifs_job_mapping_draft,
             transports=TransportType.HTTP | TransportType.WEBSOCKET,
             auth_required=True,
         )
@@ -1325,6 +1339,79 @@ class PluginsAD5X:
             "ok": True,
             "filename": filename,
             "job_preview": dict(preview),
+            "snapshot": self.get_snapshot(),
+        }
+
+    async def _handle_ifs_job_mapping_draft(self, web_request: Any) -> Dict[str, Any]:
+        """Validate a manual mapping draft. This path never emits G-code."""
+        try:
+            preview_token = web_request.get_str("preview_token").strip()
+            resolved_tool_map = web_request.get("resolved_tool_map", None)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"Invalid IFS mapping draft request: {exc}",
+                "snapshot": self.get_snapshot(),
+            }
+
+        module = self._ifs_module if isinstance(self._ifs_module, dict) else {}
+        preview = module.get("job_preview")
+        if not module.get("available", False) or not isinstance(preview, dict):
+            return {
+                "ok": False,
+                "error": "IFS job preview is not available",
+                "snapshot": self.get_snapshot(),
+            }
+
+        draft = build_job_mapping_draft(
+            preview,
+            resolved_tool_map,
+            expected_preview_token=preview_token,
+        )
+        if draft.get("status") != "ready":
+            return {
+                "ok": False,
+                "error": ",".join(draft.get("blockers") or ["invalid_mapping_draft"]),
+                "mapping_draft": draft,
+                "snapshot": self.get_snapshot(),
+            }
+
+        effective_preview = dict(preview)
+        effective_preview["assignments"] = list(draft["assignments"])
+        effective_preview["resolved_tool_map"] = list(draft["resolved_tool_map"])
+        provider_auto_assign = effective_preview.get("auto_assign")
+        effective_preview["auto_assign"] = {
+            "flags": 0,
+            "any_success": True,
+            "material_failure": False,
+            "color_failure": False,
+            "weak_color": False,
+            "duplicate_slot": False,
+        }
+        plan = build_preprint_plan(
+            effective_preview,
+            module.get("slots") if isinstance(module.get("slots"), list) else [],
+        )
+        gate = build_job_launch_gate(
+            effective_preview,
+            plan,
+            module_state=module.get("state")
+            if isinstance(module.get("state"), str)
+            else "unknown",
+            print_state=self._print_state,
+            operation_state=self._operation_state,
+        )
+        gate["mapping_source"] = "manual"
+        gate["provider_preview_token"] = draft["preview_token"]
+        gate["draft_token"] = draft["draft_token"]
+        return {
+            "ok": True,
+            "mapping_draft": draft,
+            "provider_auto_assign": dict(provider_auto_assign)
+            if isinstance(provider_auto_assign, dict)
+            else {},
+            "preprint_plan": plan,
+            "launch_gate": gate,
             "snapshot": self.get_snapshot(),
         }
 
