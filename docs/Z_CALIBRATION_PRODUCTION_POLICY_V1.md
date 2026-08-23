@@ -14,18 +14,18 @@ Observed control case after load-cell calibration: `Probe=-1.7850`, `Mesh=-1.812
 
 This policy is the first owner-useful production release candidate for ordinary printing without manual Z-offset arithmetic.
 
-It deliberately does **not** activate a second Plugins AD5X motion implementation. Z-Mod remains the production pre-print motion/contact engine. Plugins AD5X adds a late, fail-closed policy check after Z-Mod's `_START_PRINT` Auto-Z/mesh logic and before the actual print proceeds.
+It deliberately does **not** activate a second Plugins AD5X motion implementation. Z-Mod remains the production pre-print motion/contact engine. Plugins AD5X requires the final mesh selected for the job — saved or freshly built — to be followed by the native Z-Mod `MESH_TEST=3` AutoZOffset reconciliation before printing proceeds.
 
-The intended owner path is:
+The intended invariant is:
 
 ```text
 ordinary print request
-→ Z-Mod _START_PRINT
-→ saved `auto` mesh remains active
-→ Z-Mod MESH_TEST=3 AutoZOffset path
+→ Z-Mod selects or builds the final mesh for this job
+→ persistent/global user Z baseline is loaded
+→ exactly one final native Z-Mod MESH_TEST=3 AutoZOffset reconciliation
 → nozzle clean / tare / contact measurement owned by Z-Mod
 → Z-Mod temporary standard Klipper Z adjustment
-→ Plugins AD5X _USER_START_PRINT policy guard
+→ Plugins AD5X validates the native result
 → accept and continue, or restore persistent global Z-offset and abort
 ```
 
@@ -33,21 +33,19 @@ This policy is evidence-bound to this printer and saved mesh. It is **not** a un
 
 ## 2. Required runtime mode
 
-The guarded unattended `saved+check` path requires all of the following:
+The guarded unattended path requires:
 
 ```text
 screen                = false
 LOAD_ZOFFSET          = 1
-PRINT_LEVELING        = 0
-FORCE_KAMP            = false
-FORCE_LEVELING        = false
 MESH_TEST             = 3
-active mesh profile   = auto
 ```
+
+For a saved-mesh job the accepted profile remains `auto`. For a fresh-mesh job (`PRINT_LEVELING`, forced full leveling, or another accepted fresh-mesh path), Plugins AD5X requires the newly selected mesh to be followed by the same native `MESH_TEST=3` reconciliation instead of treating mesh creation as equivalent to Auto-Z.
 
 `MESH_TEST=3` is intentional. Z-Mod mode 3 performs its existing AutoZOffset contact path but raises an error on its own large-delta condition instead of automatically falling back to KAMP. For this unattended policy, a large/mismatched condition must stop the job and require explicit review/full calibration rather than silently changing calibration strategy.
 
-Jobs that explicitly request fresh KAMP/full leveling are outside this saved-mesh RC policy and are not used to establish its acceptance.
+Fresh KAMP/full-leveling compatibility remains gated separately; no path may silently skip the final native Auto-Z reconciliation.
 
 ## 3. Accepted saved-mesh identity
 
@@ -67,16 +65,15 @@ Gate A raw matrix:
 -1.718333 -1.832500 -1.921667 -1.877500 -1.760000
 ```
 
-Accepted center/reference value used by the RC guard:
+Historical Gate A center/reference evidence:
 
 ```text
 saved_reference = -1.925833 mm
-reference_tolerance = ±0.000500 mm
 ```
 
-The narrow tolerance is an identity/integrity check on the accepted saved mesh value, not a physical probe-repeatability threshold.
+This value is retained only as historical/observer evidence. **The absolute mesh center is not a production Z invariant.** Load-cell recalibration, mechanical service and a rebuilt mesh can legitimately move absolute contact coordinates while the persistent user Z baseline remains a separate quantity. The active RC guard therefore no longer rejects a job solely because the center differs from `-1.925833`.
 
-If the active profile is not `auto`, the matrix shape is unavailable, or the center/reference no longer matches the accepted value, unattended saved+check is rejected. A different/rebuilt mesh requires explicit new acceptance rather than implicit reuse of this policy.
+For saved-mesh jobs, profile identity (`auto`) remains guarded. For fresh-mesh jobs, the final native probe-to-active-mesh delta and its bounded Auto-Z result are the relevant runtime evidence.
 
 ## 4. Hardware evidence
 
@@ -154,7 +151,6 @@ Unattended saved+check must abort when any guarded condition is true:
 
 - `MESH_TEST != 3`;
 - active mesh profile is not the accepted `auto` profile;
-- accepted saved reference identity check fails;
 - `abs(_TEST_POINT.temp_z_offset) >= 0.120000 mm`;
 - the existing Plugins lifecycle hook/backend cannot complete its late adoption;
 - Z-Mod itself aborts its preceding nozzle-clean/contact/mesh check.
@@ -180,7 +176,17 @@ Repository/unit/CI acceptance is necessary but not sufficient for unattended use
 
 After that owner-observed first-layer acceptance, the same unchanged hardware/mesh/policy may be used for the intended unattended print. Any geometry change or guard failure returns the system to explicit calibration/review instead of silently extending the policy.
 
-## 10. Deferred work
+## 10. Update and version rollback lifecycle
+
+The canonical lifecycle exposes `install`, `update`, `repair`, `rollback`, `uninstall`, and `status`. Every mutation is preceded by a bounded transaction snapshot and followed by a Klipper reload plus live verification.
+
+For `update`, the pre-update effective state is recorded only after the new version has passed live verification. If apply/reload/verification fails, the transaction is restored automatically. If the update technically succeeds but later proves undesirable on hardware, explicit `rollback` restores the previous successful snapshot, reloads Klipper, verifies the restored state, and preserves the version being left as the next undo point.
+
+Rollback snapshots are accepted only from the managed Z Calibration backup root and must contain the productizer plan, transaction snapshot, and `plugins.cfg` snapshot. A missing or foreign rollback target fails closed without guessing. `uninstall` remains a separate operation that restores the original pre-ZCAL ownership/settings baseline rather than merely moving to the previous plugin version.
+
+This lifecycle is deliberately independent of Git worktree state so future Z-Mod/Klipper updates can be compatibility-checked and the plugin can be updated or rolled back without modifying upstream Z-Mod files.
+
+## 11. Deferred work
 
 Not required for this RC first-layer/unattended-print objective:
 

@@ -14,8 +14,8 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.text = LIFECYCLE.read_text(encoding="utf-8")
 
-    def test_canonical_modes_cover_install_update_repair_uninstall(self) -> None:
-        self.assertIn("install|update|repair|uninstall|status", self.text)
+    def test_canonical_modes_cover_install_update_repair_rollback_uninstall(self) -> None:
+        self.assertIn("install|update|repair|rollback|uninstall|status", self.text)
         self.assertIn("install|update|repair)", self.text)
         self.assertIn("uninstall)", self.text)
 
@@ -42,6 +42,30 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertLess(block.index("zcal_rc_apply"), block.index("zcal_rc_firmware_restart"))
         self.assertLess(block.index("zcal_rc_firmware_restart"), block.index("zcal_rc_live_verify"))
 
+    def test_successful_update_records_previous_version_only_after_live_verify(self) -> None:
+        block = self.text[self.text.index("install|update|repair)") : self.text.index("rollback)")]
+        self.assertIn('record_rollback_target "$B"', block)
+        self.assertLess(block.index("zcal_rc_live_verify"), block.index('record_rollback_target "$B"'))
+
+    def test_explicit_rollback_restores_reload_verifies_and_preserves_undo_point(self) -> None:
+        start = self.text.index("rollback)")
+        end = self.text.index("uninstall)", start)
+        block = self.text[start:end]
+        order = [
+            block.index("restore_version_snapshot"),
+            block.index("zcal_rc_firmware_restart"),
+            block.index("zcal_rc_live_verify"),
+            block.index('record_rollback_target "$B"'),
+        ]
+        self.assertEqual(order, sorted(order))
+
+    def test_rollback_pointer_is_bounded_to_managed_version_backups(self) -> None:
+        self.assertIn('previous-successful-backup', self.text)
+        self.assertIn('zcal-productization-update-*', self.text)
+        self.assertIn('zcal-productization-rollback-*', self.text)
+        self.assertIn('rollback transaction snapshot is missing', self.text)
+        self.assertIn('rollback plan is missing', self.text)
+
     def test_uninstall_keeps_provenance_until_effective_baseline_is_verified(self) -> None:
         start = self.text.index("uninstall)")
         block = self.text[start:]
@@ -51,6 +75,7 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
             block.index("zcal_rc_firmware_restart"),
             block.index("zcal_rc_live_verify_uninstalled"),
             block.index("zcal_rc_finalize_uninstall"),
+            block.index('rm -rf "$ROLLBACK_STATE_DIR"'),
         ]
         self.assertEqual(order, sorted(order))
 

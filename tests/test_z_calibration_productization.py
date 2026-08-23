@@ -201,6 +201,27 @@ class ZCalibrationProductizationTests(unittest.TestCase):
             self.assertEqual(fx.user.read_bytes(), updated_hook)
             self.assertEqual(fx.policy_dest.read_bytes(), updated_policy)
 
+    def test_successful_update_snapshot_can_restore_previous_owned_version(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fx = Fixture(root, stock=[], user=[product.CC])
+            product.apply_plan(fx.plan([product.CC]), fx.policy)
+            previous_policy = fx.policy_dest.read_bytes()
+            previous_variables = fx.variables.read_bytes()
+            previous_manifest = (fx.state / "manifest.json").read_bytes()
+
+            fx.policy.write_bytes(previous_policy + b"\n# next-version-marker\n")
+            plan = fx.plan([product.CC, product.GUARD], mesh_test=3, cc_enabled=0)
+            backup = root / "successful-update-previous"
+            product.transaction_snapshot(plan, backup)
+            product.apply_plan(plan, fx.policy)
+            self.assertNotEqual(fx.policy_dest.read_bytes(), previous_policy)
+
+            product.transaction_restore(plan, backup)
+            self.assertEqual(fx.policy_dest.read_bytes(), previous_policy)
+            self.assertEqual(fx.variables.read_bytes(), previous_variables)
+            self.assertEqual((fx.state / "manifest.json").read_bytes(), previous_manifest)
+
     def test_repair_recovers_partial_owned_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             fx = Fixture(Path(td), stock=[], user=[product.CC])

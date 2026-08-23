@@ -29,11 +29,13 @@ B=""
 MOONRAKER_WAS_RUNNING=0
 MOONRAKER_TRANSITION_STARTED=0
 POLICY_INCLUDE='[include ad5x_custom/generated/zcal_owner_rc.cfg]'
+ROLLBACK_STATE_DIR="$STATE/zcal-rc-rollback"
+ROLLBACK_POINTER="$ROLLBACK_STATE_DIR/previous-successful-backup"
 
 case "$MODE" in
-    install|update|repair|uninstall|status) ;;
+    install|update|repair|rollback|uninstall|status) ;;
     *)
-        echo "usage: $0 {install|update|repair|uninstall|status}" >&2
+        echo "usage: $0 {install|update|repair|rollback|uninstall|status}" >&2
         exit 2
         ;;
 esac
@@ -147,6 +149,33 @@ restore_owned_include_state(){
     esac
 }
 
+rollback_target(){
+    [ -f "$ROLLBACK_POINTER" ] || fail 'previous successful Z Calibration version is not recorded'
+    TARGET="$(cat "$ROLLBACK_POINTER")"
+    case "$TARGET" in
+        "$BACKUPS"/zcal-productization-update-*|"$BACKUPS"/zcal-productization-rollback-*) ;;
+        *) fail 'rollback pointer is outside managed version backups' ;;
+    esac
+    [ -d "$TARGET/zcal-rc-transaction" ] || fail 'rollback transaction snapshot is missing'
+    [ -f "$TARGET/zcal-rc-plan.json" ] || fail 'rollback plan is missing'
+    [ -f "$TARGET/plugins.cfg" ] || [ -f "$TARGET/.absent-plugins.cfg" ] || fail 'rollback plugins.cfg snapshot is missing'
+    printf '%s\n' "$TARGET"
+}
+record_rollback_target(){
+    TARGET="$1"
+    mkdir -p "$ROLLBACK_STATE_DIR"
+    TMP="$ROLLBACK_POINTER.tmp.$$"
+    printf '%s\n' "$TARGET" >"$TMP"
+    mv -f "$TMP" "$ROLLBACK_POINTER"
+}
+restore_version_snapshot(){
+    TARGET="$1"
+    CURRENT_B="$B"
+    B="$TARGET"
+    restore_snapshot "$KLIPPER_INCLUDES" plugins.cfg || { B="$CURRENT_B"; return 1; }
+    B="$CURRENT_B"
+}
+
 operation_prepare(){
     check_idle
     zcal_rc_preflight || fail 'RC productization preflight failed closed'
@@ -174,7 +203,18 @@ if [ "$MODE" = status ]; then
     [ "$(include_count)" -eq 1 ] || fail 'generated RC policy include отсутствует/дублирован'
     zcal_rc_live_verify || fail 'effective RC state не соответствует ownership manifest'
     echo '[OK] Z Calibration RC Productization active and verified'
+    if [ -f "$ROLLBACK_POINTER" ]; then
+        TARGET="$(rollback_target)"
+        echo "[OK] previous successful version available for rollback: $TARGET"
+    else
+        echo '[INFO] no previous successful update recorded for rollback'
+    fi
     exit 0
+fi
+
+ROLLBACK_TARGET=""
+if [ "$MODE" = rollback ]; then
+    ROLLBACK_TARGET="$(rollback_target)"
 fi
 
 operation_prepare
@@ -197,6 +237,15 @@ case "$MODE" in
         [ "$(include_count)" -eq 1 ] || fail 'generated RC policy include invariant failed'
         zcal_rc_firmware_restart || fail 'Klipper reload after RC apply failed'
         zcal_rc_live_verify || fail 'effective RC state verification failed'
+        if [ "$MODE" = update ]; then
+            record_rollback_target "$B" || fail 'failed to record previous successful version'
+        fi
+        ;;
+    rollback)
+        restore_version_snapshot "$ROLLBACK_TARGET" || fail 'previous successful version restore failed'
+        zcal_rc_firmware_restart || fail 'Klipper reload after version rollback failed'
+        zcal_rc_live_verify || fail 'rolled-back effective state verification failed'
+        record_rollback_target "$B" || fail 'failed to preserve rollback undo point'
         ;;
     uninstall)
         zcal_rc_uninstall || fail 'uninstall mutation failed'
@@ -205,6 +254,7 @@ case "$MODE" in
         zcal_rc_firmware_restart || fail 'Klipper reload after RC uninstall failed'
         zcal_rc_live_verify_uninstalled || fail 'effective uninstall baseline verification failed'
         zcal_rc_finalize_uninstall || fail 'ownership finalize failed'
+        rm -rf "$ROLLBACK_STATE_DIR" || fail 'rollback state cleanup failed'
         ;;
 esac
 
