@@ -47,6 +47,8 @@ def live_payload(
                 "cc_enabled": cc_enabled,
                 "load_zoffset": 1,
                 "print_leveling": 0,
+                "clear": "_CLEAR2",
+                "disable_priming": 0,
             }
         },
     }
@@ -65,7 +67,7 @@ class ZCalibrationReloadLifecycleTests(unittest.TestCase):
         owner.write_bytes(original)
         variables = root / "variables.cfg"
         variables.write_text(
-            "[Variables]\nmesh_test = 2\ncc_enabled = 1\nother = 9\n",
+            "[Variables]\nmesh_test = 2\ncc_enabled = 1\nclear = '_CLEAR2'\ndisable_priming = 0\nother = 9\n",
             encoding="utf-8",
         )
         policy_source = root / "policy-source.cfg"
@@ -82,6 +84,9 @@ class ZCalibrationReloadLifecycleTests(unittest.TestCase):
             "original_hook_b64": base64.b64encode(original).decode("ascii"),
             "original_mesh_test": {"present": True, "value": 2},
             "original_cc_enabled": {"present": True, "value": 1},
+            "original_clear": {"present": True, "value": "_CLEAR2"},
+            "original_disable_priming": {"present": True, "value": 0},
+            "original_prime_delegate": {"present": False, "value": None},
             "policy_original_present": False,
             "policy_original_b64": "",
         }

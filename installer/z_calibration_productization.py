@@ -12,6 +12,7 @@ import base64
 import importlib.util
 from pathlib import Path
 import sys
+import shutil
 from typing import Any
 
 
@@ -39,6 +40,38 @@ ALLOWED = {
 ProductizationError = _impl.ProductizationError
 POLICY_ID = _impl.POLICY_ID
 POLICY_MAX_AUTO = _impl.POLICY_MAX_AUTO
+PRIME_GATE = "_ADZ_PRIME_GATE"
+PRIME_DELEGATE_VARIABLE = "adz_prime_delegate"
+_LEGACY_BUILD_PREFLIGHT = _impl.build_preflight_plan
+_LEGACY_UNINSTALL = _impl.uninstall
+_LEGACY_VERIFY_LIVE = _impl.verify_live
+_LEGACY_VERIFY_UNINSTALLED = _impl.verify_uninstalled
+_LEGACY_SET_VARIABLE = _impl._set_variable
+
+def _set_variable(path: Path, name: str, value: Any | None, present: bool) -> None:
+    _LEGACY_SET_VARIABLE(path, name, repr(value) if present and isinstance(value, str) else value, present)
+
+def _variable_spec(v: dict[str, Any], name: str, default: Any = None) -> dict[str, Any]:
+    return {"present": name in v, "value": v.get(name, default)}
+
+def _validate_prime_delegate(value: Any) -> str:
+    d = str(value or "")
+    if not d or d == PRIME_GATE or _impl.re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", d) is None:
+        raise ProductizationError(f"invalid Z-Mod CLEAR delegate: {d!r}")
+    return d
+
+def build_preflight_plan(printer_config: Path, policy_source: Path, policy_dest: Path, variables_file: Path, state_dir: Path, backups_root: Path, live_payload: str) -> dict[str, Any]:
+    plan = _LEGACY_BUILD_PREFLIGHT(printer_config, policy_source, policy_dest, variables_file, state_dir, backups_root, live_payload)
+    runtime, _ = _impl._runtime_payload(live_payload); v = runtime["variables"]
+    manifest = _impl._load_manifest(state_dir)
+    if manifest is None or "original_clear" not in manifest:
+        clear = _variable_spec(v, "clear", "LINE_PURGE"); clear["value"] = _validate_prime_delegate(clear["value"])
+        plan["original_clear"] = clear
+        plan["original_disable_priming"] = _variable_spec(v, "disable_priming", 0)
+        plan["original_prime_delegate"] = _variable_spec(v, PRIME_DELEGATE_VARIABLE)
+    else:
+        _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
+    return plan
 
 
 def _classify(commands: list[str]) -> str:
@@ -173,9 +206,18 @@ def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
     )
     manifest["expected_patched_hook_sha256"] = _impl._sha(expected)
 
+    for key in ("original_clear", "original_disable_priming", "original_prime_delegate"):
+        if key not in manifest:
+            if key not in plan:
+                raise ProductizationError(f"missing prime-gate ownership field: {key}")
+            manifest[key] = plan[key]
+    delegate = _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
     variables = Path(plan["variables_file"])
-    _impl._set_variable(variables, "mesh_test", 3, True)
-    _impl._set_variable(variables, "cc_enabled", 0, True)
+    _set_variable(variables, "mesh_test", 3, True)
+    _set_variable(variables, "cc_enabled", 0, True)
+    _set_variable(variables, "clear", PRIME_GATE, True)
+    _set_variable(variables, "disable_priming", 0, True)
+    _set_variable(variables, PRIME_DELEGATE_VARIABLE, delegate, True)
 
     manifest_path.write_text(
         _impl.json.dumps(manifest, sort_keys=True, indent=2) + "\n",
@@ -183,6 +225,45 @@ def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
     )
     return manifest
 
+
+def _restore_extra_variables(manifest: dict[str, Any], variables_file: Path) -> None:
+    for key, name in (("original_clear", "clear"), ("original_disable_priming", "disable_priming"), ("original_prime_delegate", PRIME_DELEGATE_VARIABLE)):
+        spec = manifest.get(key)
+        if spec is not None:
+            _set_variable(variables_file, name, spec.get("value"), bool(spec.get("present")))
+
+def uninstall(state_dir: Path, variables_file: Path, *, keep_state: bool = False) -> None:
+    manifest = _impl._load_manifest(state_dir)
+    if manifest is None: return
+    _LEGACY_UNINSTALL(state_dir, variables_file, keep_state=True)
+    _restore_extra_variables(manifest, variables_file)
+    if not keep_state: shutil.rmtree(state_dir)
+
+def _verify_spec(v: dict[str, Any], spec: dict[str, Any], name: str) -> None:
+    present = name in v
+    if bool(spec.get("present")) != present: raise ProductizationError(f"{name} presence was not restored")
+    if present and v.get(name) != spec.get("value"): raise ProductizationError(f"{name} value was not restored")
+
+def verify_live(live_payload: str, state_dir: Path) -> None:
+    _LEGACY_VERIFY_LIVE(live_payload, state_dir)
+    manifest = _impl._load_manifest(state_dir)
+    if manifest is None or "original_clear" not in manifest: raise ProductizationError("prime-gate ownership missing from manifest")
+    runtime, status = _impl._runtime_payload(live_payload); v = runtime["variables"]
+    d = _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
+    if v.get("clear") != PRIME_GATE: raise ProductizationError("Z-Mod CLEAR is not routed through ZCAL prime gate")
+    if int(v.get("disable_priming", -1)) != 0: raise ProductizationError("Z-Mod line priming disabled; prime gate cannot run")
+    if v.get(PRIME_DELEGATE_VARIABLE) != d: raise ProductizationError("ZCAL prime delegate mismatch")
+    settings = status.get("configfile", {}).get("settings", {})
+    if "gcode_macro _adz_prime_gate" not in {str(k).strip().lower() for k in settings}: raise ProductizationError("ZCAL prime gate macro is not loaded")
+
+def verify_uninstalled(live_payload: str, state_dir: Path) -> None:
+    _LEGACY_VERIFY_UNINSTALLED(live_payload, state_dir)
+    manifest = _impl._load_manifest(state_dir)
+    if manifest is None: raise ProductizationError("productization manifest missing during uninstall verify")
+    runtime, _ = _impl._runtime_payload(live_payload); v = runtime["variables"]
+    for key, name in (("original_clear", "clear"), ("original_disable_priming", "disable_priming"), ("original_prime_delegate", PRIME_DELEGATE_VARIABLE)):
+        spec = manifest.get(key)
+        if spec is not None: _verify_spec(v, spec, name)
 
 # Patch the legacy implementation's globals.  Its main()/preflight/uninstall
 # functions then retain the already accepted transaction/ownership behavior,
@@ -193,18 +274,19 @@ _impl._classify = _classify
 _impl._patch_baseline = _patch_baseline
 _impl._compatible_with_expected = _compatible_with_expected
 _impl._legacy_candidates = _legacy_candidates
+_impl._set_variable = _set_variable
+_impl.build_preflight_plan = build_preflight_plan
 _impl.apply_plan = apply_plan
+_impl.uninstall = uninstall
+_impl.verify_uninstalled = verify_uninstalled
+_impl.verify_live = verify_live
 
 # Public functions/classes are delegated to the patched implementation.
-build_preflight_plan = _impl.build_preflight_plan
 resolve_owner = _impl.resolve_owner
 hook_commands = _impl.hook_commands
 transaction_snapshot = _impl.transaction_snapshot
 transaction_restore = _impl.transaction_restore
-uninstall = _impl.uninstall
-verify_uninstalled = _impl.verify_uninstalled
 finalize_uninstall = _impl.finalize_uninstall
-verify_live = _impl.verify_live
 main = _impl.main
 
 

@@ -25,7 +25,7 @@ def hook(commands: list[str]) -> str:
     )
 
 
-def payload(commands: list[str]) -> str:
+def payload(commands: list[str], *, active: bool = False) -> str:
     return json.dumps(
         {
             "result": {
@@ -43,6 +43,9 @@ def payload(commands: list[str]) -> str:
                             "cc_enabled": 0,
                             "load_zoffset": 1,
                             "print_leveling": 0,
+                            "clear": product.PRIME_GATE if active else "_CLEAR2",
+                            "disable_priming": 0,
+                            **({product.PRIME_DELEGATE_VARIABLE: "_CLEAR2"} if active else {}),
                         }
                     },
                 }
@@ -66,7 +69,7 @@ class ParserSafeNamespaceMigrationTests(unittest.TestCase):
             printer.write_text("[include user.cfg]\n", encoding="utf-8")
             owner.write_text(hook([product.CC]), encoding="utf-8")
             variables.write_text(
-                "[Variables]\nmesh_test = 3\ncc_enabled = 0\n",
+                "[Variables]\nmesh_test = 3\ncc_enabled = 0\nclear = '_CLEAR2'\ndisable_priming = 0\n",
                 encoding="utf-8",
             )
 
@@ -101,7 +104,7 @@ class ParserSafeNamespaceMigrationTests(unittest.TestCase):
                 variables,
                 state,
                 backups,
-                payload([product.CC, product.LEGACY_GUARD]),
+                payload([product.CC, product.LEGACY_GUARD], active=True),
             )
             self.assertEqual(migration["baseline_source"], "manifest")
             product.apply_plan(migration, POLICY)

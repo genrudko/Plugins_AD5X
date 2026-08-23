@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -28,29 +29,16 @@ def hook_text(commands: list[str]) -> str:
     )
 
 
-def live_payload(commands: list[str], *, mesh_test: int = 2, cc_enabled: int | None = 1, policy: bool = False) -> str:
-    variables = {
-        "mesh_test": mesh_test,
-        "load_zoffset": 1,
-        "print_leveling": 0,
-    }
-    if cc_enabled is not None:
-        variables["cc_enabled"] = cc_enabled
-    status = {
-        "configfile": {
-            "settings": {
-                "gcode_macro _user_start_print": {
-                    "gcode": "\n".join(commands),
-                }
-            }
-        },
-        "save_variables": {"variables": variables},
-    }
+def live_payload(commands: list[str], *, mesh_test: int = 2, cc_enabled: int | None = 1, policy: bool = False, clear: str | None = None, disable_priming: int = 0, prime_delegate: str | None = None) -> str:
+    variables = {"mesh_test": mesh_test, "load_zoffset": 1, "print_leveling": 0, "disable_priming": disable_priming}
+    if cc_enabled is not None: variables["cc_enabled"] = cc_enabled
+    if clear is not None: variables["clear"] = clear
+    if prime_delegate is not None: variables[product.PRIME_DELEGATE_VARIABLE] = prime_delegate
+    settings = {"gcode_macro _user_start_print": {"gcode": "\n".join(commands)}}
+    if policy: settings["gcode_macro _adz_prime_gate"] = {"fresh_finalized": 0}
+    status = {"configfile": {"settings": settings}, "save_variables": {"variables": variables}}
     if policy:
-        status["gcode_macro _AD5X_Z_SAVED_CHECK_POLICY"] = {
-            "policy_id": product.POLICY_ID,
-            "max_auto_alignment": product.POLICY_MAX_AUTO,
-        }
+        status["gcode_macro _AD5X_Z_SAVED_CHECK_POLICY"] = {"policy_id": product.POLICY_ID, "max_auto_alignment": product.POLICY_MAX_AUTO}
     return json.dumps({"result": {"status": status}})
 
 
@@ -76,6 +64,8 @@ class Fixture:
             "[Variables]\n"
             "mesh_test = 2\n"
             "cc_enabled = 1\n"
+            "clear = '_CLEAR2'\n"
+            "disable_priming = 0\n"
             "unrelated = 77\n",
             encoding="utf-8",
         )
@@ -84,14 +74,15 @@ class Fixture:
         self.backups.mkdir()
 
     def plan(self, commands: list[str], *, mesh_test: int = 2, cc_enabled: int | None = 1):
+        values = {}
+        for line in self.variables.read_text(encoding="utf-8").splitlines():
+            if "=" not in line: continue
+            k, raw = (x.strip() for x in line.split("=", 1))
+            try: values[k] = ast.literal_eval(raw)
+            except (ValueError, SyntaxError): pass
         return product.build_preflight_plan(
-            self.printer,
-            self.policy,
-            self.policy_dest,
-            self.variables,
-            self.state,
-            self.backups,
-            live_payload(commands, mesh_test=mesh_test, cc_enabled=cc_enabled),
+            self.printer, self.policy, self.policy_dest, self.variables, self.state, self.backups,
+            live_payload(commands, mesh_test=mesh_test, cc_enabled=cc_enabled, clear=values.get("clear"), disable_priming=int(values.get("disable_priming", 0)), prime_delegate=values.get(product.PRIME_DELEGATE_VARIABLE)),
         )
 
 
@@ -176,6 +167,25 @@ class ZCalibrationProductizationTests(unittest.TestCase):
             fx = Fixture(Path(td), stock=[product.CC], user=[product.CC])
             with self.assertRaisesRegex(product.ProductizationError, "ambiguous"):
                 fx.plan([product.CC])
+
+    def test_update_adopts_pre_prime_ownership_from_old_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            fx = Fixture(Path(td), stock=[], user=[product.CC])
+            product.apply_plan(fx.plan([product.CC]), fx.policy)
+            manifest_path = fx.state / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for key in ("original_clear", "original_disable_priming", "original_prime_delegate"):
+                manifest.pop(key, None)
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+            fx.variables.write_text("[Variables]\nmesh_test = 3\ncc_enabled = 0\nclear = '_CLEAR2'\ndisable_priming = 0\nunrelated = 77\n", encoding="utf-8")
+            plan = fx.plan([product.CC, product.GUARD], mesh_test=3, cc_enabled=0)
+            self.assertEqual(plan["original_clear"]["value"], "_CLEAR2")
+            product.apply_plan(plan, fx.policy)
+            variables = fx.variables.read_text(encoding="utf-8")
+            self.assertIn("clear = '_ADZ_PRIME_GATE'", variables)
+            self.assertIn("adz_prime_delegate = '_CLEAR2'", variables)
+            migrated = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(migrated["original_clear"]["value"], "_CLEAR2")
 
     def test_install_and_update_are_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -397,12 +407,12 @@ class ZCalibrationProductizationTests(unittest.TestCase):
             fx = Fixture(Path(td), stock=[], user=[product.CC])
             product.apply_plan(fx.plan([product.CC]), fx.policy)
             product.verify_live(
-                live_payload([product.CC, product.GUARD], mesh_test=3, cc_enabled=0, policy=True),
+                live_payload([product.CC, product.GUARD], mesh_test=3, cc_enabled=0, policy=True, clear=product.PRIME_GATE, prime_delegate="_CLEAR2"),
                 fx.state,
             )
             with self.assertRaises(product.ProductizationError):
                 product.verify_live(
-                    live_payload([product.CC], mesh_test=3, cc_enabled=0, policy=True),
+                    live_payload([product.CC], mesh_test=3, cc_enabled=0, policy=True, clear=product.PRIME_GATE, prime_delegate="_CLEAR2"),
                     fx.state,
                 )
 
