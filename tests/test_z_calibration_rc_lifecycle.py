@@ -54,7 +54,7 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         order = [
             block.index("restore_version_snapshot"),
             block.index("zcal_rc_firmware_restart"),
-            block.index("zcal_rc_live_verify"),
+            block.index("verify_restored_managed_active"),
             block.index('record_rollback_target "$B"'),
         ]
         self.assertEqual(order, sorted(order))
@@ -68,13 +68,29 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertIn('rollback effective-state marker is missing', self.text)
         self.assertIn('active=0|active=1', self.text)
 
+    def test_update_snapshot_recognizes_previous_owned_active_version_without_new_verifier(self) -> None:
+        self.assertIn("managed_active_preflight(){", self.text)
+        self.assertIn('p.get("baseline_source") != "manifest"', self.text)
+        self.assertIn('["CC_APPLY_PROFILE", "_ADZ_SAVED_CHECK_POLICY"]', self.text)
+        self.assertIn('["CC_APPLY_PROFILE", "_AD5X_Z_SAVED_CHECK_POLICY"]', self.text)
+        self.assertIn("zcal_rc_live_verify >/dev/null 2>&1 || managed_active_preflight", self.text)
+
+    def test_active_version_rollback_uses_version_compatible_preflight_verification(self) -> None:
+        self.assertIn("verify_restored_managed_active(){", self.text)
+        block = self.text[self.text.index("verify_restored_managed_active(){"):self.text.index("operation_prepare(){")]
+        self.assertIn("wait_klippy_ready", block)
+        self.assertIn("ZCAL_RC_PREFLIGHT_READY=0", block)
+        self.assertIn("zcal_rc_preflight", block)
+        self.assertIn("managed_active_preflight", block)
+        self.assertIn("active=1) verify_restored_managed_active", self.text)
+
     def test_rollback_can_restore_inactive_or_parked_preupdate_state(self) -> None:
         self.assertIn("printf 'active=0\\n'", self.text)
         start = self.text.index("rollback)")
         end = self.text.index("uninstall)", start)
         block = self.text[start:end]
         self.assertIn("active=0) wait_klippy_ready", block)
-        self.assertIn("active=1) zcal_rc_live_verify", block)
+        self.assertIn("active=1) verify_restored_managed_active", block)
 
     def test_parked_update_refresh_is_bounded_and_precedes_apply(self) -> None:
         start = self.text.index("prepare_parked_policy_refresh(){")

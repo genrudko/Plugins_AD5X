@@ -223,6 +223,38 @@ restore_version_snapshot(){
     B="$CURRENT_B"
 }
 
+managed_active_preflight(){
+    [ "$(include_count)" -eq 1 ] || return 1
+    [ -f "$ZCAL_RC_STATE_DIR/manifest.json" ] || return 1
+    [ -n "$ZCAL_RC_PREFLIGHT_JSON" ] || return 1
+    PY="$(python_bin)" || return 1
+    printf '%s' "$ZCAL_RC_PREFLIGHT_JSON" | "$PY" -B -c '
+import json, sys
+try:
+    p=json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if p.get("baseline_source") != "manifest":
+    raise SystemExit(1)
+cmds=p.get("effective_commands")
+allowed=(
+    ["_ADZ_SAVED_CHECK_POLICY"],
+    ["CC_APPLY_PROFILE", "_ADZ_SAVED_CHECK_POLICY"],
+    ["_AD5X_Z_SAVED_CHECK_POLICY"],
+    ["CC_APPLY_PROFILE", "_AD5X_Z_SAVED_CHECK_POLICY"],
+)
+raise SystemExit(0 if cmds in allowed else 1)
+'
+}
+
+verify_restored_managed_active(){
+    wait_klippy_ready || return 1
+    ZCAL_RC_PREFLIGHT_READY=0
+    ZCAL_RC_PREFLIGHT_JSON=""
+    zcal_rc_preflight || return 1
+    managed_active_preflight
+}
+
 operation_prepare(){
     check_idle
     zcal_rc_preflight || fail 'RC productization preflight failed closed'
@@ -230,7 +262,7 @@ operation_prepare(){
     B="$BACKUPS/zcal-productization-$MODE-$STAMP-$$"
     mkdir -p "$B"
     snapshot "$KLIPPER_INCLUDES" plugins.cfg
-    if zcal_rc_live_verify >/dev/null 2>&1; then
+    if zcal_rc_live_verify >/dev/null 2>&1 || managed_active_preflight; then
         printf 'active=1\n' >"$B/effective-state"
     else
         printf 'active=0\n' >"$B/effective-state"
@@ -298,7 +330,7 @@ case "$MODE" in
         restore_version_snapshot "$ROLLBACK_TARGET" || fail 'previous successful version restore failed'
         zcal_rc_firmware_restart || fail 'Klipper reload after version rollback failed'
         case "$(cat "$ROLLBACK_TARGET/effective-state")" in
-            active=1) zcal_rc_live_verify || fail 'rolled-back active state verification failed' ;;
+            active=1) verify_restored_managed_active || fail 'rolled-back active state compatibility verification failed' ;;
             active=0) wait_klippy_ready || fail 'rolled-back inactive/parked state did not become Klipper-ready' ;;
         esac
         record_rollback_target "$B" || fail 'failed to preserve rollback undo point'
