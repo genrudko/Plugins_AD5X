@@ -300,6 +300,8 @@ A disabled action should expose a stable reason such as:
 
 ## 15. First-party frontend requirements
 
+Implementation order is explicit: **Fluidd → Mainsail → GuppyScreen → HelixScreen → KlipperScreen**. KlipperScreen work is gated on completion of the underlying AD5X KlipperScreen port; the existing hardware PoC is not a canonical IFS frontend base.
+
 ### Fluidd
 
 Must receive a full native manager/dashboard/pre-print experience or use a source-verified native compatibility component where this produces accurate semantics.

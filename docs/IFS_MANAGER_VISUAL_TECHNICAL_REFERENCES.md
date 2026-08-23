@@ -396,7 +396,9 @@ The original screenshots previously supplied in ChatGPT were not separately comm
 
 ## 12. Frontend implementation gate
 
-Before continuing material changes to the IFS frontend:
+Canonical implementation order is **Fluidd → Mainsail → GuppyScreen → HelixScreen → KlipperScreen**. Fluidd is the first UI in which the reference-derived dashboard and pre-print interaction are converged. Mainsail follows for semantic parity. Guppy and Helix follow on the same backend contract. KlipperScreen is intentionally last and must not be used as the design proving ground while the underlying AD5X KlipperScreen port remains a test/PoC implementation.
+
+Before continuing material changes to any IFS frontend:
 
 1. compare the intended screen against this reference pack;
 2. reconcile any recovered user screenshots with the upstream implementations above;

@@ -658,3 +658,27 @@ Destructive hard recovery/reclone core repository может удалить runt
 После новой вставки без RFID/другого проверенного identity provider exact identity остаётся `unassigned` до нового bind/edit. Z-Mod material/color могут отображаться как provider-observed metadata, но не являются доказательством возврата прежней concrete spool.
 
 Существующий standalone IFS/Spoolman сценарий не объявляется deprecated только потому, что полный IFS Manager получил собственную Spoolman интеграцию. Он сохраняется как отдельный lightweight product path для пользователей, которым нужен только IFS↔Spoolman. Целевой standalone v2 должен использовать те же четыре slot bindings и automatic native Moonraker active-spool semantics, предпочтительно на общем semantic core. На одном принтере full и standalone режимы не должны одновременно владеть runtime.
+---
+
+## D-026 — Frontend IFS реализуется Fluidd-first; KlipperScreen последним
+
+**Дата:** 2026-08-24
+**Статус:** accepted
+**Уточняет:** D-004, D-005, D-017, D-018
+
+### Решение
+
+Порядок first-party IFS frontend implementation: `Fluidd → Mainsail → GuppyScreen → HelixScreen → KlipperScreen`. Fluidd является первым каноническим UI. Mainsail следует после стабилизации Fluidd UX/contract. Guppy и Helix используют тот же backend/API. KlipperScreen возвращается в активную разработку только после завершения нормального AD5X-порта самого KlipperScreen.
+
+Существующие IFS panels в `tools/ad5x-display-spike/klipperscreen/` считаются PoC/test evidence и не являются канонической UX-базой.
+
+### Почему
+
+Fluidd уже принят как первый frontend Plugins AD5X и имеет существующую `src/ad5x/**` UI-базу. Source review Happy Hare/official Fluidd подтвердил зрелый native pre-print mapping precedent. Текущий AD5X KlipperScreen остаётся экспериментальным портом, поэтому развитие IFS на нём сейчас создаёт лишнюю повторную переделку.
+
+### Следствия
+
+- незакоммиченный KlipperScreen mapping-editor draft отменён;
+- frontend-neutral manual mapping draft/preview token остаются частью backend contract;
+- следующий UI increment выполняется в `genrudko/fluidd:ad5x-dev` и начинается с сверки существующего `src/ad5x/**` с Happy Hare/official Fluidd/Helix/PAXX reference pack;
+- KlipperScreen не используется как design proving ground до готовности его базового AD5X-порта.
