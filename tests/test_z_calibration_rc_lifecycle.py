@@ -76,6 +76,28 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertIn("active=0) wait_klippy_ready", block)
         self.assertIn("active=1) zcal_rc_live_verify", block)
 
+    def test_parked_update_refresh_is_bounded_and_precedes_apply(self) -> None:
+        start = self.text.index("prepare_parked_policy_refresh(){")
+        end = self.text.index("rollback_target(){", start)
+        block = self.text[start:end]
+        for token in (
+            '[ "$MODE" = update ]', "active=0", '"$(include_count)" -eq 0',
+            "plan_allows_parked_policy_refresh", "policy_macro_loaded",
+            "manifest_policy_hash", 'rm -f "$ZCAL_RC_POLICY_DEST"',
+        ):
+            self.assertIn(token, block)
+        apply = self.text[self.text.index("install|update|repair)"):self.text.index("rollback)", self.text.index("install|update|repair)"))]
+        self.assertLess(apply.index("prepare_parked_policy_refresh"), apply.index("zcal_rc_apply"))
+
+    def test_parked_refresh_requires_owned_pristine_inactive_state(self) -> None:
+        self.assertIn('plan.get("baseline_source") != "manifest"', self.text)
+        self.assertIn('plan.get("effective_commands") not in ([], ["CC_APPLY_PROFILE"])', self.text)
+        self.assertIn('manifest.get("policy_dest", "")', self.text)
+        self.assertIn("parked RC policy macro is still loaded", self.text)
+        self.assertIn("gcode_macro _ad5x_z_saved_check_policy", self.text)
+        self.assertIn("if policy_macro_loaded; then RC=0; else RC=$?; fi", self.text)
+        self.assertIn("could not prove parked RC policy macro is inactive", self.text)
+
     def test_uninstall_keeps_provenance_until_effective_baseline_is_verified(self) -> None:
         start = self.text.index("uninstall)")
         block = self.text[start:]

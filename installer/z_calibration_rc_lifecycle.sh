@@ -149,6 +149,51 @@ restore_owned_include_state(){
     esac
 }
 
+plan_allows_parked_policy_refresh(){
+    PY="$(python_bin)" || return 1
+    "$PY" -B - "$(zcal_rc_plan_file)" "$ZCAL_RC_STATE_DIR/manifest.json" "$ZCAL_RC_POLICY_DEST" <<'PY'
+import json, os, sys
+plan=json.load(open(sys.argv[1], encoding="utf-8"))
+manifest=json.load(open(sys.argv[2], encoding="utf-8"))
+if plan.get("baseline_source") != "manifest": raise SystemExit(1)
+if plan.get("effective_commands") not in ([], ["CC_APPLY_PROFILE"]): raise SystemExit(1)
+if os.path.abspath(str(manifest.get("policy_dest", ""))) != os.path.abspath(sys.argv[3]): raise SystemExit(1)
+PY
+}
+policy_macro_loaded(){
+    LIVE="$(zcal_rc_query_preflight 2>/dev/null)" || return 2
+    PY="$(python_bin)" || return 2
+    printf '%s' "$LIVE" | "$PY" -B -c 'import json,sys; d=json.load(sys.stdin); s=d["result"]["status"]["configfile"]["settings"]; keys={str(k).strip().lower() for k in s}; raise SystemExit(0 if keys & {"gcode_macro _adz_saved_check_policy", "gcode_macro _ad5x_z_saved_check_policy"} else 1)' || return $?
+}
+manifest_policy_hash(){
+    PY="$(python_bin)" || return 1
+    "$PY" -B - "$ZCAL_RC_STATE_DIR/manifest.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1], encoding="utf-8")).get("policy_sha256")
+if not isinstance(v,str) or len(v)!=64: raise SystemExit(1)
+print(v)
+PY
+}
+prepare_parked_policy_refresh(){
+    [ "$MODE" = update ] || return 0
+    [ "$(cat "$B/effective-state" 2>/dev/null || true)" = 'active=0' ] || return 0
+    [ "$(include_count)" -eq 0 ] || return 0
+    [ -f "$ZCAL_RC_STATE_DIR/manifest.json" ] || return 0
+    [ -e "$ZCAL_RC_POLICY_DEST" ] || return 0
+    [ -f "$ZCAL_RC_POLICY_DEST" ] && [ ! -L "$ZCAL_RC_POLICY_DEST" ] || fail 'parked RC policy destination is not a regular owned file'
+    plan_allows_parked_policy_refresh || fail 'parked RC policy refresh ownership cannot be proven'
+    if policy_macro_loaded; then RC=0; else RC=$?; fi
+    case "$RC" in 0) fail 'parked RC policy macro is still loaded' ;; 1) : ;; *) fail 'could not prove parked RC policy macro is inactive' ;; esac
+    CUR="$(sha256_file "$ZCAL_RC_POLICY_DEST")"
+    OLD="$(manifest_policy_hash)" || fail 'owned manifest policy hash is invalid'
+    NEW="$(sha256_file "$ZCAL_RC_POLICY_SOURCE")"
+    [ "$CUR" = "$OLD" ] || [ "$CUR" = "$NEW" ] || {
+        echo "[INFO] parked inactive RC policy drift detected: $CUR"
+        echo '[INFO] preserving it in the transaction snapshot and refreshing the owned generated policy.'
+        rm -f "$ZCAL_RC_POLICY_DEST" || fail 'failed to stage parked RC policy refresh'
+    }
+}
+
 rollback_target(){
     [ -f "$ROLLBACK_POINTER" ] || fail 'previous successful Z Calibration version is not recorded'
     TARGET="$(cat "$ROLLBACK_POINTER")"
@@ -239,6 +284,7 @@ trap finish EXIT HUP INT TERM
 
 case "$MODE" in
     install|update|repair)
+        prepare_parked_policy_refresh
         zcal_rc_apply || fail 'apply/update/repair mutation failed'
         commit_include_provenance || fail 'include provenance commit failed'
         [ "$(include_count)" -eq 1 ] || fail 'generated RC policy include invariant failed'

@@ -184,6 +184,8 @@ For `update`, the pre-update effective state is recorded only after the new vers
 
 Rollback snapshots are accepted only from the managed Z Calibration backup root and must contain the productizer plan, transaction snapshot, and `plugins.cfg` snapshot. A missing or foreign rollback target fails closed without guessing. Each recorded snapshot also stores whether the pre-update runtime was an active ZCAL state or an intentionally inactive/parked state. Rollback to an active snapshot reruns the ZCAL live verifier; rollback to a parked snapshot requires the restored configuration to reload to Klipper-ready state instead of incorrectly demanding that the ZCAL policy be active. `uninstall` remains a separate operation that restores the original pre-ZCAL ownership/settings baseline rather than merely moving to the previous plugin version.
 
+A parked update may also refresh a stale generated `zcal_owner_rc.cfg` whose hash no longer matches the old manifest, but only after proving all of the following: the policy include is absent, the live policy macro (including the legacy namespace) is absent, the effective `_USER_START_PRINT` body is the pristine owned baseline, the manifest still owns the exact generated policy path, and the destination is a regular non-symlink file. The stale file is captured in the transaction snapshot before replacement, so both automatic failure rollback and later explicit rollback restore the parked bytes exactly. Any unproven or active state still fails closed.
+
 This lifecycle is deliberately independent of Git worktree state so future Z-Mod/Klipper updates can be compatibility-checked and the plugin can be updated or rolled back without modifying upstream Z-Mod files.
 
 ## 11. Deferred work

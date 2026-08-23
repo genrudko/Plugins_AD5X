@@ -222,6 +222,29 @@ class ZCalibrationProductizationTests(unittest.TestCase):
             self.assertEqual(fx.variables.read_bytes(), previous_variables)
             self.assertEqual((fx.state / "manifest.json").read_bytes(), previous_manifest)
 
+    def test_parked_refresh_snapshot_preserves_stale_generated_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fx = Fixture(root, stock=[], user=[product.CC])
+            pristine_hook = fx.user.read_bytes()
+            product.apply_plan(fx.plan([product.CC]), fx.policy)
+
+            fx.user.write_bytes(pristine_hook)
+            stale_policy = b"# parked-stale-generated-policy\n"
+            fx.policy_dest.write_bytes(stale_policy)
+            plan = fx.plan([product.CC], mesh_test=3, cc_enabled=0)
+            self.assertEqual(plan["baseline_source"], "manifest")
+
+            backup = root / "parked-pre-update"
+            product.transaction_snapshot(plan, backup)
+            fx.policy_dest.unlink()
+            product.apply_plan(plan, fx.policy)
+            self.assertEqual(fx.policy_dest.read_bytes(), fx.policy.read_bytes())
+
+            product.transaction_restore(plan, backup)
+            self.assertEqual(fx.user.read_bytes(), pristine_hook)
+            self.assertEqual(fx.policy_dest.read_bytes(), stale_policy)
+
     def test_repair_recovers_partial_owned_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             fx = Fixture(Path(td), stock=[], user=[product.CC])
