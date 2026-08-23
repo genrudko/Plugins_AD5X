@@ -4,6 +4,7 @@ import asyncio
 import unittest
 
 from tests import test_plugins_ad5x_ifs_backend as backend_tests
+from tests import test_plugins_ad5x_ifs_launch_contract as launch_tests
 
 
 component_module = backend_tests.component_module
@@ -69,6 +70,8 @@ class IFSJobPreviewBackendTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["job_preview"], PREVIEW)
+        self.assertEqual(result["preview_token"], launch_tests.model.build_job_preview_token(PREVIEW))
+        self.assertRegex(result["preview_token"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             api.gcodes,
             [

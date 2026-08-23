@@ -17,6 +17,7 @@ try:
         IFS_SCHEMA_VERSION,
         build_job_launch_gate,
         build_job_mapping_draft,
+        build_job_preview_token,
         build_preprint_plan,
         normalize_appearance,
         normalize_module,
@@ -37,6 +38,7 @@ except ImportError:
     IFS_SCHEMA_VERSION = _model_module.IFS_SCHEMA_VERSION
     build_job_launch_gate = _model_module.build_job_launch_gate
     build_job_mapping_draft = _model_module.build_job_mapping_draft
+    build_job_preview_token = _model_module.build_job_preview_token
     build_preprint_plan = _model_module.build_preprint_plan
     normalize_appearance = _model_module.normalize_appearance
     normalize_module = _model_module.normalize_module
@@ -1339,6 +1341,7 @@ class PluginsAD5X:
             "ok": True,
             "filename": filename,
             "job_preview": dict(preview),
+            "preview_token": build_job_preview_token(preview),
             "snapshot": self.get_snapshot(),
         }
 
