@@ -65,6 +65,16 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertIn('zcal-productization-rollback-*', self.text)
         self.assertIn('rollback transaction snapshot is missing', self.text)
         self.assertIn('rollback plan is missing', self.text)
+        self.assertIn('rollback effective-state marker is missing', self.text)
+        self.assertIn('active=0|active=1', self.text)
+
+    def test_rollback_can_restore_inactive_or_parked_preupdate_state(self) -> None:
+        self.assertIn("printf 'active=0\\n'", self.text)
+        start = self.text.index("rollback)")
+        end = self.text.index("uninstall)", start)
+        block = self.text[start:end]
+        self.assertIn("active=0) wait_klippy_ready", block)
+        self.assertIn("active=1) zcal_rc_live_verify", block)
 
     def test_uninstall_keeps_provenance_until_effective_baseline_is_verified(self) -> None:
         start = self.text.index("uninstall)")

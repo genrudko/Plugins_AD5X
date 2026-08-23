@@ -159,6 +159,8 @@ rollback_target(){
     [ -d "$TARGET/zcal-rc-transaction" ] || fail 'rollback transaction snapshot is missing'
     [ -f "$TARGET/zcal-rc-plan.json" ] || fail 'rollback plan is missing'
     [ -f "$TARGET/plugins.cfg" ] || [ -f "$TARGET/.absent-plugins.cfg" ] || fail 'rollback plugins.cfg snapshot is missing'
+    [ -f "$TARGET/effective-state" ] || fail 'rollback effective-state marker is missing'
+    case "$(cat "$TARGET/effective-state")" in active=0|active=1) ;; *) fail 'invalid rollback effective-state marker' ;; esac
     printf '%s\n' "$TARGET"
 }
 record_rollback_target(){
@@ -183,6 +185,11 @@ operation_prepare(){
     B="$BACKUPS/zcal-productization-$MODE-$STAMP-$$"
     mkdir -p "$B"
     snapshot "$KLIPPER_INCLUDES" plugins.cfg
+    if zcal_rc_live_verify >/dev/null 2>&1; then
+        printf 'active=1\n' >"$B/effective-state"
+    else
+        printf 'active=0\n' >"$B/effective-state"
+    fi
     prepare_include_provenance
 }
 rollback_operation(){
@@ -244,7 +251,10 @@ case "$MODE" in
     rollback)
         restore_version_snapshot "$ROLLBACK_TARGET" || fail 'previous successful version restore failed'
         zcal_rc_firmware_restart || fail 'Klipper reload after version rollback failed'
-        zcal_rc_live_verify || fail 'rolled-back effective state verification failed'
+        case "$(cat "$ROLLBACK_TARGET/effective-state")" in
+            active=1) zcal_rc_live_verify || fail 'rolled-back active state verification failed' ;;
+            active=0) wait_klippy_ready || fail 'rolled-back inactive/parked state did not become Klipper-ready' ;;
+        esac
         record_rollback_target "$B" || fail 'failed to preserve rollback undo point'
         ;;
     uninstall)
