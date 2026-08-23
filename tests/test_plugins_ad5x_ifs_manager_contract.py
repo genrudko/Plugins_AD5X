@@ -146,6 +146,36 @@ class IFSManagerContractTests(unittest.TestCase):
         self.assertFalse(caps["mapping"]["apply_preprint_mapping"])
         self.assertFalse(caps["mapping"]["endless_spool"])
 
+    def test_native_display_is_maintenance_suspended_not_missing_hardware(self):
+        raw = {
+            "available": False,
+            "state": "maintenance_suspended",
+            "reason": "native_display_active",
+            "provider_mode": "native_display",
+            "maintenance_suspended": True,
+            "state_code": 0,
+            "active_slot": 0,
+            "slots": [],
+        }
+        module = model.normalize_module(
+            raw,
+            {},
+            print_state="standby",
+            filament_at_toolhead=None,
+            operation=idle_operation(),
+        )
+        self.assertFalse(module["available"])
+        self.assertEqual(module["provider_mode"], "native_display")
+        self.assertTrue(module["provider"]["maintenance_suspended"])
+        self.assertFalse(module["provider"]["ifs_manager_supported"])
+        self.assertEqual(module["provider"]["supported_modes"], ["display_off"])
+        self.assertEqual(module["write_blocked_reason"], "maintenance_suspended")
+        self.assertFalse(module["operations"]["select_slot"])
+        self.assertFalse(module["operations"]["load_slot"])
+        self.assertFalse(module["operations"]["unload_slot"])
+        self.assertFalse(module["operations"]["preview_job"])
+        self.assertTrue(module["operations"]["manage"])
+
     def test_paused_print_and_running_operation_fail_closed(self):
         paused = model.normalize_module(
             READY_RAW,

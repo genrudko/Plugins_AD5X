@@ -362,6 +362,50 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         self.assertEqual(module["write_blocked_reason"], "ifs_not_ready")
         self.assertEqual(component.get_snapshot()["revision"], revision + 1)
 
+    def test_native_display_suspends_ifs_actions_and_preview_without_gcode(self):
+        native = {
+            "ad5x_ifs": {
+                "available": False,
+                "state": "maintenance_suspended",
+                "reason": "native_display_active",
+                "provider_mode": "native_display",
+                "maintenance_suspended": True,
+                "state_code": 0,
+                "active_slot": 0,
+                "slots": [],
+            },
+            "print_stats": {"state": "standby"},
+            HEAD: {"enabled": True, "filament_detected": False},
+        }
+        component, server, api = self.make_component(
+            objects=["ad5x_ifs", HEAD], initial=native
+        )
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        module = component.get_snapshot()["modules"]["ifs"]
+        self.assertFalse(module["available"])
+        self.assertEqual(module["state"], "maintenance_suspended")
+        self.assertEqual(module["provider_mode"], "native_display")
+        self.assertTrue(module["maintenance_suspended"])
+        self.assertFalse(module["provider"]["ifs_manager_supported"])
+        self.assertEqual(module["write_blocked_reason"], "maintenance_suspended")
+        self.assertFalse(module["operations"]["select_slot"])
+        self.assertFalse(module["operations"]["load_slot"])
+        self.assertFalse(module["operations"]["unload_slot"])
+        self.assertFalse(module["operations"]["preview_job"])
+
+        action = asyncio.run(
+            component._handle_ifs_action(FakeRequest(action="load_slot", slot=1))
+        )
+        self.assertFalse(action["ok"])
+        self.assertIn("suspended", action["error"])
+
+        preview = asyncio.run(
+            component._handle_ifs_job_preview(FakeRequest(filename="demo.gcode"))
+        )
+        self.assertFalse(preview["ok"])
+        self.assertIn("suspended", preview["error"])
+        self.assertEqual(api.gcodes, [])
+
     def test_select_load_and_active_unload_translate_to_zmod_commands(self):
         component, server, api = self.make_live_component()
         asyncio.run(server.handlers["server:klippy_ready"]())
@@ -376,13 +420,13 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
             component._handle_ifs_action(FakeRequest(action="load_slot", slot=2))
         )
         self.assertTrue(result["ok"])
-        self.assertEqual(api.gcodes[-1], "INSERT_PRUTOK_IFS PRUTOK=2")
+        self.assertEqual(api.gcodes[-1], "IN_ZCOLOR SLOT=2 NAPR=0")
 
         result = asyncio.run(
             component._handle_ifs_action(FakeRequest(action="unload_slot", slot=1))
         )
         self.assertTrue(result["ok"])
-        self.assertEqual(api.gcodes[-1], "_IFS_REMOVE_CURRENT_PRUTOK")
+        self.assertEqual(api.gcodes[-1], "IN_ZCOLOR SLOT=1 NAPR=1")
 
     def test_paused_and_printing_fail_closed_without_gcode(self):
         for state in ("paused", "printing", "unknown"):

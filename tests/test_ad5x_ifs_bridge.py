@@ -60,6 +60,10 @@ class FakeZmodColor:
     def __init__(self):
         self.file_colors = [(9, "#ABCDEF", "OLD")]
         self.calls = []
+        self.display = False
+
+    def get_display(self):
+        return self.display
 
     def get_used_colors(self, gcmd):
         self.calls.append(("scan", gcmd.get("FILENAME", "")))
@@ -167,6 +171,8 @@ class AD5XIFSBridgeTests(unittest.TestCase):
         self.printer.handlers["klippy:ready"]()
         status = self.bridge.get_status(1.0)
         self.assertTrue(status["available"])
+        self.assertEqual(status["provider_mode"], "display_off")
+        self.assertFalse(status["maintenance_suspended"])
         self.assertEqual(status["state"], "ready")
         self.assertEqual(status["state_code"], 5)
         self.assertEqual(status["active_slot"], 1)
@@ -181,6 +187,24 @@ class AD5XIFSBridgeTests(unittest.TestCase):
                 {"slot": 4, "present": False, "stall": False},
             ],
         )
+
+    def test_native_display_enters_maintenance_suspended_without_direct_ifs_access(self):
+        self.printer.zmod_color.display = True
+        self.printer.objects.pop("zmod_ifs")
+        self.printer.handlers["klippy:ready"]()
+
+        status = self.bridge.get_status(1.25)
+        self.assertFalse(status["available"])
+        self.assertEqual(status["provider_mode"], "native_display")
+        self.assertTrue(status["maintenance_suspended"])
+        self.assertEqual(status["state"], "maintenance_suspended")
+        self.assertEqual(status["reason"], "native_display_active")
+        self.assertEqual(status["slots"], [])
+
+        with self.assertRaises(ValueError):
+            self.bridge.cmd_JOB_PREVIEW(FakeCommand("demo.gcode"))
+        self.assertEqual(self.printer.zmod_color.calls, [])
+        self.assertEqual(self.bridge.job_preview["error"], "native_display_active")
 
     def test_incomplete_zmod_startup_state_fails_closed(self):
         self.printer.handlers["klippy:ready"]()

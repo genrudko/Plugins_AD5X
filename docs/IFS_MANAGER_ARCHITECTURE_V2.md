@@ -11,6 +11,8 @@ Plugins AD5X IFS / Materials Manager is the user-facing materials subsystem for 
 
 The subsystem is designed for **any Klipper/Moonraker UI or client**. Fluidd, Mainsail, HelixScreen, GuppyScreen and KlipperScreen are first-party native adapter targets, not the architectural boundary of the backend.
 
+Operational support boundary for v1: full IFS Manager requires Z-Mod `DISPLAY_OFF`. Native Flashforge screen mode is a maintenance compatibility state: Plugins AD5X suspends IFS controls/pre-print interception and leaves stock/Z-Mod ownership untouched. Full native-screen IFS parity is not a v1 target.
+
 ## 2. Canonical layers
 
 ```text

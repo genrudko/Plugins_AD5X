@@ -233,9 +233,14 @@ def global_write_block_reason(
     module_state: str,
     print_state: str,
     operation_state: str,
+    provider_mode: str = "display_off",
 ) -> str:
+    if provider_mode == "native_display":
+        return "maintenance_suspended"
     if module_state != "ready":
         return "ifs_not_ready"
+    if provider_mode not in ("", "display_off"):
+        return "provider_mode_unknown"
     if operation_state != "idle":
         return "operation_in_progress"
     if print_state not in SAFE_FILAMENT_OP_PRINT_STATES:
@@ -251,10 +256,13 @@ def compute_slot_permissions(
     module_state: str,
     print_state: str,
     operation_state: str,
+    provider_mode: str = "display_off",
 ) -> Dict[str, Any]:
     """Centralize per-slot action permission so frontends do not own safety logic."""
 
-    blocked = global_write_block_reason(module_state, print_state, operation_state)
+    blocked = global_write_block_reason(
+        module_state, print_state, operation_state, provider_mode
+    )
     if blocked:
         return {
             "select_slot": False,
@@ -288,6 +296,7 @@ def normalize_slot(
     print_state: str,
     operation_state: str,
     identity_invalidated: bool = False,
+    provider_mode: str = "display_off",
 ) -> Dict[str, Any]:
     raw_slot = raw_slot if isinstance(raw_slot, dict) else {}
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -370,6 +379,7 @@ def normalize_slot(
         module_state=module_state,
         print_state=print_state,
         operation_state=operation_state,
+        provider_mode=provider_mode,
     )
     result["compatibility"] = {
         "zmod": build_zmod_compat_projection(
@@ -415,6 +425,21 @@ def normalize_module(
         active_slot = 0
 
     module_state = module.get("state") if isinstance(module.get("state"), str) else "unknown"
+    provider_mode = module.get("provider_mode")
+    if not isinstance(provider_mode, str) or not provider_mode:
+        provider_mode = "display_off" if module.get("available", False) else "unknown"
+    maintenance_suspended = bool(
+        module.get("maintenance_suspended", False) or provider_mode == "native_display"
+    )
+    module["provider_mode"] = provider_mode
+    module["maintenance_suspended"] = maintenance_suspended
+    module["provider"] = {
+        "name": "zmod",
+        "mode": provider_mode,
+        "supported_modes": ["display_off"],
+        "ifs_manager_supported": provider_mode == "display_off",
+        "maintenance_suspended": maintenance_suspended,
+    }
     operation_state = (
         operation.get("state") if isinstance(operation.get("state"), str) else "idle"
     )
@@ -442,6 +467,7 @@ def normalize_module(
                 print_state=print_state,
                 operation_state=operation_state,
                 identity_invalidated=slot_number in invalidated_slots,
+                provider_mode=provider_mode,
             )
         )
     module["slots"] = normalized_slots
@@ -465,16 +491,18 @@ def normalize_module(
     module["operation"] = operation
     module["capabilities"] = get_ifs_capabilities()
     module["write_blocked_reason"] = global_write_block_reason(
-        module_state, print_state, operation_state
+        module_state, print_state, operation_state, provider_mode
     )
 
     # Compatibility bridge for the already hardware-proven KlipperScreen proof.
     # New frontends should consume capabilities + slot.permissions instead.
+    provider_allows_ifs = provider_mode == "display_off"
     module["operations"] = {
-        "select_slot": True,
-        "load_slot": True,
-        "unload_slot": True,
+        "select_slot": provider_allows_ifs,
+        "load_slot": provider_allows_ifs,
+        "unload_slot": provider_allows_ifs,
         "manage": True,
+        "preview_job": provider_allows_ifs,
     }
 
     module["diagnostics"] = {

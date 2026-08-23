@@ -682,3 +682,25 @@ Fluidd уже принят как первый frontend Plugins AD5X и имее
 - frontend-neutral manual mapping draft/preview token остаются частью backend contract;
 - следующий UI increment выполняется в `genrudko/fluidd:ad5x-dev` и начинается с сверки существующего `src/ad5x/**` с Happy Hare/official Fluidd/Helix/PAXX reference pack;
 - KlipperScreen не используется как design proving ground до готовности его базового AD5X-порта.
+
+---
+
+## D-027 — IFS Manager работает в DISPLAY_OFF; native screen — maintenance compatibility mode
+
+**Дата:** 2026-08-24
+**Статус:** accepted
+**Уточняет:** D-014, D-024, D-026
+
+### Решение
+
+Полноценный Plugins AD5X IFS Manager v1 поддерживается только в режиме Z-Mod `DISPLAY_OFF`, где прямым IFS runtime владеет Z-Mod. Родной экран используется как временный maintenance-режим для штатных калибровок/MESH, Wi-Fi и инженерного меню и не получает второй полноценный Plugins AD5X IFS backend.
+
+При native screen ON backend должен распознать смену ownership, перевести IFS Manager в `maintenance-suspended`, запретить его mechanical actions и custom pre-print interception, не обращаться напрямую к IFS serial и не мешать обычному Z-Mod/Flashforge workflow. После возврата в `DISPLAY_OFF` IFS Manager снова активируется по фактической готовности provider runtime.
+
+### Следствия
+
+- `/detail`-based full native IFS adapter не входит в v1;
+- отсутствие `zmod_ifs.ifs_data` нельзя автоматически трактовать как физически отсутствующий IFS;
+- Fluidd/Mainsail IFS UI capability-gated на поддерживаемый `DISPLAY_OFF` runtime;
+- Z-Mod остаётся владельцем matcher и `PRINT_ZCOLOR` launch;
+- обычная печать Z-Mod должна работать и когда Plugins AD5X IFS Manager suspended.

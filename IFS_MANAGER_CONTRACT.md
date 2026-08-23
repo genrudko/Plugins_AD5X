@@ -53,6 +53,8 @@ Z-Mod remains authoritative for proven provider behavior:
 
 Plugins AD5X translates provider mechanisms into stable semantic state/actions. It does not create a second hardware implementation.
 
+V1 full-manager support requires Z-Mod `DISPLAY_OFF`. With the native Flashforge screen enabled, IFS Manager enters `maintenance-suspended`: its mechanical actions and custom pre-print flow are unavailable while ordinary Z-Mod/Flashforge behavior remains untouched. Full `/detail`-based native-screen parity is not required.
+
 ## 3. Truth domains
 
 These domains are independent unless the backend explicitly joins them:

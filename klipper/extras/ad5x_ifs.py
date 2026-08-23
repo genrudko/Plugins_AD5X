@@ -58,6 +58,7 @@ class AD5XIFS:
         self.printer = config.get_printer()
         self.zmod_ifs = None
         self.zmod_color = None
+        self.provider_mode = "unknown"
         self.job_preview = self._empty_job_preview("not_scanned")
         self.gcode = self.printer.lookup_object("gcode", None)
         if self.gcode is not None and hasattr(self.gcode, "register_command"):
@@ -101,21 +102,42 @@ class AD5XIFS:
             "get_printer_data_detail",
             "parse_printer_response",
             "get_auto_tool_assignments",
+            "get_display",
         )
         if candidate is None or not all(hasattr(candidate, name) for name in required):
             self.zmod_color = None
+            self.provider_mode = "unknown"
         else:
             self.zmod_color = candidate
+            try:
+                self.provider_mode = (
+                    "native_display" if bool(candidate.get_display()) else "display_off"
+                )
+            except Exception:
+                self.provider_mode = "unknown"
 
     def _handle_disconnect(self):
         self.zmod_ifs = None
         self.zmod_color = None
+        self.provider_mode = "unknown"
         self.job_preview = self._empty_job_preview("klippy_disconnected")
 
-    def _unavailable(self):
+    def _unavailable(self, reason=""):
+        native = self.provider_mode == "native_display"
+        if not reason:
+            reason = (
+                "native_display_active"
+                if native
+                else "direct_provider_unavailable"
+                if self.provider_mode == "display_off"
+                else "provider_mode_unknown"
+            )
         return {
             "available": False,
-            "state": "unavailable",
+            "state": "maintenance_suspended" if native else "unavailable",
+            "reason": reason,
+            "provider_mode": self.provider_mode,
+            "maintenance_suspended": native,
             "state_code": 0,
             "active_slot": 0,
             "slots": [],
@@ -194,6 +216,15 @@ class AD5XIFS:
             self.job_preview = self._empty_job_preview("zmod_color_unavailable")
             raise gcmd.error("zmod_color is unavailable")
 
+        if self.provider_mode != "display_off":
+            error = (
+                "native_display_active"
+                if self.provider_mode == "native_display"
+                else "provider_mode_unknown"
+            )
+            self.job_preview = self._empty_job_preview(error)
+            raise gcmd.error("AD5X IFS job preview requires Z-Mod DISPLAY_OFF")
+
         adapter = _PreviewGcmd(filename)
         old_file_colors_present = hasattr(zmod_color, "file_colors")
         old_file_colors = getattr(zmod_color, "file_colors", None)
@@ -259,9 +290,12 @@ class AD5XIFS:
         gcmd.respond_raw("ADIFS_JOB_PREVIEW_OK")
 
     def get_status(self, eventtime):
+        if self.provider_mode != "display_off":
+            return self._unavailable()
+
         zmod_ifs = self.zmod_ifs
         if zmod_ifs is None:
-            return self._unavailable()
+            return self._unavailable("direct_provider_unavailable")
 
         ifs_data = getattr(zmod_ifs, "ifs_data", None)
         if ifs_data is None or not hasattr(ifs_data, "get_values"):
@@ -304,6 +338,9 @@ class AD5XIFS:
 
         return {
             "available": available,
+            "reason": "" if available else "direct_provider_unavailable",
+            "provider_mode": "display_off",
+            "maintenance_suspended": False,
             "state": FFS_STATE_NAMES.get(state_code, "unknown"),
             "state_code": state_code,
             "active_slot": active_slot,

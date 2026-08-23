@@ -120,9 +120,9 @@ SAFE_JOB_PREVIEW_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
 IFS_JOB_PREVIEW_COMMAND = "ADIFS_JOB_PREVIEW"
 IFS_ACTION_COMMANDS = {
     "select_slot": "SET_EXTRUDER_SLOT SLOT={slot}",
-    "load_slot": "INSERT_PRUTOK_IFS PRUTOK={slot}",
-    # Z-Mod's stock toolhead-unload wrapper: it owns heat/cut/trash/cooldown semantics.
-    "unload_slot": "_IFS_REMOVE_CURRENT_PRUTOK",
+    # Z-Mod's public IFS UI uses IN_ZCOLOR as the provider-level load/unload wrapper.
+    "load_slot": "IN_ZCOLOR SLOT={slot} NAPR=0",
+    "unload_slot": "IN_ZCOLOR SLOT={slot} NAPR=1",
 }
 
 
@@ -942,7 +942,13 @@ class PluginsAD5X:
             return f"Unsupported IFS action: {action}"
         if slot < 1 or slot > 4:
             return f"Invalid IFS slot: {slot}"
-        if self._ifs_module is None or not self._ifs_module.get("available", False):
+        module = self._ifs_module if isinstance(self._ifs_module, dict) else {}
+        provider_mode = module.get("provider_mode")
+        if provider_mode == "native_display":
+            return "IFS Manager is suspended while the native display owns IFS"
+        if provider_mode not in (None, "", "display_off"):
+            return f"IFS provider mode is not supported: {provider_mode}"
+        if not module.get("available", False):
             return "IFS is not available"
         if self._ifs_module.get("state") != "ready":
             return f"IFS is not ready: {self._ifs_module.get('state', 'unknown')}"
@@ -1298,7 +1304,17 @@ class PluginsAD5X:
 
         if not self._job_preview_filename_valid(filename):
             return self._job_preview_rejection(filename, "Invalid IFS job preview filename")
-        if self._ifs_module is None or not self._ifs_module.get("available", False):
+        module = self._ifs_module if isinstance(self._ifs_module, dict) else {}
+        provider_mode = module.get("provider_mode")
+        if provider_mode == "native_display":
+            return self._job_preview_rejection(
+                filename, "IFS Manager is suspended while the native display owns IFS"
+            )
+        if provider_mode not in (None, "", "display_off"):
+            return self._job_preview_rejection(
+                filename, f"IFS provider mode is not supported: {provider_mode}"
+            )
+        if not module.get("available", False):
             return self._job_preview_rejection(filename, "IFS bridge is not available")
         if self._operation_state != "idle":
             return self._job_preview_rejection(
