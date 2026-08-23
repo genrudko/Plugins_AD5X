@@ -6,7 +6,7 @@
 
 ## D-001 — Не форкать Z-Mod
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -28,7 +28,7 @@ Z-Mod остаётся upstream-фундаментом. Plugins AD5X не буд
 
 ## D-002 — GitHub является источником истины
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -52,7 +52,7 @@ Z-Mod остаётся upstream-фундаментом. Plugins AD5X не буд
 
 ## D-003 — Две ветки Plugins AD5X: `main` и `dev`
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -72,7 +72,7 @@ Z-Mod остаётся upstream-фундаментом. Plugins AD5X не буд
 
 ## D-004 — Fluidd форкается от `ghzserg/fluidd`
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -96,7 +96,7 @@ Z-Mod уже использует и сопровождает свой Fluidd fo
 
 ## D-005 — Минимизировать patch surface Fluidd
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -115,7 +115,7 @@ AD5X-специфичный код должен быть максимально 
 
 ## D-006 — Один backend, несколько frontend
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -134,7 +134,7 @@ Fluidd не должен становиться скрытым backend Plugins A
 
 ## D-007 — UX-правило 90%
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -153,7 +153,7 @@ Fluidd не должен становиться скрытым backend Plugins A
 
 ## D-008 — Hardware Manager становится первым крупным модулем
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -172,7 +172,7 @@ Side/AUX/PLA Fan.
 
 ## D-009 — Hardware Manager является registry, а не монолитом
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -187,7 +187,7 @@ Side/AUX/PLA Fan.
 
 ## D-010 — IFS идентифицирует катушку, а не RGB
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -206,7 +206,7 @@ Side/AUX/PLA Fan.
 
 ## D-011 — Calibration Center хранит валидность калибровки
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -225,7 +225,7 @@ Side/AUX/PLA Fan.
 
 ## D-012 — Print Preflight является guard
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -240,7 +240,7 @@ Preflight проверяет состояние и после успеха вы�
 
 ## D-013 — UI first, daemon last
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -265,7 +265,7 @@ UI / existing API / macros
 
 ## D-014 — Fail-safe важнее удобства
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -280,7 +280,7 @@ UI / existing API / macros
 
 ## D-015 — Специфичное железо сначала живёт в `dev`
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -299,7 +299,7 @@ Flook32, Air Manager, нестандартные камеры, хотэнды и
 
 ## D-016 — AI не является источником инженерной истины
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -323,7 +323,7 @@ AI/Codex используется для ускорения разработки
 
 ## D-017 — Не кодить Hardware Manager до Fluidd discovery
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -338,7 +338,7 @@ AI/Codex используется для ускорения разработки
 
 ## D-018 — Fluidd интегрируется через две минимальные upstream-точки
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -362,7 +362,7 @@ AI/Codex используется для ускорения разработки
 
 ## D-019 — AD5X route статический, навигация capability-gated
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -383,7 +383,7 @@ AI/Codex используется для ускорения разработки
 
 ## D-020 — Capability detection двухступенчатый и принадлежит backend
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -407,7 +407,7 @@ Frontend не должен самостоятельно выводить нал�
 
 ## D-021 — `ad5x-dev` получает отдельный downstream CI workflow
 
-**Дата:** 2026-08-12  
+**Дата:** 2026-08-12
 **Статус:** accepted
 
 ### Решение
@@ -434,8 +434,8 @@ Workflow должен запускаться минимум на push в `ad5x-d
 
 ## D-022 — Backend contract v1 строится как optional Moonraker component
 
-**Дата:** 2026-08-12  
-**Статус:** accepted  
+**Дата:** 2026-08-12
+**Статус:** accepted
 **Уточняет:** D-013, D-014, D-020
 
 ### Решение
@@ -531,9 +531,11 @@ Steady-state polling не используется. `snapshot_changed` пред�
 
 ## D-023 — Backend runtime component deploys as managed copy with observed-stop lifecycle
 
-**Дата:** 2026-08-13  
-**Статус:** accepted  
+**Дата:** 2026-08-13
+**Статус:** superseded by D-024
 **Уточняет:** D-014, D-022
+
+> Deployment/ownership часть этого решения историческая и superseded D-024. Hardware evidence и observed-stop/readiness выводы сохраняются.
 
 ### Решение
 
@@ -598,3 +600,61 @@ Controlled acceptance на физическом AD5X доказал managed-copy
 - backend runtime/config входят в существующий snapshot/rollback contour;
 - `--status` различает source/runtime/config/component/snapshot и service-unavailable state;
 - production installer не скрывает managed runtime artifact из Moonraker Git status.
+
+---
+
+## D-024 — Plugins AD5X использует штатный Z-Mod plugin lifecycle и не владеет core worktree
+
+**Дата:** 2026-08-23
+**Статус:** accepted
+**Supersedes:** deployment/ownership часть D-023
+**Уточняет:** D-001, D-014, D-022
+
+### Решение
+
+Canonical source Plugins AD5X живёт только в `/opt/config/mod_data/plugins/ad5x_custom`. Интеграция с Klipper/Moonraker выполняется plugin-owned symlink-ами, а не копированием или patch tracked core files. Runtime link paths локально исключаются через `.git/info/exclude`; uninstall/detach удаляет только наши links/exclude entries.
+
+Z-Mod lifecycle используется напрямую:
+
+- `install.sh` — initial activation / `ENABLE_PLUGIN`;
+- `update.sh` — post-update reconciliation из Moonraker Update Manager;
+- `uninstall.sh` — runtime detach / `DISABLE_PLUGIN`;
+- ручной `install.sh --uninstall` — полный unregister.
+
+Moonraker links: `plugins_ad5x.py`, `plugins_ad5x_ifs_model.py`, `plugins_ad5x_ifs_interop.py`, `plugins_ad5x_ifs_spoolman.py`. Klipper link: `klippy/extras/ad5x_ifs.py`. Все targets указывают в Plugins AD5X checkout.
+
+### Ownership и migration
+
+Отсутствующий destination можно создать. Exact symlink на installed checkout считается owned. Legacy managed-copy artifact с доказанным ownership hash или точным совпадением current source безопасно мигрируется в link. Любой другой existing file/link считается foreign и не перезаписывается. Backup/rollback сохраняет тип symlink и target.
+
+### Update semantics
+
+`update.sh` не останавливает и не запускает Moonraker: hook выполняется дочерним процессом Update Manager и не должен убивать родителя. Он re-links/reconciles config и ставит `runtime-restart-required`; новый Python-код применяется после нормального нового host process/cold boot. `DISABLE_PLUGIN` сохраняет checkout и Update Manager registration.
+
+### Почему
+
+Source audit Z-Mod подтвердил `ENABLE_PLUGIN`, `DISABLE_PLUGIN`, `install.sh`, `uninstall.sh`, Update Manager `update.sh` и symlink precedent для Klipper Python extras. Такая схема не требует tracked patches в Z-Mod/Klipper/Moonraker и минимизирует риск блокировки их штатных обновлений.
+
+### Hard recovery boundary
+
+Destructive hard recovery/reclone core repository может удалить runtime symlinks вместе с пересозданным tree. Общий Z-Mod startup не доказан как автоматически повторно запускающий `install.sh` каждого enabled plugin после такого recovery, поэтому automatic self-repair не обещается. Поддерживаемый recovery — повторный `ENABLE_PLUGIN`/`install.sh` (explicit repair).
+
+### Следствия
+
+При активном полном IFS Manager legacy `/opt/config/mod_data/ifs_spoolman/start.sh` не запускается параллельно: Spoolman runtime ownership принадлежит Plugins AD5X backend + native Moonraker Spoolman. Это не отменяет standalone IFS/Spoolman как отдельный lightweight product path. Любой будущий Python extra/component Plugins AD5X обязан использовать тот же lifecycle; прямой copy/patch в core worktree требует нового явного решения. Observed-stop часть D-023 остаётся применимой к installer-owned service transitions, но не к Update Manager hook.
+
+---
+
+## D-025 — Физическое присутствие сильнее cached spool identity; standalone Spoolman сохраняется как отдельный product path
+
+**Дата:** 2026-08-23
+**Статус:** accepted
+**Уточняет:** D-010, D-014, D-024
+
+### Решение
+
+Для полного IFS Manager `present=false` является авторитетным фактом: пустой физический слот не может отображать прежнюю concrete spool как установленную. При подтверждённом occupied→empty переходе current local/Spoolman binding удаляется, а persistent identity-invalidated tombstone запрещает автоматическое воскрешение прежнего exact spool ID после следующей вставки. External Spoolman entity не удаляется.
+
+После новой вставки без RFID/другого проверенного identity provider exact identity остаётся `unassigned` до нового bind/edit. Z-Mod material/color могут отображаться как provider-observed metadata, но не являются доказательством возврата прежней concrete spool.
+
+Существующий standalone IFS/Spoolman сценарий не объявляется deprecated только потому, что полный IFS Manager получил собственную Spoolman интеграцию. Он сохраняется как отдельный lightweight product path для пользователей, которым нужен только IFS↔Spoolman. Целевой standalone v2 должен использовать те же четыре slot bindings и automatic native Moonraker active-spool semantics, предпочтительно на общем semantic core. На одном принтере full и standalone режимы не должны одновременно владеть runtime.

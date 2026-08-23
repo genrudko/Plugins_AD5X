@@ -2,10 +2,10 @@
 
 > Оперативный снимок состояния проекта. Этот файл должен позволять новому координатору или разработчику быстро восстановить актуальный контекст без чтения длинной истории чата. История решений хранится в `DECISIONS.md`, история изменений — в Git.
 
-**Последнее обновление:** 2026-08-13  
-**Текущая фаза:** Phase 0 — Platform Foundation  
-**Статус:** Fluidd frontend shell PoC accepted; backend contract v1 accepted; backend repository PoC accepted; real-printer backend/managed-copy/rollback acceptance PASS; production installer lifecycle integration implemented / repository tests PASS; coordinator review pending  
-**Активный issue:** [#8 — PLATFORM-FOUNDATION-002: определить Plugins AD5X backend capability/API contract](https://github.com/genrudko/Plugins_AD5X/issues/8)  
+**Последнее обновление:** 2026-08-23
+**Текущая фаза:** IFS / Materials Manager v2 — `IFS-MANAGER-001`
+**Статус:** architecture v2 + Orca `lane_data` + optional full Spoolman backend + Z-Mod-native plugin lifecycle implemented in `feature/ifs-manager-v1`; repository acceptance PASS (140/140 unit tests, lifecycle shell syntax, Python compile, `git diff --check`); hardware write gates remain closed
+**Активный work item:** [#15 — IFS-MANAGER-001](https://github.com/genrudko/Plugins_AD5X/issues/15) / Draft PR #16 / `feature/ifs-manager-v1` (base `dev`)
 **Состояние реального принтера после controlled acceptance:** исходный baseline восстановлен; backend/config удалены; Moonraker и `ad5x_custom` CLEAN; Camera 1/2 и IFS PASS
 
 ---
@@ -192,7 +192,7 @@ Controlled printer acceptance under issue #8 is complete.
 
 ### 5.1 Active runtime PASS
 
-Managed-copy deployment was tested on the actual printer:
+Historical managed-copy deployment was tested on the actual printer. This remains hardware evidence for backend load/API compatibility, but its deployment ownership model is superseded by D-024:
 
 ```text
 source artifact
@@ -297,189 +297,93 @@ HTTP reachability alone is insufficient. `klippy_state=startup` is not final rea
 
 ---
 
-## 7. Production backend deployment integration — implemented in repository
+## 7. Production plugin lifecycle integration — implemented in working tree
 
-The current issue #8 repository-side productionization integrates the accepted runtime model into the existing `install.sh`, without rewriting the Camera 2 / Notify / Timelapse / IFS contour.
+Canonical deployment now follows Z-Mod's native plugin lifecycle (D-024). Plugins AD5X source remains in `/opt/config/mod_data/plugins/ad5x_custom`; Klipper/Moonraker receive only plugin-owned symlinks plus normal config includes. No tracked core source file is patched or copied.
 
-Owned artifacts:
+Runtime links:
 
 ```text
-source:
-/opt/config/mod_data/plugins/ad5x_custom/moonraker/components/plugins_ad5x.py
+Klipper:
+/opt/config/base/klipper/klippy/extras/ad5x_ifs.py
+  -> /opt/config/mod_data/plugins/ad5x_custom/klipper/extras/ad5x_ifs.py
 
-runtime managed copy:
+Moonraker:
 /opt/config/base/moonraker/components/plugins_ad5x.py
-
-activation config:
-/opt/config/mod_data/plugins/ad5x_custom/plugins_ad5x.moonraker.conf
+/opt/config/base/moonraker/components/plugins_ad5x_ifs_model.py
+/opt/config/base/moonraker/components/plugins_ad5x_ifs_interop.py
+/opt/config/base/moonraker/components/plugins_ad5x_ifs_spoolman.py
+  -> matching files in the Plugins AD5X checkout
 ```
 
-Activation is intentionally separate from notifier ownership:
+Local `.git/info/exclude` entries hide only these known link paths from normal core `git status`; they do not modify tracked `.gitignore` and are removed on detach/uninstall. Foreign destinations fail closed. Previous owned managed-copy files are migrated only when legacy ownership can be proven.
 
-```ini
-[include plugins/ad5x_custom/ad5x_custom.moonraker.conf]
-[include plugins/ad5x_custom/plugins_ad5x.moonraker.conf]
-```
+### 7.1 Z-Mod hooks
 
-The new backend config contains only:
+- `install.sh` — initial activation / `ENABLE_PLUGIN`;
+- `update.sh` — Update Manager reconciliation;
+- `uninstall.sh` — `DISABLE_PLUGIN` runtime detach while retaining plugin checkout + Update Manager registration;
+- `install.sh --uninstall` — explicit full unregister.
 
-```ini
-[plugins_ad5x]
-```
+The update hook does not restart its parent Moonraker process. It re-links/reconciles and creates `runtime-restart-required`; Python changes become active after a normal new process/cold boot. Klipper Python extra changes still require a real new Klippy process; `FIRMWARE_RESTART` alone is not sufficient based on AD5X hardware evidence.
 
-### 7.1 Validation and ownership
+### 7.2 Rollback and recovery
 
-Before destination mutation the installer verifies:
+Snapshot/restore preserves symlink identity/target, config includes, local exclude state and previous service state. Installer-owned activation/deactivation keeps the observed stop -> process-count-zero -> filesystem transition -> start -> HTTP -> Klippy-ready lifecycle from D-023.
 
-- backend source exists and is non-empty;
-- Python syntax via `python -B`/AST without `.pyc` generation;
-- `API_VERSION == 1.0`;
-- `BACKEND_VERSION` matches root `VERSION`;
-- runtime Moonraker components directory exists;
-- activation config is minimal and valid;
-- an existing destination is demonstrably managed by Plugins AD5X.
+A destructive core hard recovery/reclone may remove runtime links. Generic Z-Mod startup has not been proven to rerun every enabled plugin's install hook automatically after such a reclone, so explicit `ENABLE_PLUGIN`/`install.sh` repair remains the documented recovery path.
 
-Unknown existing destination fails safe and is not overwritten.
+### 7.3 Spoolman consolidation
 
-Runtime ownership is recorded by SHA-256. The managed copy is written to a temporary file **inside the destination directory**, permissions and hash are verified, and only then atomically renamed over the final destination.
-
-### 7.2 Backup and rollback
-
-Existing `snapshot()`, `restore_snapshot()` and installer rollback are extended rather than replaced. Snapshot now covers:
-
-- backend runtime destination, including absent marker;
-- backend ownership hash state;
-- Moonraker include state;
-- user Moonraker config and existing installer-owned state.
-
-Rollback distinguishes service state and avoids recursive restart loops:
-
-- failure before any stop attempt does not interrupt Moonraker unnecessarily;
-- failure after stop restores files/config and returns Moonraker to its original running state;
-- failure after start but before Klippy readiness performs a controlled stop/wait, restores snapshots, then one controlled start/readiness sequence if Moonraker was originally running.
-
-### 7.3 Update / repair semantics
-
-Managed copy intentionally means:
-
-```text
-Git checkout update ≠ runtime code immediately changed
-```
-
-The existing explicit apply operation is the deployment/repair primitive:
-
-```sh
-install.sh --apply-only
-```
-
-It validates the newly checked-out backend artifact, replaces the managed runtime copy atomically and activates it through the observed-stop lifecycle.
-
-`--refresh-only` remains lightweight and only refreshes generated overlays; it does **not** restart/deploy Moonraker during the existing power-on path.
-
-Moonraker hard recovery or `git clean` may delete the untracked runtime component. That is an expected external destructive event. `--apply-only` repairs/reinstalls the component. The Moonraker repo is **not** made artificially CLEAN with `.git/info/exclude` for this runtime file.
-
-### 7.4 Status and uninstall
-
-`install.sh --status` now distinguishes:
-
-```text
-backend source
-backend runtime file
-backend config include
-Moonraker component presence / failed component
-backend snapshot
-Moonraker reachable but Klippy not ready
-runtime service unavailable
-```
-
-A mere existing file cannot produce a healthy backend status.
-
-`--uninstall` removes backend activation, the owned managed runtime copy, ownership state and `plugins_ad5x*.pyc`; unknown destination ownership fails safe. Existing user camera/IFS/timelapse/log/backup preservation semantics remain intact.
-
-The existing full power-cycle message is retained for the older camera/power-on contour. Backend activation itself uses only the controlled Moonraker lifecycle and does not introduce an extra printer reboot requirement.
-
-### 7.5 Repository verification
-
-Current repository-side verification for this productionization step:
-
-```text
-sh -n install.sh                                      PASS
-python3 -m unittest discover -s tests -v             PASS (24/24)
-```
-
-Breakdown:
-
-```text
-existing backend component contract tests: 8/8 PASS
-new installer/backend lifecycle tests:      16/16 PASS
-```
-
-Coverage includes source validation, managed/unknown destination ownership, atomic path, absent/previous snapshot restoration, exact-once config activation, uninstall cleanup, lifecycle ordering, HTTP-vs-Klippy readiness, `startup` rejection, `ready` acceptance, timeout, explicit apply semantics and prohibition of `S65moonraker restart` in backend deployment lifecycle.
-
-No real-printer write/restart operation is part of this repository-side productionization step.
+When the full IFS Manager is active, the legacy `/opt/config/mod_data/ifs_spoolman/start.sh` power-on path is not used. Full-manager Spoolman ownership belongs to Plugins AD5X backend + native Moonraker Spoolman, avoiding a second competing manager/consumption tracker. The standalone bridge remains a separate lightweight product path and is not declared deprecated by this change.
 
 ---
 
-## 8. What is explicitly out of scope now
+## 8. Current IFS v2 gate
 
-Until coordinator review of issue #8 completes, do **not** expand this work into:
+Active work is issue #15 / Draft PR #16 on `feature/ifs-manager-v1`. The current checkpoint includes the frontend-neutral IFS model, Orca `lane_data`, optional full Spoolman integration and D-024 plugin lifecycle migration.
 
-- another printer installation/SSH write/restart test;
-- Fluidd production RPC replacement/deployment;
-- Hardware / Mods Manager implementation;
-- Side/AUX/PLA Fan implementation;
-- IFS Manager UI;
-- Calibration Center;
-- Print Preflight;
-- Camera Manager productization;
-- Mainsail/HelixScreen parity;
-- module manifest format finalization;
-- separate daemon/DB;
-- Z-Mod fork or tracked Moonraker/Z-Mod source modifications.
+Still explicitly gated until source/hardware acceptance:
 
-Issue #8 remains OPEN for coordinator review; it is not to be closed by the implementation executor.
+- production `PRINT_ZCOLOR` / `start_job`;
+- applying pre-print mapping;
+- Z-Mod material/color write projection;
+- automatic equivalent/endless-spool switching;
+- new recovery motion;
+- automated external/bypass source control.
+
+The full manager is not allowed to start the legacy standalone `/opt/config/mod_data/ifs_spoolman/start.sh` alongside its own backend. The standalone Spoolman bridge remains a separately useful lightweight product path and should evolve toward the same four-slot/active-spool semantics rather than compete with the full manager at runtime.
 
 ---
 
-## 9. Accepted decisions relevant to the current gate
+## 9. Current spool identity rule
+
+Physical presence is authoritative. `present=false` outranks cached FlashForge/manual/Spoolman metadata. An empty slot must not expose the old spool as currently installed.
+
+When a previously occupied slot becomes empty, Plugins AD5X removes the slot's current local/Spoolman binding and persists an identity-invalidated tombstone. The external Spoolman entity is never deleted. Re-inserting filament does not resurrect the old exact Spoolman ID: until a new bind/edit occurs, the slot is `unassigned` for exact identity. Provider-observed material/color may still be shown when available, but must not be presented as proof that the previous concrete spool is back.
+
+---
+
+## 10. Accepted decisions relevant to the current gate
 
 See `DECISIONS.md`. Most important here:
 
 - D-014 — fail-safe is more important than convenience;
-- D-018 — Fluidd two-seam integration boundary;
-- D-019 — static `/ad5x`, capability-gated navigation;
-- D-020 — two-stage backend-owned capability detection;
-- D-021 — downstream-only Fluidd CI;
 - D-022 — optional Moonraker backend contract v1;
-- **D-023 — backend runtime is a managed copy with observed-stop lifecycle.**
+- D-023 — historical managed-copy + observed-stop evidence; deployment ownership superseded;
+- **D-024 — canonical Z-Mod plugin lifecycle + plugin-owned symlinks; no tracked core worktree ownership.**
 
-D-023 resolves the deployment implementation detail left open by D-022.
-
----
-
-## 10. Remaining Platform Foundation work after this review
-
-This step does not by itself complete all of Phase 0. Remaining work must be selected by the coordinator after issue #8 review. Candidate unresolved Phase 0 items include:
-
-- replacing the provisional Fluidd RPC seam with the accepted production snapshot API;
-- production Fluidd deployment/update strategy;
-- minimal module/provider/state contract needed by the first real module;
-- storage/state ownership policy where persistent module state is actually required;
-- minimal developer guidance for subsequent modules.
-
-The first real hardware use case after Platform Foundation remains Side/AUX/PLA Fan, but it must not be pulled into issue #8.
+D-024 supersedes deployment/ownership from D-023 while retaining its observed-stop/readiness evidence for installer-owned service transitions.
 
 ---
 
 ## 11. Context recovery rule
 
-A new coordinator should, before changing anything:
+A new coordinator should, before changing IFS work:
 
-1. read `ROADMAP.md`;
-2. read `ARCHITECTURE.md`;
-3. read `PROJECT_STATE.md`;
-4. read `DECISIONS.md`;
-5. open issue #8 including the latest printer-acceptance and implementation comments;
-6. verify the current `genrudko/Plugins_AD5X:dev` head and any commits after the state recorded here;
-7. treat GitHub/code as authoritative over old chat history;
-8. never infer printer state from repository state — physical-runtime claims require observed evidence.
+1. read `ROADMAP.md`, `ARCHITECTURE.md`, `PROJECT_STATE.md` and `DECISIONS.md`;
+2. read `docs/IFS_MANAGER_ARCHITECTURE_V2.md`, `IFS_MANAGER_CONTRACT.md` and `docs/IFS_MANAGER_DISCOVERY_2026-08-22.md`;
+3. open issue #15 and Draft PR #16;
+4. verify `origin/dev`, `feature/ifs-manager-v1`, exact HEAD and checks before editing;
+5. treat GitHub/code and source/hardware evidence as authoritative over old chat history;
+6. never infer physical-printer acceptance from repository tests alone.

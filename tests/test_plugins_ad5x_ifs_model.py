@@ -112,7 +112,7 @@ class IFSManagerModelTests(unittest.TestCase):
         self.assertEqual(invalid["colors"], [])
         self.assertEqual(invalid["finish"], "standard")
 
-    def test_empty_slot_keeps_metadata_but_marks_it_stale(self):
+    def test_empty_slot_hides_stale_metadata_from_current_identity(self):
         slot = model.normalize_slot(
             {"slot": 4, "present": False, "stall": False},
             {
@@ -128,12 +128,15 @@ class IFSManagerModelTests(unittest.TestCase):
         )
         self.assertFalse(slot["present"])
         self.assertEqual(slot["metadata_status"], "stale")
-        self.assertEqual(slot["spool"]["material"], "TPU")
+        self.assertEqual(slot["spool"]["material"], "")
+        self.assertNotIn("material", slot)
+        self.assertTrue(slot["stale_metadata_available"])
+        self.assertEqual(slot["current_identity_status"], "empty")
         self.assertFalse(slot["permissions"]["select_slot"])
         self.assertFalse(slot["permissions"]["load_slot"])
         self.assertEqual(slot["permissions"]["blocked_reason"], "slot_empty")
 
-    def test_finish_only_metadata_is_not_lost(self):
+    def test_finish_only_metadata_is_hidden_when_slot_empty(self):
         slot = model.normalize_slot(
             {"slot": 4, "present": False, "stall": False},
             {"appearance": {"finish": "silk"}},
@@ -143,8 +146,10 @@ class IFSManagerModelTests(unittest.TestCase):
             print_state="standby",
             operation_state="idle",
         )
-        self.assertEqual(slot["appearance"]["finish"], "silk")
+        self.assertEqual(slot["appearance"]["finish"], "standard")
         self.assertEqual(slot["metadata_status"], "stale")
+        self.assertTrue(slot["stale_metadata_available"])
+        self.assertEqual(slot["current_identity_status"], "empty")
 
     def test_permissions_are_backend_owned_and_fail_closed(self):
         active = model.compute_slot_permissions(

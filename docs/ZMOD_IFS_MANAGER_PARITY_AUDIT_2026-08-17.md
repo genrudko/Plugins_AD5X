@@ -1,208 +1,201 @@
-# Z-Mod IFS Manager functional parity audit — 2026-08-17
+# Z-Mod IFS Manager parity audit
 
-Status: **active implementation checklist**  
-Work item: `IFS-MANAGER-001` / issue #15  
-Plugins AD5X branch: `feature/ifs-manager-v1`  
-Reference provider: `ghzserg/z_ad5x`, branch `1.7`
+Initial audit: 2026-08-17
+Expanded source/community review: **2026-08-22**
+Work item: `IFS-MANAGER-001` / issue #15
 
 ## 1. Purpose
 
-Plugins AD5X IFS / Materials Manager is intended to become the complete user-facing replacement for the stock Z-Mod IFS/material manager while continuing to use Z-Mod as a low-level/provider implementation where that is safer and more maintainable.
+This audit defines the **minimum user-facing parity floor** Plugins AD5X must reach before its IFS / Materials Manager can replace the stock Z-Mod IFS manager for ordinary and Expert workflows.
 
-This document prevents a visually better replacement from becoming functionally poorer than Z-Mod.
+It is not a request to fork Z-Mod. Proven hardware/protocol/matcher/print-lifecycle logic stays provider-owned and is normalized by Plugins AD5X.
 
-Status vocabulary:
+The 2026-08-22 review corrected an earlier research mistake: `ghzserg/zmod` alone is not the whole AD5X runtime source. Relevant implementation is distributed across Z-Mod wiki, `zmod`, `base`, `z_ad5x`, Z-Mod Klipper/Moonraker forks and related plugins.
 
-- **DONE** — implemented in the normalized Plugins AD5X backend/reference flow;
-- **PARTIAL** — useful implementation exists but does not yet cover the Z-Mod user-facing workflow;
-- **PROVIDER** — Z-Mod already owns the correct low-level behavior; Plugins AD5X should expose it through a normalized action/state instead of reimplementing it;
-- **MISSING** — required product behavior is not implemented yet;
-- **HARDWARE GATE** — implementation must remain disabled until real-printer acceptance;
-- **TRACE** — source primitive was found, but its complete user-facing/configuration path still needs source/hardware tracing before product exposure.
+## 2. Provider source map
 
-This is a living matrix. It should be updated when a gap is closed rather than replaced by ad-hoc frontend-specific checklists.
+Before enabling any provider-overlapping write path, inspect the relevant current source in this order as applicable:
 
-## 2. Reference source facts
+```text
+Z-Mod wiki
+   |
+   +--> ghzserg/zmod
+   +--> ghzserg/base
+   +--> ghzserg/z_ad5x (.shell runtime modules)
+   +--> ghzserg/zmod_klipper / zmod_moonraker
+   +--> related official plugins/forks
+```
 
-### `zmod_color.py`
+For IFS specifically, high-value runtime sources include `zmod_color.py`, `zmod_ifs.py`, IFS sensor extras, print/change-filament macros and current `START_PRINT`/`PRINT_ZCOLOR` integration.
 
-Reference file SHA: `158338c4f8f6c937e3b1ae6f9ca34261983cc425`.
+## 3. Parity matrix
 
-Registered public/internal commands include:
+| Capability | Z-Mod/provider behavior | Plugins AD5X current/target | Completion gate |
+|---|---|---|---|
+| Physical 4-slot state | Provider exposes IFS status/masks/current channel | normalized 4-slot model exists | retain hardware regression |
+| Active/current slot | provider runtime source | normalized active/runtime slot exists | retain hardware regression |
+| Toolhead filament | head switch/provider state | normalized boolean exists | retain hardware regression |
+| Material/color display | stock `COLOR` and Flashforge metadata | normalized + rich overlay exists | Expert native UI |
+| Material/color editing | provider supports normal mutation path | read projection exists; write gated | source + hardware write acceptance |
+| Select/load/unload | provider primitives/macros | semantic actions exist | already hardware tested; preserve gates |
+| G-code tool/color scan | Z-Mod scanner | delegated preview exists | parser-safe `ADIFS_JOB_PREVIEW` hardware regression |
+| Automatic assignment | material + LAB/ΔE76 matcher | delegated provider assignment exists | no duplicate matcher |
+| Weak/missing/duplicate reporting | provider returns flags/messages | normalized preview/preprint warnings | UI clarity acceptance |
+| Job `Tn → slot` mapping | stock print flow uses mapping | read mapping + proposed mapping exists | editable/apply path still gated |
+| Runtime remap during print | Z-Mod `PRINT`/change flow supports remap semantics | target Expert capability | source + hardware acceptance |
+| Print with IFS | provider `PRINT_ZCOLOR` lifecycle | preview/launch gate exists, production start disabled | real print acceptance |
+| Print without IFS | provider/silent policy supports bypassing IFS | target normalized mode | source + UI acceptance |
+| Auto insertion | provider functionality | target normalized capability/state | source + hardware acceptance |
+| Change filament during print | mature provider lifecycle | do not reimplement; wrap semantically | recovery/UX acceptance |
+| Purge behavior | provider material-change/purge logic | target policy/status surface | source verification |
+| Stop/reset/unlock | provider recovery primitives | target semantic recovery actions | bounded hardware acceptance |
+| Equivalent/endless spool | provider has analogous-spool primitive (`ANALOG_PRUTOK`) and compatible-spool behavior | architecture now explicitly targets provider-backed policy | source semantics + hardware transition acceptance |
+| IFS motion sensor | provider/sensor extras | target Expert diagnostics/recovery input | source/runtime verification |
+| Spool library | not complete stock equivalent | full optional Spoolman required | integration acceptance |
+| Orca material/color sync | not historical stock requirement; Z-Mod/community path discovered 2026-08-21 | `lane_data` compatibility projection required | Orca 2.4.2 acceptance |
+| Multi-UI presentation | stock UI/macros are provider-specific | any Klipper/Moonraker client + 5 first-party native adapters | backend portability + native acceptance |
 
-- `GET_ZCOLOR`;
-- `SET_ZCOLOR`;
-- `_SET_EXTRUDER_SLOT`;
-- `PRINT_ZCOLOR`;
-- `CHANGE_T_ZCOLOR`;
-- `_CHANGE_FILAMENT`;
-- `RUN_ZCOLOR`;
-- `CHANGE_ZCOLOR`;
-- `IN_ZCOLOR`;
-- `UPDATE_FF_OFFSET`.
+## 4. What must remain delegated to Z-Mod
 
-Observed user-facing semantics include:
+Plugins AD5X MUST NOT independently reimplement:
 
-- list current spool slots/material/color;
-- select a spool for actions;
-- change color;
-- change material type;
-- load/unload;
-- remove filament from extruder;
-- reset colors (prompt action; concrete reset macro remains a trace item);
-- scan G-code for used tools, material and color metadata;
-- auto-assign tools to slots;
-- indicate material mismatch, color mismatch, weak color match and duplicate-slot mapping;
-- manually remap each required tool to a slot;
-- select leveling-before-print;
-- start printing with IFS mapping;
-- explicitly print without IFS when appropriate.
+- IFS serial protocol;
+- low-level Fxx timings/retries;
+- current scanner/parser when Z-Mod can provide the same job result;
+- material filtering + LAB/ΔE matcher;
+- established in-print material-change lifecycle;
+- authoritative `PRINT_ZCOLOR` launch semantics;
+- existing auto-insert behavior;
+- equivalent-spool hardware transition where provider primitive already exists.
 
-Z-Mod's auto-assignment is provider-owned and uses material filtering followed by perceptual color comparison (CIE LAB / ΔE76). Plugins AD5X must not duplicate this matcher.
+If the product needs a better user workflow, wrap the provider mechanism through normalized semantic state/actions.
 
-`PRINT_ZCOLOR` is the authoritative Z-Mod multi-color launch lifecycle. In the non-stock-display path it validates the complete tool vector, writes `/usr/data/config/mod_data/file.json`, establishes the initial/current tool through the existing flow, and starts the virtual SD file. A generic frontend `print_start(filename)` is therefore not equivalent.
+## 5. Mapping conclusion
 
-### `zmod_ifs.py`
+The 2026-08-22 UX/source review clarifies that **mapping is a job-level concern**, not the main physical dashboard.
 
-Reference file SHA: `511d0140044a48529b9217d495f3737fe753790a`.
+AD5X topology is fixed:
 
-Provider primitives include:
+```text
+IFS1 --\
+IFS2 ---+--> selector --> one extruder
+IFS3 ---+
+IFS4 --/
+```
 
-- `INSERT_PRUTOK_IFS`;
-- `REMOVE_PRUTOK_IFS`;
-- `PURGE_PRUTOK_IFS`;
-- `SET_CURRENT_PRUTOK`;
-- `ANALOG_PRUTOK`;
-- `IFS_MOTION`;
-- `IFS_AUTOINSERT`;
-- `IFS_STATUS`;
-- `IFS_EXTRUDER_SENSOR`;
-- `IFS_REMOVE_PRUTOK`;
-- `IFS_REMOVE_CURRENT_PRUTOK`;
-- driver-level `IFS_F10/F11/F13/F15/F18/F23/F24/F39/F112` operations.
+Therefore:
 
-The provider also publishes/derives physical lane state, active channel, insertion event, stall state and raw IFS state, and automatically reacts to an insertion event through the Z-Mod auto-insert flow.
+- main screen = physical spools/sources/path/state;
+- `Tn → slot` appears in pre-print and active-job context;
+- Auto may hide healthy mapping;
+- Hybrid shows compact mapping + correction affordance;
+- Expert exposes full mapping/mismatch details.
 
-`ANALOG_PRUTOK` provides an existing equivalent-spool fallback primitive: it looks for another present spool with matching material/color, rewrites the active mapping and resumes through the existing filament-change path. Its complete configuration/trigger UX still needs tracing before calling this full endless-spool parity.
+This still preserves all provider mapping capability; it only removes unnecessary permanent UI dominance.
 
-## 3. Functional parity matrix
+## 6. External / bypass
 
-| Capability | Z-Mod 1.7 behavior | Plugins AD5X current state | Status | Required next state |
-|---|---|---|---|---|
-| IFS availability | detects IFS online/offline and changes provider state | normalized `available/state` from bridge | DONE | keep provider-owned |
-| Four lane presence | physical port/silk state | normalized lane `present` | DONE | native visualization in every UI |
-| Active/current lane | provider/current FF channel | runtime + configured active slot normalization | DONE | make distinction understandable in diagnostics only |
-| Toolhead filament presence | extruder sensor used in flows | Moonraker head sensor integrated into permissions | DONE | native state indication where useful |
-| Stall / insertion diagnostics | provider exposes stall, insert, NeedInsert | normalized diagnostics available | DONE | product-grade warning/recovery presentation |
-| Material/color display | stock single material + RGB per slot | Flashforge/Z-Mod fallback + rich overlay | DONE | rich native spool cards |
-| Change material/color in Z-Mod representation | `CHANGE_ZCOLOR` writes stock/provider representation | read-only compatibility projection only | PARTIAL + HARDWARE GATE | normalized compatibility write action with stale/readback verification |
-| Rich multi-color appearance | not represented by stock single RGB model | solid/dual/tricolor/gradient/rainbow/special + finish | DONE (model) | product-grade visual component in all UIs |
-| Manufacturer/series/name/variant | limited/not native in stock manager | persistent Plugins AD5X rich metadata overlay | DONE | merge with optional Spoolman authority cleanly |
-| Select active lane | `_SET_EXTRUDER_SLOT` / provider state | normalized `select_slot` action | DONE | retain backend permission ownership |
-| Load lane | `IN_ZCOLOR` -> existing Z-Mod load path | normalized `load_slot` -> `INSERT_PRUTOK_IFS` | DONE (technical) | keep hardware evidence and improve UX feedback |
-| Unload active filament | stock/Z-Mod unload path | normalized active-slot unload wrapper | DONE (bounded) | expose recovery alternatives for non-normal states |
-| Arbitrary/recovery unload | provider has lower-level removal primitives | deliberately restricted | MISSING + HARDWARE GATE | separate recovery action contract; never silently broaden normal unload |
-| Automatic insertion | insertion event triggers `_IFS_AUTOINSERT` | state is visible; Plugins AD5X does not own the automation | PROVIDER/PARTIAL | surface progress/errors without duplicating provider motion logic |
-| Purge/recovery primitive | `PURGE_PRUTOK_IFS` | not exposed | MISSING + HARDWARE GATE | expert/recovery semantic action if hardware use-case is accepted |
-| Driver reset | `IFS_F15` | not exposed | MISSING + HARDWARE GATE | diagnostics/recovery action with explicit confirmation |
-| Emergency filament stop | `IFS_F112` | not exposed as user action | MISSING + HARDWARE GATE | backend emergency/recovery semantic action, not raw macro button |
-| Unlock lane/all lanes | `IFS_F39` / `IFS_F18` | not exposed | MISSING + HARDWARE GATE | recovery-only normalized actions if needed by parity/use cases |
-| G-code tool discovery | `get_used_colors` scans T-codes/header/prepared Z-Mod data | delegated live `zmod_color.get_used_colors` | DONE | retain one canonical matcher/scanner |
-| File material/color requirements | parsed from slicer metadata | normalized `job_preview.requirements` | DONE | richer pre-print presentation |
-| Automatic material/color assignment | material filter + ΔE76 + provider flags | delegated live `get_auto_tool_assignments` | DONE | never create a competing Plugins AD5X matcher |
-| Weak/missing/duplicate match flags | provider aggregate flags | normalized aggregate warnings | DONE | present actionable, human-readable warnings |
-| Complete resolved Tn->slot vector | full vector required by Z-Mod print lifecycle | `allowed_tool_count` + `resolved_tool_map` now preserved/tokenized | DONE (repo) | real-printer read-only preview acceptance |
-| Manual Tn->slot correction | Z-Mod prompt can remap each tool | backend currently publishes preview; no normalized apply/edit action | MISSING | frontend-neutral draft/edit/apply mapping contract |
-| Pre-print plan | Z-Mod prompt shows mapping and state | normalized `preprint_plan` joins requirements, assignments, physical/rich spool data | DONE (repo) | hardware acceptance + product UI |
-| Leveling-before-print choice | explicit toggle in Z-Mod pre-print prompt | not yet modeled as user choice in IFS launch contract | MISSING | normalized launch option; later integrate with broader Plugins AD5X mesh/calibration policy |
-| IFS-off print path | Z-Mod can explicitly print without material station | not part of IFS Manager launch API yet | MISSING | safe explicit fallback; do not hijack normal generic printing |
-| Safe IFS multi-color launch | `PRINT_ZCOLOR` authoritative lifecycle | launch gate/token exists, write remains deliberately disabled | PARTIAL + HARDWARE GATE | controlled provider-delegated launch action + stale/live revalidation + real-printer proof |
-| In-print filament change | `_CHANGE_FILAMENT` consumes `file.json` mapping and handles errors/pause | intentionally left provider-owned | PROVIDER | surface current transition/progress/errors if observable |
-| Equivalent-spool fallback | `ANALOG_PRUTOK` can swap mapping to matching present spool and resume | not exposed; `endless_spool=false` | TRACE/MISSING + HARDWARE GATE | trace trigger/config semantics; expose as normalized endless-spool policy/action |
-| Low-level IFS status | `IFS_STATUS` and raw F13 state | normalized diagnostics | DONE | keep raw detail under Diagnostics, not main screen |
-| Per-material motion/purge tuning | provider reads `filament.json` profiles with temperatures/speeds/lengths | not managed by IFS Manager | TRACE | determine whether stock user-facing manager exposes these settings; if yes include advanced parity, otherwise keep provider config out of normal UI |
-| Reset-colors action | stock prompt offers `RESET_ZCOLOR` | not exposed | TRACE | locate exact macro semantics before deciding parity implementation |
-| Spool library | no equivalent full catalog contract in this Z-Mod flow | schema fields only; integration disabled | MISSING (product differentiator) | optional full Spoolman adapter/search/bind/unbind/sync/degrade flow |
+A direct/manual feed path is modeled as a distinct source, not a fifth IFS lane.
 
-## 4. What must remain provider-owned
+No IFS presence/stall/selector telemetry may be fabricated for it. Provider/runtime support must be proven before automated control is enabled.
 
-Full user-facing replacement does **not** justify reimplementing these proven internals in Plugins AD5X:
+## 7. Equivalent / endless spool
 
-1. IFS serial protocol ownership;
-2. raw F10/F11/F13/Fxx command timing/retry behavior;
-3. Z-Mod G-code color/material scanning where available;
-4. Z-Mod material/color matching and ΔE behavior;
-5. established in-print filament-change motion lifecycle;
-6. `PRINT_ZCOLOR` launch semantics until/unless a future upstream contract supersedes them.
+Earlier parity documents treated endless-spool support mostly as future custom functionality. The expanded Z-Mod review changes that conclusion.
 
-Plugins AD5X should wrap these through semantic backend actions and normalized state, with capability detection and fail-closed handling.
+Z-Mod already has an analogous/equivalent-spool concept and `ANALOG_PRUTOK` provider primitive. Plugins AD5X therefore must:
 
-## 5. Product improvements beyond parity
+- discover exact current semantics/configuration;
+- expose understandable equivalent/fallback relationships;
+- retain Z-Mod as transition authority;
+- not implement a second automatic switch engine;
+- keep automatic fallback disabled until hardware accepted.
 
-Parity is the floor, not the design target.
+## 8. OrcaSlicer interoperability discovered 2026-08-21/22
 
-Plugins AD5X adds or should add:
+Community/source review established a simple generic path:
 
-- rich spool identity and appearance independent of the one-RGB stock representation;
-- dual/tricolor/gradient/rainbow/special appearances;
-- finish metadata;
-- optional full Spoolman integration;
-- clear source/provenance and compatibility state;
-- a consolidated pre-print plan rather than raw macro prompts;
-- progressive disclosure for normal/advanced/diagnostic workflows;
-- consistent semantic behavior across Fluidd, Mainsail, HelixScreen, GuppyScreen and KlipperScreen;
-- genuinely native presentation in every host UI;
-- consumer-grade visual clarity while preserving advanced Klipper flexibility.
+```text
+Plugins AD5X canonical slots
+        |
+        v
+Moonraker database namespace lane_data
+        |
+        v
+OrcaSlicer (Moonraker network agent)
+```
 
-## 6. Immediate implementation sequence derived from the audit
+Current Orca generic Moonraker reader consumes `lane`, `material`, `color`, `nozzle_temp`, `bed_temp`. Inner lane number is a zero-based string.
 
-### A. Finish safe print/mapping core
+The product should publish stable `lane1..lane4` records, while preserving exact/rich metadata internally.
 
-1. hardware-accept the newly preserved complete `resolved_tool_map` in read-only preview;
-2. add a frontend-neutral editable mapping draft without writing `file.json` directly from a frontend;
-3. add controlled provider-delegated mapping/launch action using the authoritative `PRINT_ZCOLOR` lifecycle;
-4. revalidate preview token, IFS state, physical lane presence and print state immediately before mutation;
-5. prove one-color and controlled multi-color launch on the real printer before setting any production write capability true;
-6. model the leveling-before-print choice explicitly rather than burying it in a raw macro string.
+Current exact custom Orca filament preset matching is not reliable. `filament_id` must not be populated with a Spoolman filament ID by accident.
 
-### B. Close daily-operation parity
+Orca configuration prerequisite must be documented:
 
-1. compatibility write/readback for material + primary color;
-2. normal load/unload/select feedback and operation progress;
-3. recovery action contract for abnormal filament states;
-4. trace and then expose provider endless/equivalent-spool semantics;
-5. locate/decide `RESET_ZCOLOR` parity and any genuinely user-facing filament-profile settings.
+```text
+Host type:     Octo/Klipper
+Network agent: Moonraker
+```
 
-### C. Add differentiators before final UX freezes
+Initial acceptance target: OrcaSlicer 2.4.2.
 
-1. full optional Spoolman integration in backend;
-2. richer spool visualization and remaining-filament state;
-3. final information architecture for primary / pre-print / advanced / diagnostics levels.
+## 9. Spoolman parity/extension
 
-### D. Native frontend convergence
+Spoolman is not provider physical truth. It is an optional library/inventory layer.
 
-Reference UI may be implemented first, but completion requires native adapters for:
+Full target integration includes real spool browsing/binding and supported consumption/remaining data, with separate IDs for Spoolman spool and filament entities. Emptying an IFS lane must not delete the library spool.
 
-- Fluidd;
-- Mainsail;
-- HelixScreen;
-- GuppyScreen;
-- KlipperScreen.
+## 10. Expert completeness rule
 
-No frontend may become the owner of mapping, safety, Spoolman synchronization or hardware semantics.
+Expert is the canonical capability surface.
 
-## 7. Current conclusion
+A reliable provider capability counts as a parity gap until it is:
 
-The existing Plugins AD5X work is a valid foundation and already exceeds Z-Mod's stock metadata model in several areas, but it is **not yet a complete Z-Mod Manager replacement**.
+1. represented in normalized backend state/actions;
+2. permission/safety modeled;
+3. exposed in Expert through a usable semantic workflow;
+4. accepted on hardware if it mutates mechanics/printing.
 
-The largest remaining parity gaps are currently:
+Auto/Hybrid may hide detail but may not be used as an excuse to omit Expert capability.
 
-1. write/readback synchronization of stock material/color representation;
+## 11. Diagnostics rule
+
+Useful real provider signals should be exposed in Expert/Diagnostics, including physical lane state, active source, head switch/toolhead state, IFS motion/stall/retry information where available, operation errors and matcher/compatibility results.
+
+Do not copy Happy Hare diagnostics that have no AD5X source (encoder path, hubs, compression, clog sensors, etc.).
+
+## 12. Remaining high-priority gaps after v2 reset
+
+1. provider-backed material/color writes;
 2. editable/applicable pre-print mapping;
-3. safe `PRINT_ZCOLOR` launch;
-4. leveling/fallback choices in the normalized launch workflow;
-5. recovery/endless-spool provider functions;
-6. full optional Spoolman integration;
-7. product-grade native UX across all supported frontends.
+3. production `PRINT_ZCOLOR` launch;
+4. normalized print-without-IFS / external path policy;
+5. runtime remap UI/workflow;
+6. equivalent/endless-spool policy + transition acceptance;
+7. semantic recovery actions;
+8. full Spoolman adapter;
+9. Orca `lane_data` runtime publisher + real 2.4.2 acceptance;
+10. final Expert/Hybrid/Auto UX across first-party native UIs;
+11. generic third-party Klipper/Moonraker consumer documentation.
 
-These gaps are now explicit acceptance items rather than implicit future work.
+## 13. Current safety boundary
+
+The audit does not enable write paths by documentation alone.
+
+Keep disabled until individually accepted:
+
+```text
+apply_preprint_mapping = false
+start_job = false
+zmod_projection_write = false
+automatic endless/equivalent spool = false
+unproven recovery motion = false
+automated external/bypass switching = false
+```
+
+Existing select/load/unload hardware path remains subject to current backend permission gates.
+
+## 14. Exit criterion
+
+Parity is closed only when a user can perform every reliable, meaningful stock Z-Mod IFS workflow — and the additional committed Plugins AD5X workflows such as full Spoolman and Orca sync — without falling back to the stock IFS manager, while preserving provider authority and hardware safety.

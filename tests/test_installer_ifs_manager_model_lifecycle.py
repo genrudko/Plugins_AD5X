@@ -7,11 +7,11 @@ import subprocess
 import tempfile
 import unittest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.sh"
-BACKEND = ROOT / "moonraker" / "components" / "plugins_ad5x.py"
 MODEL = ROOT / "moonraker" / "components" / "plugins_ad5x_ifs_model.py"
+INTEROP = ROOT / "moonraker" / "components" / "plugins_ad5x_ifs_interop.py"
+SPOOLMAN = ROOT / "moonraker" / "components" / "plugins_ad5x_ifs_spoolman.py"
 
 
 def sha256(path: Path) -> str:
@@ -21,18 +21,13 @@ def sha256(path: Path) -> str:
 class IFSManagerModelInstallerLifecycleTests(unittest.TestCase):
     maxDiff = None
 
-    def run_shell(
-        self,
-        body: str,
-        tmp: Path,
-        *,
-        check: bool = True,
-    ) -> subprocess.CompletedProcess[str]:
-        components = tmp / "moonraker" / "components"
+    def run_shell(self, body: str, tmp: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        moon = tmp / "moonraker"
+        components = moon / "components"
         components.mkdir(parents=True, exist_ok=True)
+        (moon / ".git" / "info").mkdir(parents=True, exist_ok=True)
         state = tmp / "state-root"
         (state / "state").mkdir(parents=True, exist_ok=True)
-
         env = os.environ.copy()
         env.update(
             {
@@ -40,10 +35,11 @@ class IFSManagerModelInstallerLifecycleTests(unittest.TestCase):
                 "AD5X_PLUGIN_DIR": str(ROOT),
                 "AD5X_STATE_DIR": str(state),
                 "AD5X_BACKEND_DEST": str(components / "plugins_ad5x.py"),
-                "AD5X_BACKEND_MODEL_DEST": str(
-                    components / "plugins_ad5x_ifs_model.py"
-                ),
+                "AD5X_BACKEND_MODEL_DEST": str(components / "plugins_ad5x_ifs_model.py"),
+                "AD5X_BACKEND_INTEROP_DEST": str(components / "plugins_ad5x_ifs_interop.py"),
+                "AD5X_BACKEND_SPOOLMAN_DEST": str(components / "plugins_ad5x_ifs_spoolman.py"),
                 "AD5X_MOONRAKER_COMPONENTS_DIR": str(components),
+                "AD5X_MOONRAKER_REPO_ROOT": str(moon),
                 "AD5X_MOONRAKER_INCLUDES": str(tmp / "plugins.moonraker.conf"),
                 "AD5X_USER_MOONRAKER": str(tmp / "user.moonraker.conf"),
                 "AD5X_KLIPPER_INCLUDES": str(tmp / "plugins.cfg"),
@@ -52,164 +48,111 @@ class IFSManagerModelInstallerLifecycleTests(unittest.TestCase):
             }
         )
         command = f'. "{INSTALLER}"\n{body}\n'
-        return subprocess.run(
-            ["sh", "-c", command],
-            text=True,
-            capture_output=True,
-            env=env,
-            check=check,
-        )
+        return subprocess.run(["sh", "-c", command], text=True, capture_output=True, env=env, check=check)
 
-    def test_default_model_destination_is_next_to_backend(self) -> None:
+    def test_default_helper_destinations_are_next_to_backend(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
-        self.assertIn(
-            'BACKEND_MODEL_DEST="${AD5X_BACKEND_MODEL_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_ifs_model.py}"',
-            text,
-        )
-        self.assertNotIn("/usr/prog/", text[text.index("BACKEND_MODEL_SOURCE"):text.index("KLIPPER_BRIDGE_SOURCE")])
+        self.assertIn('BACKEND_MODEL_DEST="${AD5X_BACKEND_MODEL_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_ifs_model.py}"', text)
+        self.assertIn('BACKEND_INTEROP_DEST="${AD5X_BACKEND_INTEROP_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_ifs_interop.py}"', text)
+        self.assertIn('BACKEND_SPOOLMAN_DEST="${AD5X_BACKEND_SPOOLMAN_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_ifs_spoolman.py}"', text)
 
-    def test_source_validation_requires_model(self) -> None:
+    def test_source_validation_requires_model_interop_and_spoolman_helpers(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
-        start = text.index("backend_source_valid(){")
-        end = text.index("validate_backend_source(){", start)
-        body = text[start:end]
-        self.assertIn('[ -s "$BACKEND_MODEL_SOURCE" ] || return 1', body)
-        self.assertIn('python_source_valid "$BACKEND_MODEL_SOURCE" || return 1', body)
+        body = text[text.index("backend_source_valid(){"):text.index("validate_backend_source(){")]
+        for name in ("BACKEND_MODEL_SOURCE", "BACKEND_INTEROP_SOURCE", "BACKEND_SPOOLMAN_SOURCE"):
+            self.assertIn(f'[ -s "${name}" ] || return 1', body)
+            self.assertIn(f'python_source_valid "${name}" || return 1', body)
 
-    def test_deploy_installs_backend_and_model_with_hash_state(self) -> None:
+    def test_deploy_links_all_backend_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            result = self.run_shell("deploy_backend_managed_copy", tmp, check=False)
+            result = self.run_shell("deploy_backend_plugin_links", tmp, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
-
             components = tmp / "moonraker" / "components"
-            backend_dest = components / "plugins_ad5x.py"
-            model_dest = components / "plugins_ad5x_ifs_model.py"
-            self.assertEqual(backend_dest.read_bytes(), BACKEND.read_bytes())
-            self.assertEqual(model_dest.read_bytes(), MODEL.read_bytes())
+            expected = {
+                "plugins_ad5x_ifs_model.py": MODEL,
+                "plugins_ad5x_ifs_interop.py": INTEROP,
+                "plugins_ad5x_ifs_spoolman.py": SPOOLMAN,
+            }
+            for name, source in expected.items():
+                dest = components / name
+                self.assertTrue(dest.is_symlink())
+                self.assertEqual(os.readlink(dest), str(source))
 
-            state = tmp / "state-root" / "state"
-            self.assertEqual(
-                (state / "backend-runtime.sha256").read_text().strip(),
-                sha256(BACKEND),
+    def test_snapshot_and_restore_preserve_symlink_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            components = tmp / "moonraker" / "components"
+            components.mkdir(parents=True, exist_ok=True)
+            dest = components / "plugins_ad5x_ifs_model.py"
+            dest.symlink_to(MODEL)
+            result = self.run_shell(
+                'B="$AD5X_STATE_DIR/backup"; mkdir -p "$B"; '
+                'snapshot "$BACKEND_MODEL_DEST" model.py; '
+                'rm -f "$BACKEND_MODEL_DEST"; '
+                'restore_snapshot "$BACKEND_MODEL_DEST" model.py; '
+                'test -L "$BACKEND_MODEL_DEST"; '
+                'test "$(readlink "$BACKEND_MODEL_DEST")" = "$BACKEND_MODEL_SOURCE"',
+                tmp,
+                check=False,
             )
-            self.assertEqual(
-                (state / "backend-ifs-model-runtime.sha256").read_text().strip(),
-                sha256(MODEL),
-            )
-
-    def test_both_temp_files_are_verified_before_first_runtime_move(self) -> None:
-        text = INSTALLER.read_text(encoding="utf-8")
-        start = text.index("deploy_backend_managed_copy(){")
-        end = text.index("backend_runtime_matches_source(){", start)
-        body = text[start:end]
-
-        verify_backend = body.index('[ "$(sha256_file "$TMP")" = "$SOURCE_HASH" ]')
-        verify_model = body.index(
-            '[ "$(sha256_file "$MODEL_TMP")" = "$MODEL_SOURCE_HASH" ]'
-        )
-        first_move = min(
-            body.index('mv -f "$MODEL_TMP" "$BACKEND_MODEL_DEST"'),
-            body.index('mv -f "$TMP" "$BACKEND_DEST"'),
-        )
-        self.assertLess(verify_backend, first_move)
-        self.assertLess(verify_model, first_move)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_foreign_model_destination_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            components = tmp / "moonraker" / "components"
-            components.mkdir(parents=True, exist_ok=True)
-            model_dest = components / "plugins_ad5x_ifs_model.py"
-            model_dest.write_text("foreign-model\n", encoding="utf-8")
-
-            result = self.run_shell(
-                "validate_backend_destination_ownership",
-                tmp,
-                check=False,
-            )
+            dest = tmp / "moonraker" / "components" / "plugins_ad5x_ifs_model.py"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("foreign-model\n", encoding="utf-8")
+            result = self.run_shell("validate_backend_destination_ownership", tmp, check=False)
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(model_dest.read_text(), "foreign-model\n")
+            self.assertEqual(dest.read_text(), "foreign-model\n")
 
-    def test_existing_managed_model_is_replaceable(self) -> None:
+    def test_legacy_managed_model_is_migrated_to_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            components = tmp / "moonraker" / "components"
-            components.mkdir(parents=True, exist_ok=True)
-            model_dest = components / "plugins_ad5x_ifs_model.py"
-            model_dest.write_text("managed-old-model\n", encoding="utf-8")
-            state = tmp / "state-root" / "state"
-            state.mkdir(parents=True, exist_ok=True)
-            (state / "backend-ifs-model-runtime.sha256").write_text(
-                sha256(model_dest) + "\n",
-                encoding="utf-8",
-            )
-
-            result = self.run_shell("deploy_backend_managed_copy", tmp, check=False)
+            dest = tmp / "moonraker" / "components" / "plugins_ad5x_ifs_model.py"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(MODEL.read_bytes())
+            marker = tmp / "state-root" / "state" / "backend-ifs-model-runtime.sha256"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(sha256(dest) + "\n", encoding="utf-8")
+            result = self.run_shell("deploy_backend_plugin_links", tmp, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(model_dest.read_bytes(), MODEL.read_bytes())
+            self.assertTrue(dest.is_symlink())
+            self.assertEqual(os.readlink(dest), str(MODEL))
+            self.assertFalse(marker.exists())
 
-    def test_runtime_match_requires_model_hash_match(self) -> None:
+    def test_runtime_match_requires_exact_link_targets(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            result = self.run_shell(
-                "deploy_backend_managed_copy; backend_runtime_matches_source",
-                tmp,
-                check=False,
-            )
+            result = self.run_shell("deploy_backend_plugin_links; backend_runtime_matches_source", tmp, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
-
             model_dest = tmp / "moonraker" / "components" / "plugins_ad5x_ifs_model.py"
-            model_dest.write_text("tampered\n", encoding="utf-8")
-            result = self.run_shell(
-                "backend_runtime_matches_source",
-                tmp,
-                check=False,
-            )
+            model_dest.unlink()
+            model_dest.symlink_to(tmp / "wrong.py")
+            result = self.run_shell("backend_runtime_matches_source", tmp, check=False)
             self.assertNotEqual(result.returncode, 0)
 
-    def test_install_and_uninstall_backup_model_state(self) -> None:
-        text = INSTALLER.read_text(encoding="utf-8")
-        self.assertGreaterEqual(
-            text.count('snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py'),
-            2,
-        )
-        self.assertGreaterEqual(
-            text.count(
-                'snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256'
-            ),
-            2,
-        )
-        self.assertGreaterEqual(
-            text.count('restore_snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py'),
-            2,
-        )
-        self.assertGreaterEqual(
-            text.count(
-                'restore_snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256'
-            ),
-            2,
-        )
-
-    def test_uninstall_removes_owned_model_and_hash(self) -> None:
+    def test_disable_removes_all_owned_backend_helper_links(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            deploy = self.run_shell("deploy_backend_managed_copy", tmp, check=False)
+            deploy = self.run_shell("deploy_backend_plugin_links", tmp, check=False)
             self.assertEqual(deploy.returncode, 0, deploy.stderr)
-
             components = tmp / "moonraker" / "components"
-            model_dest = components / "plugins_ad5x_ifs_model.py"
             pycache = components / "__pycache__"
             pycache.mkdir(exist_ok=True)
             (pycache / "plugins_ad5x_ifs_model.cpython-312.pyc").write_bytes(b"x")
-
-            result = self.run_shell("backend_uninstall_transition", tmp, check=False)
+            result = self.run_shell("backend_disable_transition", tmp, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(model_dest.exists())
-            self.assertFalse(
-                (tmp / "state-root" / "state" / "backend-ifs-model-runtime.sha256").exists()
-            )
-            self.assertFalse(any(pycache.glob("plugins_ad5x_ifs_model*.pyc")))
+            for name in (
+                "plugins_ad5x.py",
+                "plugins_ad5x_ifs_model.py",
+                "plugins_ad5x_ifs_interop.py",
+                "plugins_ad5x_ifs_spoolman.py",
+            ):
+                self.assertFalse((components / name).exists())
+            self.assertFalse(any(pycache.glob("plugins_ad5x*.pyc")))
 
 
 if __name__ == "__main__":

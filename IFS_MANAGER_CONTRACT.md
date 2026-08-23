@@ -1,73 +1,127 @@
-# Plugins AD5X — IFS Manager v1 contract
+# Plugins AD5X — IFS / Materials Manager contract v2
 
-Status: **experimental / additive v1 draft**  
+Status: **canonical additive contract**
 Work item: `IFS-MANAGER-001` / issue #15
+Architecture: `2.0`
+Wire/API compatibility baseline: `1.0`
 
-This document defines the frontend-neutral IFS Manager boundary. It is not a
-KlipperScreen-specific DTO and must be suitable for Fluidd, Mainsail, HelixScreen
-and GuppyScreen adapters as well.
+This contract defines one frontend-neutral IFS / Materials Manager for AD5X + Z-Mod. It is intended for any Klipper/Moonraker UI or client. Fluidd, Mainsail, HelixScreen, GuppyScreen and KlipperScreen are first-party native adapter targets, not separate backends.
 
-Current repository backend version: `0.1.6`. API schema stays additive `1.0`.
+See also:
 
-## 1. Truth domains
+- `docs/IFS_MANAGER_ARCHITECTURE_V2.md` — canonical target architecture;
+- `docs/IFS_MANAGER_DISCOVERY_2026-08-22.md` — source/community evidence for the reset;
+- `docs/ZMOD_IFS_MANAGER_PARITY_AUDIT_2026-08-17.md` — provider parity baseline.
 
-The following domains are deliberately separate and MUST NOT be inferred from
-one another:
+## 1. Core rule: one backend, many presentations
 
-1. **physical state** — whether filament is physically present in an IFS lane;
-2. **active slot** — the operational slot used by Z-Mod/Flashforge;
-3. **tool mapping** — current slicer/tool to physical IFS slot mapping;
-4. **job requirements** — tools/materials/colors required by one G-code file;
-5. **spool metadata** — what material/spool is assigned to the slot;
-6. **appearance** — visual properties of the filament;
-7. **operation state** — current IFS action/recovery state;
-8. **frontend selection** — which card the user selected in a UI session;
-9. **Z-Mod compatibility projection** — the lossy material/primary-color view
-   representable by Z-Mod.
-
-`raw_channel` is diagnostic evidence only and is never an alternative source of
-truth for `active_slot`.
-
-`file.json` is current **tool mapping**, not occupancy and not spool metadata.
-
-## 2. Authority and source precedence
-
-The current authority model is:
+All clients consume the same normalized state/actions/permissions.
 
 ```text
-physical IFS state ----------- Z-Mod / IFS runtime
-active slot ------------------ Z-Mod / FFMInfo.channel
-current print tool mapping --- Z-Mod / file.json
-job scan and auto-matching --- live Z-Mod zmod_color implementation
-legacy material+primary color- Z-Mod / Flashforge compatibility state
-rich spool metadata ---------- Plugins AD5X manual/Spoolman/etc. overlay
-frontend selected card ------- frontend session only
+Z-Mod / Flashforge IFS
+          |
+          v
+ Plugins AD5X backend
+          |
+          +--> normalized API/events --> any Klipper/Moonraker client
+          +--> native adapters -------> Fluidd/Mainsail/Helix/Guppy/KS
+          +--> interop projections ----> Orca lane_data / future verified contracts
 ```
 
-Plugins AD5X MUST NOT maintain a competing slicer-color matcher when the live
-Z-Mod implementation can provide the canonical result.
+Frontends MUST NOT implement their own:
 
-## 3. Compatibility
+- IFS serial/protocol behavior;
+- safety policy;
+- material/color matcher;
+- print-start lifecycle;
+- equivalent-spool mechanics;
+- physical truth inference.
 
-IFS Manager v1 is additive to the existing `modules.ifs` snapshot.
+## 2. Provider ownership
 
-During migration the backend retains legacy flat fields such as:
+Z-Mod remains authoritative for proven provider behavior:
 
-```json
-{
-  "material": "PLA",
-  "color": "#F330F9"
-}
+- low-level IFS protocol and retry/timing logic;
+- physical IFS runtime state;
+- material/color scan and automatic matching;
+- material filter + CIE LAB / ΔE76 color choice;
+- current tool mapping / `file.json` semantics;
+- in-print filament-change lifecycle;
+- `PRINT_ZCOLOR` launch lifecycle;
+- auto-insert behavior;
+- equivalent-spool primitive such as `ANALOG_PRUTOK`, once its policy is fully source/hardware accepted.
+
+Plugins AD5X translates provider mechanisms into stable semantic state/actions. It does not create a second hardware implementation.
+
+## 3. Truth domains
+
+These domains are independent unless the backend explicitly joins them:
+
+1. **physical state** — whether filament is present in a physical IFS lane;
+2. **active source** — runtime/provider-selected IFS lane or future external source;
+3. **toolhead state** — whether filament is confirmed at the toolhead;
+4. **spool/material identity** — rich user/library metadata;
+5. **appearance** — solid/multicolor/finish representation;
+6. **external identity** — Spoolman IDs, future RFID IDs, Orca exact IDs;
+7. **operation/recovery state** — current semantic IFS action;
+8. **job requirements** — tools/materials/colors requested by one file;
+9. **job mapping** — `Tn -> physical source` for one print;
+10. **compatibility projections** — lossy Z-Mod/Orca/etc. views;
+11. **frontend selection** — local UI/session state only;
+12. **diagnostics** — raw provider evidence, never an alternative truth model.
+
+`raw_channel` is diagnostics only. `file.json` is job mapping, not occupancy and not spool metadata.
+
+## 4. Source topology
+
+### 4.1 Physical IFS
+
+The canonical AD5X IFS topology has four fixed physical sources:
+
+```text
+ifs:1
+ifs:2
+ifs:3
+ifs:4
 ```
 
-New frontends should prefer normalized `spool`, `appearance`, `capabilities`,
-`permissions`, `compatibility` and `job_preview` fields when present. Old
-frontends may continue using legacy flat fields.
+They feed one selector and one extruder.
 
-Absence of a new field means **unsupported/unknown**, not `false` unless the
-contract explicitly defines a boolean default.
+### 4.2 External / bypass
 
-## 4. Module envelope
+The architecture reserves a separate source:
+
+```text
+external:bypass
+```
+
+It MUST NOT be represented as fake `slot 5`. It has different telemetry and control semantics. Until provider/runtime behavior is directly verified, its `runtime_supported` and `control_supported` capabilities remain false.
+
+## 5. Expert / Hybrid / Auto
+
+`Expert` is the canonical capability surface.
+
+`Hybrid` and `Auto` are progressive-disclosure presentation/automation policies over the same backend.
+
+```text
+interface_expertise:
+  auto
+  hybrid
+  expert
+```
+
+Changing UI expertise MUST NOT:
+
+- change physical truth;
+- change installed capabilities;
+- bypass backend permissions;
+- create a different mapping/state engine.
+
+Expert must eventually expose every meaningful reliable capability available from the supported AD5X/Z-Mod/IFS stack without forcing the user back to stock Z-Mod UI.
+
+## 6. Module envelope
+
+The existing additive `modules.ifs` envelope remains compatible with API schema `1.0`. Architecture-v2 fields are additive.
 
 Representative shape:
 
@@ -76,44 +130,38 @@ Representative shape:
   "available": true,
   "state": "ready",
   "state_code": 5,
+  "architecture_version": "2.0",
   "active_slot": 1,
   "runtime_active_slot": 1,
   "filament_at_toolhead": true,
   "print_state": "standby",
-  "operation": {
-    "state": "idle",
-    "action": "",
-    "slot": 0,
-    "error": ""
+  "operation": {"state": "idle", "action": "", "slot": 0, "error": ""},
+  "ui": {
+    "expertise_levels": ["auto", "hybrid", "expert"],
+    "canonical_expertise": "expert",
+    "progressive_disclosure": true
   },
-  "job_preview": {
-    "available": false,
-    "source": "zmod",
-    "filename": "",
-    "requirements": [],
-    "assignments": [],
-    "auto_assign": {},
-    "messages": [],
-    "error": "not_scanned"
+  "topology": {
+    "kind": "selector_single_extruder",
+    "ifs_slot_count": 4,
+    "external_source": {"id": "external:bypass", "runtime_supported": false, "control_supported": false}
   },
+  "job_preview": {},
+  "preprint_plan": {},
   "capabilities": {},
-  "metadata_store": {
-    "status": "ok",
-    "schema_version": "1.0",
-    "error": ""
-  },
+  "metadata_store": {},
   "slots": [],
-  "tool_mapping": [1, 1, 1, 4],
+  "tool_mapping": [],
+  "interoperability": {},
   "diagnostics": {}
 }
 ```
 
-High-rate telemetry is not introduced by this contract. Semantic changes use the
-existing `notify_plugins_ad5x_snapshot_changed` invalidation model.
+No high-rate telemetry loop is introduced. Semantic changes use the existing snapshot invalidation/event model.
 
-## 5. Slot contract
+## 7. Slot contract
 
-Each physical IFS slot is represented independently:
+Each physical slot is independent. New identity fields are additive:
 
 ```json
 {
@@ -121,7 +169,6 @@ Each physical IFS slot is represented independently:
   "present": true,
   "stall": false,
   "active": false,
-
   "spool": {
     "source": "manual",
     "brand": "ERYONE",
@@ -130,119 +177,58 @@ Each physical IFS slot is represented independently:
     "material": "PLA",
     "variant": "",
     "spoolman_id": 42,
-    "remaining_g": 612.5
+    "spoolman_spool_id": 42,
+    "spoolman_filament_id": null,
+    "orca_material": null,
+    "orca_filament_id": null,
+    "orca_setting_id": null,
+    "remaining_g": 612.5,
+    "nozzle_temp": null,
+    "bed_temp": null
   },
-
   "appearance": {
     "color_mode": "tricolor",
     "colors": ["#F330F9", "#27C4F4", "#FFD43B"],
     "finish": "silk"
   },
-
   "metadata_status": "assigned",
-
-  "permissions": {
-    "select_slot": true,
-    "load_slot": true,
-    "unload_slot": false,
-    "blocked_reason": ""
-  },
-
-  "compatibility": {
-    "zmod": {
-      "write_ready": true,
-      "sync_state": "diverged",
-      "desired": {"material": "PLA", "color": "#F330F9"},
-      "current": {"material": "PLA", "color": "#161616"},
-      "lossy": true,
-      "omitted_fields": ["appearance.colors[1:]", "appearance.finish"],
-      "write_blockers": []
-    }
-  }
+  "permissions": {},
+  "compatibility": {}
 }
 ```
 
-### `metadata_status`
+Legacy `spoolman_id` remains a migration alias and MUST NOT be confused with a Spoolman filament entity or Orca preset ID.
 
-- `assigned` — metadata exists and the lane is physically occupied;
-- `stale` — metadata exists but the lane is physically empty;
+`metadata_status`:
+
+- `assigned` — metadata exists and lane is physically occupied;
+- `stale` — metadata exists but lane is physically empty;
 - `none` — no useful metadata is known.
 
-A frontend MUST visually prioritize physical emptiness over stale metadata. A
-physically empty slot that still contains old `TPU / #161616` metadata must
-render as **empty**, not as an installed black TPU spool.
+A frontend MUST visually prioritize physical emptiness over stale metadata.
 
-## 6. Spool metadata
+## 8. Metadata store
 
-The v1 schema reserves these normalized fields:
-
-- `source`;
-- `brand`;
-- `series`;
-- `name`;
-- `material`;
-- `variant`;
-- `spoolman_id`;
-- `remaining_g`.
-
-Allowed source identifiers:
-
-- `flashforge`;
-- `manual`;
-- `spoolman`;
-- `slicer`;
-- `rfid`;
-- `unknown`.
-
-A source identifier describes where metadata came from. It does **not** imply
-that the corresponding integration is currently available.
-
-### Persistent manual metadata
-
-Plugins AD5X provides a manual metadata overlay without directly modifying stock
-Flashforge/Z-Mod metadata files.
-
-Runtime path:
+The existing Plugins AD5X manual overlay remains independent of stock Flashforge/Z-Mod metadata files:
 
 ```text
 /opt/config/mod_data/ad5x_custom/ifs_metadata.json
 ```
 
-The store is versioned with `schema_version: "1.0"` and contains per-slot
-`spool` + `appearance` records. Manual metadata overrides effective rich
-presentation for that slot, while physical presence, active slot and tool mapping
-remain independent truth domains.
+Store schema remains `1.0` until an explicit migration is implemented.
 
-Authenticated write endpoint:
+Authenticated endpoint remains:
 
 ```text
 POST /server/plugins_ad5x/ifs/metadata
 RPC  server.plugins_ad5x.ifs.metadata
 ```
 
-Supported operations:
+Writes are non-mechanical. Store behavior remains atomic/fail-closed; corrupt/unsupported metadata is never silently replaced.
 
-- update one slot with normalized `spool` and `appearance` objects;
-- `clear=true` to remove the manual overlay for one slot and return to the
-  Flashforge/Z-Mod fallback.
+## 9. Appearance
 
-The store is written atomically (temporary file + fsync + replace). A corrupt or
-unsupported store is reported as `metadata_store.status = "invalid"`; physical
-IFS state remains available, but metadata writes fail closed rather than
-silently overwriting the damaged file.
-
-Metadata editing is non-mechanical and emits no filament-operation G-code.
-
-Hardware evidence has already proved on a real AD5X that metadata save and clear
-complete successfully and clear restores Flashforge/Z-Mod fallback.
-
-## 7. Appearance
-
-Appearance is independent from material type.
-
-### Color mode
-
-Supported schema values:
+Canonical modes:
 
 - `solid`;
 - `dual`;
@@ -251,361 +237,190 @@ Supported schema values:
 - `rainbow`;
 - `special`.
 
-`colors` is an ordered array of canonical `#RRGGBB` values. Frontends should
-render these visually instead of using hexadecimal text as the primary UI.
+Appearance and material identity remain separate. Compatibility projections may use only `colors[0]` as a representative color without destroying the full canonical appearance.
 
-### Finish
+## 10. Z-Mod compatibility projection
 
-Supported values:
+Z-Mod currently exposes a narrower material + one RGB color model. Plugins AD5X therefore keeps a lossy compatibility projection.
 
-- `standard`;
-- `matte`;
-- `silk`;
-- `satin`;
-- `metallic`;
-- `transparent`;
-- `translucent`;
-- `glitter`;
-- `glow`;
-- `wood`;
-- `carbon_fiber`;
-- `other`.
-
-Finish is a semantic appearance field. It MUST NOT silently change material
-identity. In particular `material=PLA + finish=silk` does not become Z-Mod
-`TYPE=SILK`; `TYPE=SILK` is used only when the rich material itself is explicitly
-`SILK`.
-
-### Legacy Flashforge normalization
-
-Current Flashforge metadata provides one `ffmColorN` value. It normalizes to:
-
-```json
-{
-  "color_mode": "solid",
-  "colors": ["#161616"],
-  "finish": "standard"
-}
-```
-
-## 8. Z-Mod compatibility projection
-
-Z-Mod currently represents a lane with a narrower model: one material type and
-one RGB color. Plugins AD5X rich metadata is therefore projected lossily.
-
-Source-verified Z-Mod material values currently accepted by `zmod_color` are:
+Current provider values source-verified in `zmod_color` include:
 
 ```text
 PLA, ABS, PETG, TPU, PLA-CF, PETG-CF, SILK
 ```
 
-`?` exists internally in Z-Mod but is not a target rich-material identity for
-Plugins AD5X projection.
-
-Projection policy:
+Normal projection:
 
 ```text
-rich spool.material   -> Z-Mod TYPE, only when representable
-appearance.colors[0]  -> Z-Mod HEX primary color
-brand                 -> Plugins AD5X only
-series                -> Plugins AD5X only
-name                  -> Plugins AD5X only
-additional colors     -> Plugins AD5X only
-finish                -> Plugins AD5X only
-Spoolman/RFID fields  -> Plugins AD5X only
+precise spool.material -> Z-Mod TYPE only when representable
+appearance.colors[0]   -> Z-Mod primary HEX
+rich identity/colors   -> Plugins AD5X only
 ```
 
-`PLA+`, vendor-specific compound names or a missing primary color fail closed
-instead of being silently coerced to a different Z-Mod material/color.
+Projection state remains explicit (`in_sync`, `diverged`, `unknown`, `unsupported`). Production projection writes remain disabled until hardware accepted and must use Z-Mod's normal mutation path rather than editing Flashforge JSON directly.
 
-Current read-only projection states:
+## 11. Job scan and automatic mapping
 
-- `in_sync` — desired material/primary color equal current Z-Mod compatibility
-  state;
-- `diverged` — both are known but differ;
-- `unknown` — desired projection is valid but no current Z-Mod comparison is
-  available;
-- `unsupported` — rich data cannot currently be represented by Z-Mod.
+Z-Mod remains the canonical matcher. Plugins AD5X delegates to the Z-Mod scanner/matcher and MUST NOT invent a second matcher or fake per-tool ΔE values that provider APIs do not expose.
 
-`pending_projection` and `error` are reserved for the future write lifecycle.
+### Parser-safe preview command
 
-Current capability is **preview only**. Projection writes remain disabled. When
-enabled later, Plugins AD5X must invoke Z-Mod's existing `CHANGE_ZCOLOR` mutation
-path instead of writing `Adventurer5M.json` directly.
-
-## 9. Slicer/job requirements and Z-Mod delegated preview
-
-Z-Mod remains the authority for current file scan and auto-assignment semantics.
-Plugins AD5X does not implement a second color matcher.
-
-Source-verified Z-Mod implementation uses:
-
-- `zmod_color.get_used_colors(gcmd)` for G-code requirements;
-- `save_variables.scan_file_colors` as the scan policy;
-- `zmod_color.get_auto_tool_assignments(...)` as the canonical auto-matcher;
-- `save_variables.auto_assign_colors` as Z-Mod's normal automatic-assignment
-  policy;
-- the public `SET_ZCOLOR ... AUTO_ASSIGN=...` flow for the normal Z-Mod UI.
-
-There are no standalone upstream G-code commands literally named
-`SCAN_FILE_COLORS` or `AUTO_ASSIGN_COLORS` in the inspected `zmod_color.py`.
-
-### File requirements
-
-Z-Mod can derive `(tool, color, material)` requirements from:
-
-- actual `T<n>` tool use;
-- `; filament_colour = ...`;
-- `; filament_type = ...`;
-- optional prepared `; zmod_color_data = ...`.
-
-Unknown/missing file metadata remains unknown; Plugins AD5X must not substitute
-current spool metadata and pretend the file requested it.
-
-### Matching semantics
-
-The canonical Z-Mod matcher:
-
-1. filters available candidates by material equality when file material exists;
-2. records material failure and falls back when no material-compatible candidate
-   exists;
-3. records color failure when file color is absent;
-4. converts RGB to CIE LAB and chooses minimum ΔE76 when color exists;
-5. marks ΔE76 `>= 15.0` as a weak match;
-6. detects duplicate slot assignment across tools.
-
-Current Z-Mod result flags:
+The hardware-accepted parser-safe bridge command is:
 
 ```text
-AUTO_ASSIGN_ANY_SUCCESS      = 1 << 0
-AUTO_ASSIGN_MATERIAL_FAILURE = 1 << 1
-AUTO_ASSIGN_COLOR_FAILURE    = 1 << 2
-AUTO_ASSIGN_COLOR_WEAK       = 1 << 3
-AUTO_ASSIGN_DUPLICATE        = 1 << 4
+ADIFS_JOB_PREVIEW FILENAME="relative/path.gcode"
 ```
 
-Plugins AD5X MUST NOT invent a per-tool ΔE score because current Z-Mod returns the
-aggregate flags/messages, not a normalized per-tool distance.
+**Do not use `AD5X_IFS_JOB_PREVIEW`**: real Klipper command parsing treats the digit as a boundary and produces `Unknown command: AD5`.
 
-### Read-only preview adapter
-
-The Klipper bridge provides:
-
-```text
-AD5X_IFS_JOB_PREVIEW FILENAME="relative/path.gcode"
-```
-
-and the authenticated Moonraker API provides:
+Moonraker endpoint:
 
 ```text
 POST /server/plugins_ad5x/ifs/job/preview
 RPC  server.plugins_ad5x.ifs.job.preview
 ```
 
-The bridge delegates scan and assignment to the live `zmod_color` object and
-publishes a normalized `job_preview`. It temporarily supplies/restores
-`zmod_color.file_colors` and does not persist the mapping.
+Opening preview remains read-only.
 
-Representative result:
+## 12. Pre-print plan and mapping UX
 
-```json
-{
-  "available": true,
-  "source": "zmod",
-  "filename": "example.gcode",
-  "requirements": [
-    {"tool": 0, "color": "#F330F9", "material": "PLA"}
-  ],
-  "assignments": [
-    {"tool": 0, "slot": 3}
-  ],
-  "auto_assign": {
-    "flags": 1,
-    "any_success": true,
-    "material_failure": false,
-    "color_failure": false,
-    "weak_color": false,
-    "duplicate_slot": false
-  },
-  "messages": [],
-  "error": ""
-}
-```
+Mapping is job-scoped. Main IFS dashboard is physical topology first.
 
-The backend rejects unsafe filenames, active IFS operations and preview requests
-while printing/paused/unknown print states.
-
-The preview does **not**:
-
-- write `file.json`;
-- call `PRINT_ZCOLOR`;
-- call `CHANGE_ZCOLOR`;
-- start `SDCARD_PRINT_FILE`;
-- change the active IFS slot;
-- mutate persisted Z-Mod auto-assignment settings.
-
-## 10. Tool mapping and pre-print plan
-
-When Z-Mod starts an IFS print it writes the resolved tool list to:
+Target pre-print representation:
 
 ```text
-/usr/data/config/mod_data/file.json
+T0 PETG Black -> IFS 1 PETG Black
+T1 PLA White  -> IFS 3 PLA White
+T2 TPU        -> -- warning / external when explicitly supported
 ```
 
-`_CHANGE_FILAMENT` later reads that mapping and resolves slicer tool/channel to a
-physical spool number.
+Auto hides healthy mappings. Hybrid exposes a compact summary and `Изменить`. Expert exposes full mapping/mismatch details.
 
-The current Plugins AD5X capability is **read-only pre-print preview**. Applying
-preview mapping and starting a print remain disabled until a separate write
-contract and real-printer acceptance gate exist.
+Current write state remains conservative:
 
-Target frontend-neutral pre-print UI:
+- preview: enabled;
+- manual draft/apply: disabled until implemented/accepted;
+- production `PRINT_ZCOLOR` launch: disabled until hardware acceptance;
+- preview tokens must include all mutable dependencies and be revalidated immediately before any future start.
+
+## 13. OrcaSlicer interoperability
+
+### 13.1 Required Orca connection mode
+
+For printer → Orca filament synchronization, the physical printer in OrcaSlicer must use:
 
 ```text
-T0  PLA  [file color] -> Slot 3
-T1  PETG [file color] -> Slot 1
-T2  PLA  [file color] -> —  warning
+Host type:     Octo/Klipper
+Network agent: Moonraker
 ```
 
-The UI may eventually offer auto-match, manual remapping and start-print actions,
-but those are distinct controlled mutations, not side effects of opening the
-preview.
+With another network agent the generic Moonraker `lane_data` integration is not used.
 
-## 11. Capabilities vs runtime permissions
+Initial compatibility target: **OrcaSlicer 2.4.2**.
 
-Capabilities answer whether the installed backend/hardware/software combination
-implements a feature at all. Permissions answer whether a concrete mutation is
-allowed **right now**.
+### 13.2 Standard read surface
 
-Current important capability state:
+Orca reads:
 
-```json
-{
-  "schema_version": "1.0",
-  "slot_count": 4,
-  "actions": {
-    "select_slot": true,
-    "load_slot": true,
-    "unload_slot": true,
-    "eject_slot": false,
-    "recovery": false,
-    "manage": true,
-    "preview_job": true
-  },
-  "metadata_schema": {
-    "spool_fields": true,
-    "multi_color": true,
-    "finish": true
-  },
-  "integrations": {
-    "flashforge": true,
-    "manual_store": true,
-    "spoolman": false,
-    "slicer": true,
-    "rfid": false
-  },
-  "mapping": {
-    "tool_to_slot": true,
-    "preprint_preview": true,
-    "apply_preprint_mapping": false,
-    "endless_spool": false
-  },
-  "compatibility": {
-    "zmod_projection_preview": true,
-    "zmod_projection_write": false
-  }
-}
+```text
+/server/database/item?namespace=lane_data
 ```
 
-`slicer=true` currently means **source-delegated read-only slicer/job preview**;
-it does not claim mapping application or print-start ownership.
+Plugins AD5X publishes four stable physical records with outer keys `lane1..lane4` and inner zero-based string lanes `"0".."3"`.
 
-Current filament-operation fail-closed baseline:
+Rules:
 
-- `printing` → writes blocked;
-- `paused` → writes blocked;
-- unknown/non-terminal print state → writes blocked;
+- physically empty lanes publish null material/color even when stale metadata is retained internally;
+- rich multicolor appearance projects to one representative/primary color;
+- exact material identity is separate from conservative Orca `material`;
+- specialty material is not guessed into a generic preset unless an explicit compatibility mapping exists;
+- `filament_id` is omitted/null unless a real Orca-compatible exact identifier exists;
+- Spoolman filament ID MUST NOT be mislabeled as Orca filament ID;
+- unknown foreign fields in owned records are preserved where practical;
+- duplicate foreign records for the same inner lane block publication rather than creating ambiguous Orca state;
+- publication is event-driven and does not add an idle polling daemon.
+
+Current guaranteed direction is **printer → Orca**. Generic Orca Moonraker integration is not assumed to write edits back.
+
+Diagnostic URL:
+
+```text
+http://<printer>:7125/server/database/item?namespace=lane_data
+```
+
+## 14. Spoolman
+
+Spoolman is an optional library/inventory provider, not physical truth.
+
+Implemented full-manager capability includes search/select, four physical source↔spool bindings, distinct spool/filament IDs, metadata/remaining amount and native Moonraker active-spool consumption synchronization. Spoolman remains optional.
+
+Physical presence is authoritative: `present=false` MUST NOT expose the previous concrete spool as currently installed. On a confirmed occupied→empty transition the local current binding is removed and a persistent identity-invalidated tombstone is recorded; the external Spoolman entity is not deleted. A later insertion MUST NOT resurrect that old Spoolman ID. Until explicit bind/edit (or a future verified identity provider) exact identity is `unassigned`; provider-observed material/color is not proof of concrete spool identity.
+
+The lightweight standalone IFS/Spoolman bridge remains a valid separate product path, but it and the full IFS backend MUST NOT be simultaneous runtime owners. The target standalone v2 shares the four-slot/active-spool semantics rather than maintaining a competing consumption tracker.
+
+## 15. Equivalent / endless spool
+
+Z-Mod already exposes provider primitives for analogous/equivalent filament. Plugins AD5X normalizes them into understandable policy/Expert UI rather than inventing a second engine.
+
+Automatic fallback remains disabled until exact provider policy and real hardware transition/recovery are accepted.
+
+## 16. Capabilities vs permissions
+
+Capabilities mean the installed system implements a feature. Permissions mean an action is allowed **right now**.
+
+The backend remains the only authority for runtime permissions. Existing mechanical baseline stays fail-closed:
+
+- printing/paused/unknown print state → ordinary IFS mechanical writes blocked;
 - non-ready IFS → writes blocked;
-- another IFS operation running → writes blocked;
-- physically empty slot → select/load blocked;
-- unload → only active slot with confirmed filament at toolhead.
+- another IFS operation → writes blocked;
+- empty lane → select/load blocked;
+- unload → only active source with confirmed toolhead filament.
 
-Frontends MUST consume backend permissions and must not independently recreate
-these hardware safety rules.
+Metadata/library edits are non-mechanical and may have a different permission policy.
 
-## 12. Mechanical action scope
+## 17. Recovery / diagnostics
 
-Implemented action namespace currently includes:
+Expert mode may expose provider-backed state such as active slot/source, head switch, IFS motion sensor, stall/insert/retry state, operation/error, matcher messages, compatibility status and bounded raw evidence.
 
-- `select_slot`;
-- `load_slot`;
-- `unload_slot` for the active toolhead filament.
+Raw `IFS_Fxx` commands are not normal user actions. They may support source-verified semantic recovery workflows.
 
-The following remain separate future flows until their Z-Mod/hardware semantics
-are proven:
+No fake Happy-Hare encoder/hub/clog/compression telemetry is permitted when AD5X does not provide it.
 
-- cold eject of an inactive lane;
-- cutter/eject actions;
-- jam recovery;
-- automatic retry;
-- endless spool / automatic refill;
-- pre-print mapping application / print start;
-- Z-Mod compatibility projection write.
+## 18. Frontend portability
 
-A frontend must not present unsupported operations as ordinary working buttons.
+First-party native adapter targets remain Fluidd, Mainsail, HelixScreen, GuppyScreen and KlipperScreen.
 
-## 13. Reference frontend UX
+The contract is intentionally broader: any Klipper/Moonraker UI may consume the normalized API/events or a source-verified interoperability projection. A compatibility object rendered by a host UI's own native component is acceptable native presentation when semantics are accurate.
 
-KlipperScreen is the first reference consumer; it is not the owner of IFS
-business/safety logic.
+## 19. Resource / failure policy
 
-Current hardware-proven technical prototype provides:
+- no parallel IFS serial access;
+- no high-rate idle polling for cosmetic UI;
+- no heavy daemon for the manager;
+- backend/projection failure must not prevent normal Z-Mod printing;
+- corrupt metadata must not erase itself automatically;
+- no direct independent write to stock Flashforge metadata for compatibility sync;
+- no second color matcher;
+- UI consumes backend permissions;
+- CI does not replace real-printer acceptance for mechanical/print mutations.
 
-- four **horizontal** lane/spool cards;
-- physical empty/present state at a glance;
-- distinct active and frontend-selected states;
-- visual segmented swatches for mono/multi-color metadata;
-- finish/color-mode labels;
-- one contextual action bar for the selected slot;
-- action sensitivity from backend `slot.permissions`;
-- a hardware-path row;
-- diagnostics and tool mapping in a Details/Advanced view;
-- direct `Катушка` entry into the selected-slot metadata editor;
-- a local rich metadata editor using the manual store endpoint;
-- no HEX-first main UI.
+## 20. Hardware-gated features
 
-This UI is explicitly accepted as a **technical prototype**, not final competitor-
-class UX. The final design still needs custom touch-first controls, richer spool
-visualization, job-plan/mapping presentation and removal of desktop-GTK artifacts.
+Remain disabled until separately source-verified and accepted on a real AD5X:
 
-Frontend selection is local/session UI state and MUST NOT be stored as hardware
-`active_slot`.
+- applying editable pre-print mapping;
+- production `PRINT_ZCOLOR` start;
+- automatic endless/equivalent-spool transition;
+- new jam/recovery mechanics;
+- Z-Mod material/color projection writes;
+- automated external/bypass switching.
 
-## 14. Frontend portability
+## 21. Completion definition
 
-All frontends consume the same normalized state/actions:
+IFS / Materials Manager is complete only when stock Z-Mod IFS UI is not required for normal or Expert workflows; every reliable provider capability is represented without fake telemetry; Expert is complete and Auto/Hybrid are coherent simplifications; full optional Spoolman works; Orca material/color sync works through standard Moonraker `lane_data`; first-party native UIs share one semantic model; other Klipper clients can integrate; and every enabled mechanical/print mutation has real AD5X evidence.
 
-- KlipperScreen — reference local UI;
-- Fluidd — primary web UI target;
-- Mainsail;
-- HelixScreen;
-- GuppyScreen.
+## 22. Plugin lifecycle / updateability contract
 
-Z-Mod internals, raw IFS protocol state, Flashforge parsing, slicer matching,
-safety rules and macro selection stay in Plugins AD5X/backend layers, not in
-frontend adapters.
+The manager MUST be installable without tracked modifications to Z-Mod, Klipper or Moonraker repositories. Runtime Python integration uses plugin-owned links from the installed `ad5x_custom` checkout and the Z-Mod `install.sh` / `update.sh` / `uninstall.sh` lifecycle. Unknown destination files are never overwritten. `DISABLE_PLUGIN` detaches runtime without deleting the plugin's Update Manager registration; full unregister is a separate explicit operation.
 
-## 15. Resource and failure policy
-
-- no parallel access to the IFS serial device;
-- no steady-state high-frequency polling for cosmetic UI;
-- no separate heavy daemon for this contract;
-- backend failure must not prevent normal Z-Mod printing;
-- corrupt/unsupported manual metadata must not erase itself automatically;
-- no direct independent write to `Adventurer5M.json` for compatibility sync;
-- no second color-matching algorithm competing with Z-Mod;
-- CI proof does not replace real-printer acceptance for new mutation paths or
-  final local-screen UX.
-
-See also `docs/ZMOD_IFS_JOB_MAPPING_DISCOVERY_2026-08-17.md` for the source-level
-Z-Mod discovery supporting the job/mapping and compatibility boundaries.
+The Update Manager hook MUST NOT self-restart Moonraker. Python changes requiring a new host process are reported as restart-required. Destructive core recovery may require explicit plugin re-enable/repair; no automatic recovery claim is made without source/hardware evidence.

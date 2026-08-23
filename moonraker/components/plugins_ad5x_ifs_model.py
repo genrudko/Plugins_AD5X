@@ -123,17 +123,26 @@ def normalize_spool_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, An
         value = metadata.get(name)
         return value.strip() if isinstance(value, str) else ""
 
-    spoolman_id = metadata.get("spoolman_id")
-    if isinstance(spoolman_id, bool) or not isinstance(spoolman_id, int) or spoolman_id <= 0:
-        spoolman_id = None
+    def positive_int(name: str) -> Optional[int]:
+        value = metadata.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            return None
+        return value
 
-    remaining_g = metadata.get("remaining_g")
-    if (
-        isinstance(remaining_g, bool)
-        or not isinstance(remaining_g, (int, float))
-        or remaining_g < 0
-    ):
-        remaining_g = None
+    def non_negative(name: str) -> Optional[float]:
+        value = metadata.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            return None
+        return float(value)
+
+    def non_negative_int(name: str) -> Optional[int]:
+        value = metadata.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            return None
+        return int(value)
+
+    legacy_spoolman_id = positive_int("spoolman_id")
+    spoolman_spool_id = positive_int("spoolman_spool_id") or legacy_spoolman_id
 
     return {
         "source": source,
@@ -142,8 +151,23 @@ def normalize_spool_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, An
         "name": text("name"),
         "material": text("material"),
         "variant": text("variant"),
-        "spoolman_id": spoolman_id,
-        "remaining_g": remaining_g,
+        # Legacy alias is retained during schema-1.0 migration.
+        "spoolman_id": spoolman_spool_id,
+        "spoolman_spool_id": spoolman_spool_id,
+        "spoolman_filament_id": positive_int("spoolman_filament_id"),
+        "remaining_g": non_negative("remaining_g"),
+        "remaining_length_mm": non_negative("remaining_length_mm"),
+        "initial_g": non_negative("initial_g"),
+        "used_g": non_negative("used_g"),
+        "used_length_mm": non_negative("used_length_mm"),
+        "location": text("location"),
+        "archived": bool(metadata.get("archived", False)),
+        "nozzle_temp": non_negative_int("nozzle_temp"),
+        "bed_temp": non_negative_int("bed_temp"),
+        # Orca preset identity is independent of Spoolman entity IDs.
+        "orca_material": text("orca_material"),
+        "orca_filament_id": text("orca_filament_id"),
+        "orca_setting_id": text("orca_setting_id"),
     }
 
 
@@ -262,6 +286,7 @@ def normalize_slot(
     module_state: str,
     print_state: str,
     operation_state: str,
+    identity_invalidated: bool = False,
 ) -> Dict[str, Any]:
     raw_slot = raw_slot if isinstance(raw_slot, dict) else {}
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -303,18 +328,38 @@ def normalize_slot(
     result["present"] = present
     result["stall"] = stall
 
-    # Legacy flat keys are retained during migration for existing frontends.
-    if isinstance(legacy_material, str) and legacy_material:
-        result["material"] = legacy_material
+    # Physical absence always outranks cached/provider metadata.  Preserve only
+    # a stale-availability signal; never expose the old spool as currently
+    # installed in an empty lane.
     normalized_legacy_color = _normalize_hex_color(legacy_color)
-    if normalized_legacy_color:
-        result["color"] = normalized_legacy_color
+    if present:
+        if isinstance(legacy_material, str) and legacy_material:
+            result["material"] = legacy_material
+        if normalized_legacy_color:
+            result["color"] = normalized_legacy_color
+        result["spool"] = spool
+        result["appearance"] = appearance
+    else:
+        result.pop("material", None)
+        result.pop("color", None)
+        result["spool"] = normalize_spool_metadata({})
+        result["appearance"] = normalize_appearance()
 
-    result["spool"] = spool
-    result["appearance"] = appearance
     result["metadata_status"] = (
         "assigned" if present and has_metadata else "stale" if has_metadata else "none"
     )
+    result["current_identity_status"] = (
+        "empty"
+        if not present
+        else "unassigned"
+        if identity_invalidated
+        else "assigned"
+        if spool.get("spoolman_spool_id")
+        else "observed"
+        if has_metadata
+        else "unknown"
+    )
+    result["stale_metadata_available"] = bool(not present and has_metadata)
     result["active"] = slot == active_slot and active_slot > 0
     result["permissions"] = compute_slot_permissions(
         slot=slot,
@@ -328,9 +373,9 @@ def normalize_slot(
     result["compatibility"] = {
         "zmod": build_zmod_compat_projection(
             slot=slot,
-            spool=spool,
-            appearance=appearance,
-            current=metadata.get("zmod_compat"),
+            spool=result["spool"],
+            appearance=result["appearance"],
+            current=metadata.get("zmod_compat") if present else None,
         )
     }
     return result
@@ -376,6 +421,11 @@ def normalize_module(
     slot_meta = metadata.get("slots", {})
     if not isinstance(slot_meta, dict):
         slot_meta = {}
+    invalidated_slots = metadata.get("identity_invalidated_slots", [])
+    invalidated_slots = {
+        value for value in invalidated_slots
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= SLOT_COUNT
+    } if isinstance(invalidated_slots, list) else set()
     normalized_slots: List[Dict[str, Any]] = []
     for raw_slot in module.get("slots") or []:
         if not isinstance(raw_slot, dict):
@@ -390,6 +440,7 @@ def normalize_module(
                 module_state=module_state,
                 print_state=print_state,
                 operation_state=operation_state,
+                identity_invalidated=slot_number in invalidated_slots,
             )
         )
     module["slots"] = normalized_slots

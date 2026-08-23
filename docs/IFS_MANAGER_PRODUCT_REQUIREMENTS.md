@@ -1,262 +1,376 @@
-# Plugins AD5X — IFS / Materials Manager product requirements
+# Plugins AD5X — IFS / Materials Manager product requirements v2
 
-Status: **owner-approved product direction / implementation contract**  
-Work item: `IFS-MANAGER-001` / issue #15  
-Applies to: backend, Spoolman integration and every supported frontend adapter.
+Status: canonical product requirements for `IFS-MANAGER-001` / issue #15.
 
-## 1. Product goal
+## 1. Product objective
 
-Plugins AD5X IFS / Materials Manager is intended to become the **complete user-facing replacement for the stock Z-Mod IFS manager** on supported AD5X installations.
+Create a polished, reliable materials subsystem for Flashforge AD5X + Z-Mod that replaces the **user-facing need** for the stock Z-Mod IFS manager while preserving Z-Mod as the proven provider for hardware protocol, material/color matching and print lifecycle.
 
-This does **not** mean forking or unnecessarily reimplementing Z-Mod. Z-Mod remains a compatible low-level provider where it already owns proven hardware/protocol or print-path semantics. In particular Plugins AD5X should delegate to existing Z-Mod implementations for operations such as IFS protocol handling, slicer color/material matching and the proven multi-color print lifecycle when those implementations remain authoritative and safe.
+The product is designed for **any UI/client built around Klipper/Moonraker**, not for one frontend. First-party native integrations are required for Fluidd, Mainsail, HelixScreen, GuppyScreen and KlipperScreen, but the backend must remain independently consumable.
 
-The acceptance boundary is user-facing: for normal IFS/material operation the user should not need to open the stock Z-Mod manager because a routine or advanced function is missing from Plugins AD5X.
+Functional parity with Z-Mod is the minimum bar. Product quality, usability, observability and interoperability should exceed it where the hardware/provider permits.
 
-## 2. Product quality target
+## 2. Non-negotiable architecture
 
-The subsystem has two simultaneous goals:
+1. One normalized backend/state model.
+2. Z-Mod remains provider authority for proven IFS mechanics/matcher/print lifecycle.
+3. Frontends contain presentation and local navigation only, not IFS business logic.
+4. Compatibility formats such as Orca `lane_data` are **projections**, not alternate truth stores.
+5. Physical state, metadata, job mapping and UI selection remain separate truth domains.
+6. No high-rate cosmetic polling and no heavyweight service on the AD5X MIPS host.
+7. Backend failure must not make ordinary Z-Mod printing unavailable.
+8. Every new mechanical/print mutation remains disabled until source-verified and hardware accepted.
 
-1. **maximum useful functionality** for Klipper/AD5X enthusiasts;
-2. **consumer-grade clarity and visual quality** comparable to mature multi-material ecosystems such as Bambu Lab AMS and Prusa MMU-class interfaces.
+Canonical architecture: `docs/IFS_MANAGER_ARCHITECTURE_V2.md`.
 
-These products are UX/quality references, not designs to copy.
+## 3. UI expertise model
 
-A technically exposed backend feature is not considered complete merely because an RPC, macro or diagnostic control exists.
+### 3.1 Expert is canonical
 
-A user-facing feature is complete only when it has:
+Expert Mode is the complete capability surface. All meaningful, reliable supported capabilities/states must be discoverable there.
 
-- a defined normalized backend contract;
-- safe and explainable state transitions;
-- appropriate fail-closed behavior;
-- clear user workflow;
-- understandable visual state and error/warning presentation;
-- native presentation in the supported frontend scope for the relevant release;
-- hardware acceptance when the feature performs or enables a new mechanical/print mutation.
+### 3.2 Hybrid
 
-## 3. Backend-first, frontend-neutral architecture
+Hybrid is a progressive-disclosure view of Expert:
 
-```text
-Z-Mod / Klipper / Flashforge IFS
-              │
-              ├── Z-Mod compatibility/provider adapter
-              ├── optional Spoolman adapter
-              └── Plugins AD5X rich metadata/state
-                         │
-                 IFS Manager backend
-                         │
-          versioned normalized state/actions/events
-                         │
-       ┌──────────┬──────────┬──────────┬──────────┬──────────────┐
-       │          │          │          │          │              │
-    Fluidd     Mainsail   HelixScreen   Guppy   KlipperScreen   future UI
-    native      native       native      native       native
-```
+- routine physical status and actions visible;
+- compact job mapping visible when relevant;
+- warnings/action recommendations prioritized;
+- service diagnostics collapsed but reachable.
 
-Hardware semantics, safety rules, Z-Mod macro selection, slicer matching, Spoolman synchronization policy, tool mapping and recovery logic belong to backend/provider layers, not to frontend adapters.
+### 3.3 Auto
 
-Frontend implementations render normalized semantic state and invoke normalized actions.
+Auto is the most simplified view:
 
-## 4. Complete Z-Mod Manager user-facing parity
+- healthy automatic assignments/details stay hidden;
+- user sees ready/problem/action states;
+- advanced control is one drill-down away;
+- automation never bypasses backend permission/safety policy.
 
-Before IFS Manager can be called a replacement, the project must maintain an explicit parity matrix for every meaningful function exposed by the current Z-Mod IFS/material UI.
+Auto/Hybrid/Expert do not create different backends or different physical behavior.
 
-The target includes, where supported by the real hardware/Z-Mod flow:
+## 4. Main dashboard UX
 
-- physical state of all four IFS lanes;
-- active/current lane and filament-at-toolhead state;
-- material and color management;
-- rich spool metadata and appearance;
-- slot selection;
-- load/unload and other proven filament operations;
-- tool-to-slot mapping;
-- slicer/G-code material and color requirement discovery;
-- automatic assignment using the canonical Z-Mod matcher;
-- manual correction of assignments;
-- pre-print validation and plan;
-- safe multi-color launch through the correct Z-Mod lifecycle;
-- endless/infinite-spool functionality once its real hardware/Z-Mod semantics are proven;
-- recovery/error states where Z-Mod exposes safe operations;
-- diagnostics sufficient for troubleshooting without polluting the normal workflow.
+Primary visual direction: **Helix AD5X physical topology + Happy Hare information/visual hierarchy**, creatively adapted to AD5X.
 
-A function may be intentionally excluded only with an explicit documented reason (hardware unavailable, unsafe, obsolete, or superseded by a better normalized flow).
+Required main Expert presentation:
 
-**No normal or advanced workflow should require the user to fall back to the stock Z-Mod Manager simply because Plugins AD5X did not expose it.**
+- four large physical IFS source/spool cards;
+- actual present/empty/error state;
+- material and representative/rich appearance;
+- active/current source;
+- visual path through selector to toolhead;
+- toolhead filament state;
+- external/bypass path shown separately when supported;
+- current operation and error/warning state;
+- safe select/load/unload actions;
+- detail drill-down for full spool metadata, compatibility and diagnostics.
 
-## 5. Optional full Spoolman integration
+Do not make permanent tool mapping the dominant dashboard object. AD5X has one extruder and four fixed lanes; mapping is primarily a job concern.
 
-Spoolman is optional. IFS Manager must remain fully usable when Spoolman is absent, disabled or temporarily unavailable.
+Do not display fake Happy-Hare topology sensors such as encoder/hub/compression/clog state unless a real AD5X/provider source exists.
 
-When enabled, the target is **full spool-library integration**, not only a read-only metadata badge.
+## 5. Pre-print / mapping UX
 
-The target contract includes:
+Primary interaction reference: Happy Hare `Map Tools`, adapted to the simpler AD5X topology.
 
-- per-slot binding to a concrete Spoolman spool entity;
-- native search/select/bind/unbind workflows;
-- ingestion of available manufacturer/vendor, material, color, name/series, weight/remaining amount and other useful supported metadata;
-- preservation of Plugins AD5X richer appearance fields when Spoolman cannot represent them;
-- normalized representation of Spoolman availability/synchronization state;
-- use of the bound physical spool in the frontend-neutral pre-print plan;
-- remaining-filament warnings when trustworthy source data makes them possible;
-- lifecycle synchronization through supported Spoolman contracts when consumption/update integration is enabled;
-- graceful degradation when Spoolman is unreachable;
-- no deletion of the external spool entity merely because a physical IFS lane was emptied/unbound.
+The pre-print plan must show:
 
-Source authority must remain explicit. Physical IFS state is never inferred from Spoolman metadata.
+- slicer-required `Tn` tools;
+- required material/color when known;
+- currently available IFS sources;
+- Z-Mod canonical automatic assignment;
+- clear mismatch/weak/duplicate/missing reasons;
+- manual remap UI when the write path is implemented;
+- reset/automatic proposal actions;
+- ready/warning/blocked state;
+- explicit confirmation before any production launch mutation.
 
-## 6. Native UX in every supported Klipper UI
+Auto normally collapses successful mapping. Hybrid shows a compact summary. Expert can open full mapping.
 
-Supported product targets:
+Opening a pre-print plan is read-only.
 
-1. Fluidd;
-2. Mainsail;
-3. HelixScreen;
-4. GuppyScreen;
-5. KlipperScreen.
+## 6. Physical source requirements
 
-The implementation MUST be native to each frontend's own component/navigation/dialog/notification model.
+### 6.1 IFS lanes
 
-The following are specifically **not accepted as final integrations**:
+Exactly four fixed IFS physical sources are modeled.
 
-- iframe embedding;
-- WebView embedding of a standalone manager;
-- an external page opened from a thin frontend button;
-- duplicated standalone mini-apps with their own business logic;
-- frontend-local reimplementation of safety or mapping semantics.
+Each lane must expose when provider data is available:
 
-The existing/legacy Fluidd-style embedded IFS/Spoolman approach is therefore an anti-pattern for the new manager, not the target architecture.
-
-Native does not mean pixel-identical. Each UI should use its own native primitives while preserving the same product concepts, terminology, capabilities, warnings, actions and outcomes.
-
-## 7. Cross-frontend feature parity
-
-Core operational features must not exist only in one privileged frontend.
-
-The product should converge on feature parity for:
-
-- lane/spool state;
-- rich material metadata;
-- Spoolman binding when enabled;
-- operational actions;
-- tool mapping;
-- slicer/job preview;
-- pre-print plan;
-- warnings/blockers;
-- safe multi-color start;
-- endless/infinite-spool functions when enabled;
-- diagnostics/advanced state appropriate to that UI.
-
-Release staging may temporarily introduce a reference implementation first, but missing adapters remain unfinished product scope, not a completed feature.
-
-## 8. UX model — progressive disclosure
-
-Maximum functionality must not turn the main screen into a developer/debug panel.
-
-### Primary level
-
-Optimized for immediate recognition and routine operation:
-
-- four physical lanes/spools;
-- color/multi-color appearance;
-- material;
-- useful spool name/vendor information;
-- remaining amount when known;
 - physical presence;
 - active/current state;
-- warnings/errors;
-- obvious contextual actions.
+- stall/error state;
+- material/color metadata;
+- rich spool metadata;
+- current permissions;
+- compatibility/provenance;
+- load/unload/select semantics;
+- diagnostics needed for support/recovery.
 
-### Pre-print level
+### 6.2 External / bypass
 
-The user should understand the job before starting it:
+An external manual filament path is a distinct source, not `Slot 5`.
+
+It may be useful for TPU and brittle filaments. It must not claim IFS presence/stall/selector telemetry. Runtime availability/control stays disabled/unknown until provider behavior is verified.
+
+## 7. Material and spool metadata
+
+The canonical model should support:
+
+- source/provenance;
+- brand/vendor;
+- series;
+- spool name;
+- precise material;
+- variant;
+- remaining grams when trustworthy;
+- Spoolman spool ID;
+- Spoolman filament ID;
+- Orca compatibility material;
+- future Orca exact filament/preset IDs;
+- optional nozzle/bed temperatures where the data source is trustworthy.
+
+Identifiers must never be overloaded across systems.
+
+Physical presence must never be inferred from metadata.
+
+## 8. Appearance
+
+Required canonical appearance modes:
+
+- solid;
+- dual;
+- tricolor;
+- gradient;
+- rainbow;
+- special.
+
+Finish must be separately representable (standard/matte/silk/satin/metallic/transparent/translucent/glitter/glow/wood/carbon_fiber/other).
+
+Compatibility projections may use one representative primary color but must not destroy the full model.
+
+## 9. Z-Mod parity requirements
+
+Expert completion requires user-facing access to every reliable Z-Mod IFS capability that can be normalized safely, including:
+
+- physical IFS state;
+- active source;
+- material/color editing through the provider path;
+- load/unload/select;
+- G-code color/tool scan;
+- automatic assignment;
+- mismatch/weak/duplicate diagnostics;
+- job mapping and, where supported, runtime remapping;
+- print with/without IFS semantics;
+- provider auto insertion;
+- filament-change/recovery flow;
+- purge behavior;
+- reset/stop/unlock recovery semantics;
+- equivalent/endless-spool behavior based on provider primitives;
+- source-relevant IFS motion/head-switch diagnostics.
+
+Raw Fxx commands are implementation/provider details and should be surfaced only under bounded diagnostics/service flows, not as ordinary controls.
+
+## 10. OrcaSlicer interoperability
+
+### 10.1 User-visible requirement
+
+When OrcaSlicer physical-printer connection is configured as:
 
 ```text
-T0  PLA  [requested appearance] -> Slot 3  [physical spool]
-T1  PETG [requested appearance] -> Slot 1  [physical spool]
-T2  PLA  [requested appearance] -> —       [action required]
+Host type:     Octo/Klipper
+Network agent: Moonraker
 ```
 
-Simple healthy case: a clear ready state and one obvious continuation action.
+IFS material/color state should synchronize to Orca through its generic Moonraker integration.
 
-Problem case: explain what is wrong and offer the relevant correction workflow instead of only displaying an opaque error code.
+Initial acceptance target: **OrcaSlicer 2.4.2**.
 
-### Advanced level
+README must state that this feature does not work through the generic `lane_data` path when another Orca network agent is selected.
 
-For experienced users:
+### 10.2 Backend contract
 
-- manual tool mapping;
-- source/metadata overrides;
-- Spoolman binding details;
-- endless-spool configuration;
-- compatibility/synchronization controls;
-- other expert operations.
+Publish Moonraker namespace:
 
-### Diagnostics level
+```text
+lane_data
+```
 
-Technical evidence remains available but visually subordinate:
+with stable `lane1..lane4` records and zero-based string `lane` values.
 
-- raw/provider states;
-- compatibility projection details;
-- source/provenance;
-- failure codes;
-- hardware/runtime diagnostics.
+Current required interoperability values:
 
-Principle: **expert functionality must be discoverable, not dominant**.
+- `lane`;
+- conservative `material`;
+- representative `color`;
+- optional `nozzle_temp`;
+- optional `bed_temp`.
 
-## 9. Visual/product acceptance
+Future-proof non-authoritative aliases may include vendor/name/spool identity, but current Orca behavior must not be overstated.
 
-The current KlipperScreen four-card GTK implementation is a proven technical reference only.
+### 10.3 Exact filament preset identity
 
-Final product UX must be deliberately designed for the target surface (including AD5X 800×480 local display) and must remove desktop-GTK artifacts that are unsuitable for touch.
+Current generic Orca Moonraker matching is not a reliable exact custom-preset binding.
 
-Acceptance should judge at least:
+Requirements:
 
-- at-a-glance lane recognition;
-- touch target size;
-- information hierarchy;
-- multi-color/finish visualization;
-- selected vs active vs empty vs error differentiation;
-- minimal text density in routine mode;
-- clear transitions between normal, warning and blocked states;
-- consistent native interaction within each host UI;
-- no HEX-first color identification in normal use;
-- no requirement to understand Klipper/Z-Mod internals for routine operations.
+- do not populate Orca `filament_id` from Spoolman filament ID;
+- keep Spoolman and Orca IDs separate;
+- when exact Orca identity is unknown, leave it null/absent;
+- preserve exact specialty material separately from conservative Orca wire material;
+- do not guess `ASA-GF`, `PLA Matte`, etc. into a generic match unless an explicit compatibility mapping exists.
 
-## 10. Implementation order
+### 10.4 Shared `lane_data`
 
-The implementation should reuse the already hardware-proven backend and KlipperScreen work rather than restart from scratch.
+`lane_data` may have other writers/readers.
 
-Recommended sequence:
+Plugins AD5X must:
 
-1. finish the frontend-neutral pre-print/tool-map contract;
-2. complete the controlled Z-Mod compatibility/write and correct `PRINT_ZCOLOR` launch contract behind safety gates;
-3. perform hardware acceptance of the new mapping/launch path before enabling production writes;
-4. audit and close functional parity gaps against the stock Z-Mod Manager;
-5. implement optional full Spoolman integration in the common backend;
-6. expose/prove endless/infinite-spool and remaining safe Z-Mod functions through normalized actions;
-7. build the product-grade native reference UX;
-8. implement native Fluidd, Mainsail, HelixScreen, GuppyScreen and KlipperScreen adapters against the same backend contract;
-9. perform functional + visual acceptance per frontend.
+- preserve unknown fields in owned `laneN` records where practical;
+- avoid clearing the namespace;
+- detect duplicate records for the same inner lane and fail closed rather than publish ambiguity;
+- write only on meaningful state/metadata changes and reconnect/reconciliation;
+- avoid a background polling daemon.
 
-Steps may overlap where safe, but backend semantics must not be duplicated in frontend code.
+## 11. Spoolman requirements
 
-## 11. Non-negotiable safety/maintenance constraints
+Spoolman is optional but the integration is product-level, not metadata decoration.
 
-- no Z-Mod fork as the normal integration strategy;
-- no parallel serial ownership of the IFS device;
-- no second slicer color matcher when Z-Mod provides the canonical matcher;
-- no new mechanical/write operation considered proven by CI alone;
-- no frontend-owned hardware safety policy;
-- no Spoolman dependency for base printing/IFS availability;
-- no merge/Ready for Review without explicit owner acceptance under the project workflow.
+Required full-manager behavior:
 
-## 12. Definition of product completion
+- detect/report availability;
+- search/browse/select library spools;
+- bind/unbind each of the four physical sources to a concrete spool;
+- import useful material/vendor/color/name/weight fields;
+- drive native Moonraker `active_spool` automatically from the real active IFS source and reuse Moonraker consumption accounting;
+- distinguish spool entity from filament entity;
+- never delete the external Spoolman record merely because a lane becomes empty;
+- gracefully degrade when Spoolman is absent or unavailable.
 
-IFS / Materials Manager is product-complete only when:
+IFS remains physical truth. Therefore `present=false` MUST hide the old concrete spool as current, invalidate/remove its local slot binding and persist that invalidation. A subsequent insertion without verified identity MUST be `unassigned` and MUST NOT silently reuse the old Spoolman ID. Provider material/color may be shown as observed metadata only. Explicit new bind/edit establishes the new current identity.
 
-- normal users can operate the IFS without the stock Z-Mod Manager;
-- expert functionality remains available without dominating the normal workflow;
-- optional Spoolman integration behaves as a real spool-library integration;
-- supported UI integrations are native rather than embedded standalone pages;
-- core feature semantics are consistent across Fluidd, Mainsail, HelixScreen, GuppyScreen and KlipperScreen;
-- final UX is understandable, attractive and touch-appropriate while preserving advanced Klipper flexibility;
-- every enabled mechanical/print mutation has passed its required real-printer acceptance gate.
+The standalone IFS/Spoolman bridge remains a supported lightweight product direction. Its v2 target is four slot bindings + automatic active-spool tracking on shared semantics. Full and standalone implementations MUST NOT run concurrently as competing owners on one printer.
+
+## 12. Equivalent / endless spool requirements
+
+Use Z-Mod's existing equivalent/analogous-spool primitives where source-verified.
+
+Expert target:
+
+- show fallback/equivalent relationships;
+- explain why a spool is considered compatible;
+- allow explicit policy/priority when supported;
+- show transition/recovery state;
+- do not silently switch to materially incompatible spool.
+
+Automatic transition stays hardware-gated until real AD5X acceptance.
+
+## 13. Recovery and diagnostics
+
+Expert should provide semantic recovery around real provider evidence:
+
+- current operation;
+- last relevant failure;
+- physical lane/presence/stall state;
+- toolhead filament state;
+- IFS motion state when available;
+- source/provider state code;
+- matcher/assignment result;
+- compatibility projection status;
+- bounded raw diagnostics for support.
+
+Do not turn diagnostics into an always-on high-rate logger.
+
+## 14. Capability/permission UX
+
+Frontend button availability comes from backend permissions.
+
+Installed capability and momentary permission are different things.
+
+A disabled action should expose a stable reason such as:
+
+- `unsafe_print_state`;
+- `ifs_not_ready`;
+- `operation_in_progress`;
+- `slot_empty`;
+- `slot_not_selected`;
+- `filament_not_at_toolhead`;
+- feature-specific hardware gate.
+
+## 15. First-party frontend requirements
+
+### Fluidd
+
+Must receive a full native manager/dashboard/pre-print experience or use a source-verified native compatibility component where this produces accurate semantics.
+
+### Mainsail
+
+Must reach semantic parity with Fluidd while following Mainsail's native presentation conventions.
+
+### HelixScreen
+
+Should retain its excellent physical-topology strengths but move metadata/business truth to the shared Plugins AD5X backend. Long term it must not be an independent AD5X `lane_data` source of truth.
+
+### GuppyScreen
+
+Must consume the same backend/capabilities and fit Guppy's navigation/state conventions.
+
+### KlipperScreen
+
+Must use native GTK/KlipperScreen panels and the shared backend. Existing hardware PoC is not the final visual target.
+
+## 16. Other Klipper UIs
+
+The product must be integrable by an unanticipated Klipper/Moonraker UI without changing hardware/provider code.
+
+A third-party client should be able to obtain:
+
+- normalized IFS snapshot;
+- semantic permissions;
+- job preview/pre-print plan;
+- events/revision invalidation;
+- compatibility projections where appropriate.
+
+No third-party client should need to understand Flashforge IFS binary/serial protocol.
+
+## 17. Performance requirements
+
+- no new high-rate idle poller;
+- event-driven recomputation/publication;
+- bounded JSON/status payloads;
+- no image processing or other heavy task in IFS backend;
+- no duplicate color matcher;
+- no parallel serial owner;
+- low memory footprint appropriate for AD5X.
+
+## 18. Safety requirements
+
+Current write restrictions remain until independently accepted:
+
+- editable mapping application: disabled;
+- production `PRINT_ZCOLOR`: disabled;
+- Z-Mod material/color write projection: disabled;
+- automatic equivalent/endless-spool transition: disabled;
+- unproven recovery motion: disabled;
+- automated external/bypass switching: disabled.
+
+Hardware acceptance must use exact repository SHA and real-printer evidence. CI/docs alone are insufficient.
+
+## 19. Definition of done
+
+IFS / Materials Manager 1.0/v2 architecture is done only when:
+
+- Expert covers the complete reliable provider capability set;
+- Auto/Hybrid are coherent simplified views;
+- stock Z-Mod IFS UI is not required for normal use;
+- full optional Spoolman integration works;
+- Orca 2.4.2 material/color sync works via Moonraker `lane_data` and documented setup;
+- the five first-party native frontends converge on one backend;
+- arbitrary Klipper/Moonraker clients can integrate from the same contract;
+- no unsupported sensor/telemetry is fabricated;
+- all enabled mechanical/print mutations have hardware acceptance evidence.
+
+## 20. Upgradeability requirement
+
+Installing or updating IFS / Materials Manager must not make normal Z-Mod, Klipper, Moonraker or other plugin updates depend on removing Plugins AD5X patches. Product installation therefore uses the native Z-Mod plugin lifecycle and plugin-owned runtime links, with no tracked core-file mutation. Legacy owned copies may be migrated; foreign files fail closed. Disable, update and full uninstall are distinct lifecycle operations.

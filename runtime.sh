@@ -286,17 +286,6 @@ launch_camera_recovery()
         </dev/null >>"$LOG_FILE" 2>&1 &
 }
 
-start_ifs()
-{
-    IFS_BOOT="/opt/config/mod_data/ifs_spoolman/start.sh"
-    if [ -x "$IFS_BOOT" ]; then
-        log "Starting IFS Spoolman Manager"
-        "$IFS_BOOT" >>"$STATE_DIR/log/ifs.log" 2>&1 &
-    else
-        log "ERROR: IFS start.sh missing"
-    fi
-}
-
 refresh_overlays()
 {
     rm -f "$STATE_DIR/refresh.changed"
@@ -340,9 +329,6 @@ power_on()
     refresh_overlays || RC=$?
     [ "$RC" -eq 10 ] && CHANGED=1
 
-    # IFS must not be delayed by camera discovery.
-    start_ifs
-
     # Only select the device for the later stock S99camera startup.
     # Do not call S99camera restart from this early power-on hook.
     wait_and_select_primary_camera 30 || true
@@ -363,9 +349,8 @@ case "${1:-}" in
     hygiene) normalize_git_hygiene ;;
     camera-select) select_primary_camera ;;
     cameras|camera-recover) camera_recover ;;
-    ifs) start_ifs ;;
     *)
-        echo "Usage: $0 {power-on|hygiene|camera-select|cameras|camera-recover|ifs}" >&2
+        echo "Usage: $0 {power-on|hygiene|camera-select|cameras|camera-recover}" >&2
         exit 2
         ;;
 esac

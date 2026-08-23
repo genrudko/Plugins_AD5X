@@ -179,7 +179,7 @@ class IFSMetadataStoreTests(unittest.TestCase):
         self.assertEqual(self.store.read_text(encoding="utf-8"), original)
         self.assertEqual(api.gcodes, [])
 
-    def test_finish_only_metadata_on_empty_slot_is_stale_not_present(self):
+    def test_finish_only_metadata_on_empty_slot_is_stale_but_not_current(self):
         component, _server, _api = self.make_live_component()
         result = asyncio.run(
             component._handle_ifs_metadata(
@@ -194,7 +194,9 @@ class IFSMetadataStoreTests(unittest.TestCase):
         slot4 = self.slot(result["snapshot"]["modules"]["ifs"], 4)
         self.assertFalse(slot4["present"])
         self.assertEqual(slot4["metadata_status"], "stale")
-        self.assertEqual(slot4["appearance"]["finish"], "silk")
+        self.assertEqual(slot4["appearance"]["finish"], "standard")
+        self.assertTrue(slot4["stale_metadata_available"])
+        self.assertEqual(slot4["current_identity_status"], "empty")
         self.assertFalse(slot4["permissions"]["load_slot"])
 
     def test_metadata_edit_is_non_mechanical_and_allowed_while_printing(self):

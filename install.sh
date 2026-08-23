@@ -13,20 +13,28 @@ MOONRAKER_INCLUDES="${AD5X_MOONRAKER_INCLUDES:-/opt/config/mod_data/plugins.moon
 USER_MOONRAKER="${AD5X_USER_MOONRAKER:-/opt/config/mod_data/user.moonraker.conf}"
 POWER_ON="${AD5X_POWER_ON:-/opt/config/mod_data/power_on.sh}"
 BACKEND_SOURCE="$PLUGIN_DIR/moonraker/components/plugins_ad5x.py"
-BACKEND_DEST="${AD5X_BACKEND_DEST:-/opt/config/base/moonraker/components/plugins_ad5x.py}"
 BACKEND_CONFIG="$PLUGIN_DIR/plugins_ad5x.moonraker.conf"
-BACKEND_HASH_STATE="$STATE/backend-runtime.sha256"
-MOONRAKER_COMPONENTS_DIR="${AD5X_MOONRAKER_COMPONENTS_DIR:-${BACKEND_DEST%/*}}"
+MOONRAKER_COMPONENTS_DIR="${AD5X_MOONRAKER_COMPONENTS_DIR:-/opt/config/base/moonraker/components}"
+MOONRAKER_REPO_ROOT="${AD5X_MOONRAKER_REPO_ROOT:-${MOONRAKER_COMPONENTS_DIR%/components}}"
+BACKEND_DEST="${AD5X_BACKEND_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x.py}"
 BACKEND_MODEL_SOURCE="$PLUGIN_DIR/moonraker/components/plugins_ad5x_ifs_model.py"
 BACKEND_MODEL_DEST="${AD5X_BACKEND_MODEL_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_ifs_model.py}"
+BACKEND_INTEROP_SOURCE="$PLUGIN_DIR/moonraker/components/plugins_ad5x_ifs_interop.py"
+BACKEND_INTEROP_DEST="${AD5X_BACKEND_INTEROP_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_ifs_interop.py}"
+BACKEND_SPOOLMAN_SOURCE="$PLUGIN_DIR/moonraker/components/plugins_ad5x_ifs_spoolman.py"
+BACKEND_SPOOLMAN_DEST="${AD5X_BACKEND_SPOOLMAN_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_ifs_spoolman.py}"
+# Legacy hash markers are read only to migrate older managed-copy installs safely.
+BACKEND_HASH_STATE="$STATE/backend-runtime.sha256"
 BACKEND_MODEL_HASH_STATE="$STATE/backend-ifs-model-runtime.sha256"
 KLIPPER_BRIDGE_SOURCE="$PLUGIN_DIR/klipper/extras/ad5x_ifs.py"
 KLIPPER_BRIDGE_DEST="${AD5X_KLIPPER_BRIDGE_DEST:-/opt/config/base/klipper/klippy/extras/ad5x_ifs.py}"
-KLIPPER_BRIDGE_HASH_STATE="$STATE/klipper-ifs-bridge.sha256"
 KLIPPER_EXTRAS_DIR="${AD5X_KLIPPER_EXTRAS_DIR:-${KLIPPER_BRIDGE_DEST%/*}}"
+KLIPPER_REPO_ROOT="${AD5X_KLIPPER_REPO_ROOT:-${KLIPPER_EXTRAS_DIR%/klippy/extras}}"
+KLIPPER_BRIDGE_HASH_STATE="$STATE/klipper-ifs-bridge.sha256"
 MOONRAKER_HTTP_BASE="${AD5X_MOONRAKER_HTTP_BASE:-http://127.0.0.1:7125}"
 MOONRAKER_STOP_TIMEOUT="${AD5X_MOONRAKER_STOP_TIMEOUT:-30}"
 MOONRAKER_READY_TIMEOUT="${AD5X_MOONRAKER_READY_TIMEOUT:-90}"
+if [ -n "${AD5X_CUSTOM_REF+x}" ]; then REF_EXPLICIT=1; else REF_EXPLICIT=0; fi
 REF="${AD5X_CUSTOM_REF:-main}"
 MODE="${1:-}"
 MOONRAKER_WAS_RUNNING=0
@@ -55,7 +63,10 @@ append_line(){ F="$1"; L="$2"; [ -f "$F" ] || : >"$F"; grep -Fqx "$L" "$F" 2>/de
 backup(){ [ -f "$1" ] && cp -p "$1" "$2/${1##*/}" || true; }
 snapshot(){
     FILE="$1"; KEY="$2"
-    if [ -e "$FILE" ] || [ -L "$FILE" ]; then
+    rm -f "$B/.absent-$KEY" "$B/.symlink-$KEY"
+    if [ -L "$FILE" ]; then
+        readlink "$FILE" >"$B/.symlink-$KEY"
+    elif [ -e "$FILE" ]; then
         cp -p "$FILE" "$B/$KEY"
     else
         : >"$B/.absent-$KEY"
@@ -63,9 +74,12 @@ snapshot(){
 }
 restore_snapshot(){
     FILE="$1"; KEY="$2"
+    rm -f "$FILE"
     if [ -f "$B/.absent-$KEY" ]; then
-        rm -f "$FILE"
-    elif [ -e "$B/$KEY" ] || [ -L "$B/$KEY" ]; then
+        :
+    elif [ -f "$B/.symlink-$KEY" ]; then
+        ln -s "$(cat "$B/.symlink-$KEY")" "$FILE"
+    elif [ -e "$B/$KEY" ]; then
         cp -p "$B/$KEY" "$FILE"
     fi
 }
@@ -165,6 +179,8 @@ backend_constant(){
 backend_source_valid(){
     [ -s "$BACKEND_SOURCE" ] || return 1
     [ -s "$BACKEND_MODEL_SOURCE" ] || return 1
+    [ -s "$BACKEND_INTEROP_SOURCE" ] || return 1
+    [ -s "$BACKEND_SPOOLMAN_SOURCE" ] || return 1
     [ -f "$PLUGIN_DIR/VERSION" ] || return 1
     [ -d "$MOONRAKER_COMPONENTS_DIR" ] || return 1
     [ -s "$BACKEND_CONFIG" ] || return 1
@@ -172,6 +188,8 @@ backend_source_valid(){
     [ "$(grep -Ec '^\[[^]]+\]$' "$BACKEND_CONFIG" 2>/dev/null || true)" -eq 1 ] || return 1
     python_source_valid "$BACKEND_SOURCE" || return 1
     python_source_valid "$BACKEND_MODEL_SOURCE" || return 1
+    python_source_valid "$BACKEND_INTEROP_SOURCE" || return 1
+    python_source_valid "$BACKEND_SPOOLMAN_SOURCE" || return 1
     API_VERSION_="$(backend_constant API_VERSION)"
     BACKEND_VERSION_="$(backend_constant BACKEND_VERSION)"
     ROOT_VERSION_="$(tr -d '\r\n' <"$PLUGIN_DIR/VERSION")"
@@ -180,73 +198,90 @@ backend_source_valid(){
     [ "$BACKEND_VERSION_" = "$ROOT_VERSION_" ] || return 1
 }
 validate_backend_source(){ backend_source_valid || fail 'backend source/config/model validation failed'; }
-managed_python_destination_owned(){
-    SOURCE="$1"; DEST="$2"; HASH_STATE="$3"
+managed_link_destination_owned(){
+    SOURCE="$1"; DEST="$2"; LEGACY_HASH_STATE="$3"
     [ -e "$DEST" ] || [ -L "$DEST" ] || return 0
+    if [ -L "$DEST" ]; then
+        [ "$(readlink "$DEST" 2>/dev/null || true)" = "$SOURCE" ]
+        return
+    fi
     [ -f "$DEST" ] || return 1
-    [ ! -L "$DEST" ] || return 1
     DEST_HASH="$(sha256_file "$DEST" 2>/dev/null || true)"
-    [ -n "$DEST_HASH" ] || return 1
     SOURCE_HASH="$(sha256_file "$SOURCE" 2>/dev/null || true)"
-    if [ -f "$HASH_STATE" ] && [ "$(cat "$HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
+    [ -n "$DEST_HASH" ] || return 1
+    if [ -f "$LEGACY_HASH_STATE" ] && [ "$(cat "$LEGACY_HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
         return 0
     fi
     [ -n "$SOURCE_HASH" ] && [ "$DEST_HASH" = "$SOURCE_HASH" ]
 }
-backend_destination_owned(){ managed_python_destination_owned "$BACKEND_SOURCE" "$BACKEND_DEST" "$BACKEND_HASH_STATE"; }
-backend_model_destination_owned(){ managed_python_destination_owned "$BACKEND_MODEL_SOURCE" "$BACKEND_MODEL_DEST" "$BACKEND_MODEL_HASH_STATE"; }
+link_matches(){ [ -L "$2" ] && [ "$(readlink "$2" 2>/dev/null || true)" = "$1" ]; }
+install_managed_link(){
+    SOURCE="$1"; DEST="$2"; LEGACY_HASH_STATE="$3"
+    managed_link_destination_owned "$SOURCE" "$DEST" "$LEGACY_HASH_STATE" || return 1
+    [ -f "$SOURCE" ] || return 1
+    [ -d "${DEST%/*}" ] || return 1
+    TMP="${DEST%/*}/.${DEST##*/}.link.$$"
+    rm -f "$TMP"
+    ln -s "$SOURCE" "$TMP" || return 1
+    rm -f "$DEST"
+    mv -f "$TMP" "$DEST" || { rm -f "$TMP"; return 1; }
+    link_matches "$SOURCE" "$DEST" || return 1
+    if [ -n "$LEGACY_HASH_STATE" ]; then rm -f "$LEGACY_HASH_STATE"; fi
+}
+remove_managed_link(){
+    SOURCE="$1"; DEST="$2"; LEGACY_HASH_STATE="$3"
+    [ -e "$DEST" ] || [ -L "$DEST" ] || { if [ -n "$LEGACY_HASH_STATE" ]; then rm -f "$LEGACY_HASH_STATE"; fi; return 0; }
+    managed_link_destination_owned "$SOURCE" "$DEST" "$LEGACY_HASH_STATE" || return 1
+    rm -f "$DEST"
+    if [ -n "$LEGACY_HASH_STATE" ]; then rm -f "$LEGACY_HASH_STATE"; fi
+}
+git_exclude_add(){
+    REPO="$1"; ENTRY="$2"; EXCLUDE="$REPO/.git/info/exclude"
+    [ -d "$REPO/.git/info" ] || return 0
+    [ -f "$EXCLUDE" ] || : >"$EXCLUDE"
+    grep -Fqx "$ENTRY" "$EXCLUDE" 2>/dev/null || echo "$ENTRY" >>"$EXCLUDE"
+}
+git_exclude_remove(){
+    REPO="$1"; ENTRY="$2"; EXCLUDE="$REPO/.git/info/exclude"
+    [ -f "$EXCLUDE" ] || return 0
+    grep -Fvx "$ENTRY" "$EXCLUDE" >"$EXCLUDE.tmp" 2>/dev/null || true
+    mv "$EXCLUDE.tmp" "$EXCLUDE"
+}
+backend_destination_owned(){ managed_link_destination_owned "$BACKEND_SOURCE" "$BACKEND_DEST" "$BACKEND_HASH_STATE"; }
+backend_model_destination_owned(){ managed_link_destination_owned "$BACKEND_MODEL_SOURCE" "$BACKEND_MODEL_DEST" "$BACKEND_MODEL_HASH_STATE"; }
+backend_interop_destination_owned(){ managed_link_destination_owned "$BACKEND_INTEROP_SOURCE" "$BACKEND_INTEROP_DEST" ""; }
+backend_spoolman_destination_owned(){ managed_link_destination_owned "$BACKEND_SPOOLMAN_SOURCE" "$BACKEND_SPOOLMAN_DEST" ""; }
 validate_backend_destination_ownership(){
     backend_destination_owned || fail "неизвестный файл в backend destination: $BACKEND_DEST"
-    backend_model_destination_owned || fail "неизвестный файл в IFS Manager model destination: $BACKEND_MODEL_DEST"
+    backend_model_destination_owned || fail "неизвестный файл в IFS model destination: $BACKEND_MODEL_DEST"
+    backend_interop_destination_owned || fail "неизвестный файл в IFS interop destination: $BACKEND_INTEROP_DEST"
+    backend_spoolman_destination_owned || fail "неизвестный файл в IFS Spoolman destination: $BACKEND_SPOOLMAN_DEST"
 }
-remove_backend_bytecode(){
-    rm -f "$MOONRAKER_COMPONENTS_DIR/__pycache__/plugins_ad5x"*.pyc 2>/dev/null || true
-}
-deploy_backend_managed_copy(){
+remove_backend_bytecode(){ rm -f "$MOONRAKER_COMPONENTS_DIR/__pycache__/plugins_ad5x"*.pyc 2>/dev/null || true; }
+deploy_backend_plugin_links(){
     validate_backend_source
     validate_backend_destination_ownership
-    SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE")"
-    MODEL_SOURCE_HASH="$(sha256_file "$BACKEND_MODEL_SOURCE")"
-    TMP="$MOONRAKER_COMPONENTS_DIR/.plugins_ad5x.py.tmp.$$"
-    MODEL_TMP="$MOONRAKER_COMPONENTS_DIR/.plugins_ad5x_ifs_model.py.tmp.$$"
-    rm -f "$TMP" "$MODEL_TMP"
-    cp "$BACKEND_SOURCE" "$TMP" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
-    cp "$BACKEND_MODEL_SOURCE" "$MODEL_TMP" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
-    chmod 0644 "$TMP" "$MODEL_TMP" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
-    [ "$(sha256_file "$TMP")" = "$SOURCE_HASH" ] || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
-    [ "$(sha256_file "$MODEL_TMP")" = "$MODEL_SOURCE_HASH" ] || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
-    mv -f "$MODEL_TMP" "$BACKEND_MODEL_DEST" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
-    mv -f "$TMP" "$BACKEND_DEST" || { rm -f "$TMP" "$MODEL_TMP"; return 1; }
-    [ "$(sha256_file "$BACKEND_DEST")" = "$SOURCE_HASH" ] || return 1
-    [ "$(sha256_file "$BACKEND_MODEL_DEST")" = "$MODEL_SOURCE_HASH" ] || return 1
+    install_managed_link "$BACKEND_SOURCE" "$BACKEND_DEST" "$BACKEND_HASH_STATE" || return 1
+    install_managed_link "$BACKEND_MODEL_SOURCE" "$BACKEND_MODEL_DEST" "$BACKEND_MODEL_HASH_STATE" || return 1
+    install_managed_link "$BACKEND_INTEROP_SOURCE" "$BACKEND_INTEROP_DEST" "" || return 1
+    install_managed_link "$BACKEND_SPOOLMAN_SOURCE" "$BACKEND_SPOOLMAN_DEST" "" || return 1
+    git_exclude_add "$MOONRAKER_REPO_ROOT" /components/plugins_ad5x.py
+    git_exclude_add "$MOONRAKER_REPO_ROOT" /components/plugins_ad5x_ifs_model.py
+    git_exclude_add "$MOONRAKER_REPO_ROOT" /components/plugins_ad5x_ifs_interop.py
+    git_exclude_add "$MOONRAKER_REPO_ROOT" /components/plugins_ad5x_ifs_spoolman.py
     remove_backend_bytecode
-    HASH_TMP="$BACKEND_HASH_STATE.tmp.$$"
-    MODEL_HASH_TMP="$BACKEND_MODEL_HASH_STATE.tmp.$$"
-    printf '%s\n' "$SOURCE_HASH" >"$HASH_TMP"
-    printf '%s\n' "$MODEL_SOURCE_HASH" >"$MODEL_HASH_TMP"
-    mv -f "$HASH_TMP" "$BACKEND_HASH_STATE"
-    mv -f "$MODEL_HASH_TMP" "$BACKEND_MODEL_HASH_STATE"
 }
 backend_runtime_matches_source(){
-    [ -f "$BACKEND_DEST" ] || return 1
-    [ ! -L "$BACKEND_DEST" ] || return 1
-    [ -f "$BACKEND_HASH_STATE" ] || return 1
-    [ -f "$BACKEND_MODEL_DEST" ] || return 1
-    [ ! -L "$BACKEND_MODEL_DEST" ] || return 1
-    [ -f "$BACKEND_MODEL_HASH_STATE" ] || return 1
-    SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE" 2>/dev/null || true)"
-    DEST_HASH="$(sha256_file "$BACKEND_DEST" 2>/dev/null || true)"
-    RECORDED_HASH="$(cat "$BACKEND_HASH_STATE" 2>/dev/null || true)"
-    MODEL_SOURCE_HASH="$(sha256_file "$BACKEND_MODEL_SOURCE" 2>/dev/null || true)"
-    MODEL_DEST_HASH="$(sha256_file "$BACKEND_MODEL_DEST" 2>/dev/null || true)"
-    MODEL_RECORDED_HASH="$(cat "$BACKEND_MODEL_HASH_STATE" 2>/dev/null || true)"
-    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ] && \
-        [ -n "$MODEL_SOURCE_HASH" ] && [ "$MODEL_SOURCE_HASH" = "$MODEL_DEST_HASH" ] && [ "$MODEL_DEST_HASH" = "$MODEL_RECORDED_HASH" ]
+    link_matches "$BACKEND_SOURCE" "$BACKEND_DEST" &&
+    link_matches "$BACKEND_MODEL_SOURCE" "$BACKEND_MODEL_DEST" &&
+    link_matches "$BACKEND_INTEROP_SOURCE" "$BACKEND_INTEROP_DEST" &&
+    link_matches "$BACKEND_SPOOLMAN_SOURCE" "$BACKEND_SPOOLMAN_DEST"
 }
 backend_include_ok(){
     [ -s "$BACKEND_CONFIG" ] || return 1
     [ "$(grep -Fxc '[include plugins/ad5x_custom/plugins_ad5x.moonraker.conf]' "$MOONRAKER_INCLUDES" 2>/dev/null || true)" -eq 1 ]
 }
+
 configure_moonraker_includes(){
     remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
     append_line "$MOONRAKER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.moonraker.conf]'
@@ -261,56 +296,26 @@ validate_klipper_bridge_source(){
     klipper_bridge_source_valid || fail 'IFS Klipper bridge source validation failed'
 }
 klipper_bridge_destination_owned(){
-    [ -e "$KLIPPER_BRIDGE_DEST" ] || [ -L "$KLIPPER_BRIDGE_DEST" ] || return 0
-    [ -f "$KLIPPER_BRIDGE_DEST" ] || return 1
-    [ ! -L "$KLIPPER_BRIDGE_DEST" ] || return 1
-    DEST_HASH="$(sha256_file "$KLIPPER_BRIDGE_DEST" 2>/dev/null || true)"
-    [ -n "$DEST_HASH" ] || return 1
-    SOURCE_HASH="$(sha256_file "$KLIPPER_BRIDGE_SOURCE" 2>/dev/null || true)"
-    if [ -f "$KLIPPER_BRIDGE_HASH_STATE" ] && [ "$(cat "$KLIPPER_BRIDGE_HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
-        return 0
-    fi
-    [ -n "$SOURCE_HASH" ] && [ "$DEST_HASH" = "$SOURCE_HASH" ]
+    managed_link_destination_owned "$KLIPPER_BRIDGE_SOURCE" "$KLIPPER_BRIDGE_DEST" "$KLIPPER_BRIDGE_HASH_STATE"
 }
 validate_klipper_bridge_destination_ownership(){
     klipper_bridge_destination_owned || fail "неизвестный файл в IFS Klipper bridge destination: $KLIPPER_BRIDGE_DEST"
 }
-remove_klipper_bridge_bytecode(){
-    rm -f "$KLIPPER_EXTRAS_DIR/__pycache__/ad5x_ifs"*.pyc 2>/dev/null || true
-}
-deploy_klipper_bridge_managed_copy(){
+remove_klipper_bridge_bytecode(){ rm -f "$KLIPPER_EXTRAS_DIR/__pycache__/ad5x_ifs"*.pyc 2>/dev/null || true; }
+deploy_klipper_bridge_plugin_link(){
     validate_klipper_bridge_source
     validate_klipper_bridge_destination_ownership
-    SOURCE_HASH="$(sha256_file "$KLIPPER_BRIDGE_SOURCE")"
-    TMP="$KLIPPER_EXTRAS_DIR/.ad5x_ifs.py.tmp.$$"
-    rm -f "$TMP"
-    cp "$KLIPPER_BRIDGE_SOURCE" "$TMP" || { rm -f "$TMP"; return 1; }
-    chmod 0644 "$TMP" || { rm -f "$TMP"; return 1; }
-    [ "$(sha256_file "$TMP")" = "$SOURCE_HASH" ] || { rm -f "$TMP"; return 1; }
-    mv -f "$TMP" "$KLIPPER_BRIDGE_DEST" || { rm -f "$TMP"; return 1; }
-    [ "$(sha256_file "$KLIPPER_BRIDGE_DEST")" = "$SOURCE_HASH" ] || return 1
+    install_managed_link "$KLIPPER_BRIDGE_SOURCE" "$KLIPPER_BRIDGE_DEST" "$KLIPPER_BRIDGE_HASH_STATE" || return 1
+    git_exclude_add "$KLIPPER_REPO_ROOT" /klippy/extras/ad5x_ifs.py
     remove_klipper_bridge_bytecode
-    HASH_TMP="$KLIPPER_BRIDGE_HASH_STATE.tmp.$$"
-    printf '%s\n' "$SOURCE_HASH" >"$HASH_TMP"
-    mv -f "$HASH_TMP" "$KLIPPER_BRIDGE_HASH_STATE"
 }
-klipper_bridge_runtime_matches_source(){
-    [ -f "$KLIPPER_BRIDGE_DEST" ] || return 1
-    [ ! -L "$KLIPPER_BRIDGE_DEST" ] || return 1
-    [ -f "$KLIPPER_BRIDGE_HASH_STATE" ] || return 1
-    SOURCE_HASH="$(sha256_file "$KLIPPER_BRIDGE_SOURCE" 2>/dev/null || true)"
-    DEST_HASH="$(sha256_file "$KLIPPER_BRIDGE_DEST" 2>/dev/null || true)"
-    RECORDED_HASH="$(cat "$KLIPPER_BRIDGE_HASH_STATE" 2>/dev/null || true)"
-    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ]
-}
-remove_klipper_bridge_managed_copy(){
-    if [ -e "$KLIPPER_BRIDGE_DEST" ] || [ -L "$KLIPPER_BRIDGE_DEST" ]; then
-        klipper_bridge_destination_owned || return 1
-        rm -f "$KLIPPER_BRIDGE_DEST"
-    fi
+klipper_bridge_runtime_matches_source(){ link_matches "$KLIPPER_BRIDGE_SOURCE" "$KLIPPER_BRIDGE_DEST"; }
+remove_klipper_bridge_plugin_link(){
+    remove_managed_link "$KLIPPER_BRIDGE_SOURCE" "$KLIPPER_BRIDGE_DEST" "$KLIPPER_BRIDGE_HASH_STATE" || return 1
+    git_exclude_remove "$KLIPPER_REPO_ROOT" /klippy/extras/ad5x_ifs.py
     remove_klipper_bridge_bytecode
-    rm -f "$KLIPPER_BRIDGE_HASH_STATE"
 }
+
 moonraker_process_count(){
     COUNT=0
     for P in /proc/[0-9]*; do
@@ -430,23 +435,26 @@ CFG
 }
 backend_install_transition(){
     configure_moonraker_includes
-    configure_update_manager
-    deploy_backend_managed_copy
+    case "$MODE" in --enable-hook|--update-hook) : ;; *) configure_update_manager ;; esac
+    deploy_backend_plugin_links
+}
+backend_disable_transition(){
+    remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
+    remove_managed_link "$BACKEND_SOURCE" "$BACKEND_DEST" "$BACKEND_HASH_STATE" || return 1
+    remove_managed_link "$BACKEND_MODEL_SOURCE" "$BACKEND_MODEL_DEST" "$BACKEND_MODEL_HASH_STATE" || return 1
+    remove_managed_link "$BACKEND_INTEROP_SOURCE" "$BACKEND_INTEROP_DEST" "" || return 1
+    remove_managed_link "$BACKEND_SPOOLMAN_SOURCE" "$BACKEND_SPOOLMAN_DEST" "" || return 1
+    git_exclude_remove "$MOONRAKER_REPO_ROOT" /components/plugins_ad5x.py
+    git_exclude_remove "$MOONRAKER_REPO_ROOT" /components/plugins_ad5x_ifs_model.py
+    git_exclude_remove "$MOONRAKER_REPO_ROOT" /components/plugins_ad5x_ifs_interop.py
+    git_exclude_remove "$MOONRAKER_REPO_ROOT" /components/plugins_ad5x_ifs_spoolman.py
+    remove_backend_bytecode
 }
 backend_uninstall_transition(){
-    remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
+    backend_disable_transition || return 1
     remove_update_manager_section
-    if [ -e "$BACKEND_DEST" ] || [ -L "$BACKEND_DEST" ]; then
-        backend_destination_owned || return 1
-        rm -f "$BACKEND_DEST"
-    fi
-    if [ -e "$BACKEND_MODEL_DEST" ] || [ -L "$BACKEND_MODEL_DEST" ]; then
-        backend_model_destination_owned || return 1
-        rm -f "$BACKEND_MODEL_DEST"
-    fi
-    remove_backend_bytecode
-    rm -f "$BACKEND_HASH_STATE" "$BACKEND_MODEL_HASH_STATE"
 }
+
 run_moonraker_transition(){
     TRANSITION_FN="$1"
     VERIFY_FN="$2"
@@ -594,26 +602,52 @@ HOOK
     sh -n "$POWER_ON" || fail 'ошибка синтаксиса power_on.sh'
 }
 
-# Bootstrap clone.
-if [ "$MODE" != --apply-only ] && [ "$MODE" != --refresh-only ] && [ "$MODE" != --status ] && [ "$MODE" != --uninstall ] && [ ! -d "$PLUGIN_DIR/.git" ]; then
+# Bootstrap clone.  Z-Mod lifecycle hooks operate on the already managed checkout.
+if [ "$MODE" = "" ] && [ ! -d "$PLUGIN_DIR/.git" ]; then
     ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
     mkdir -p /opt/config/mod_data/plugins
     chroot "$ROOT" /usr/bin/git clone --branch "$REF" --single-branch "$REPO_URL" "$PLUGIN_DIR"
     exec "$PLUGIN_DIR/install.sh" --apply-only
 fi
 
-# Re-running downloaded installer switches an existing install to REF.
+# A no-argument call from ENABLE_PLUGIN activates the checkout it was given.
+# Only an explicitly supplied AD5X_CUSTOM_REF is allowed to switch an existing checkout.
 if [ "$MODE" = "" ] && [ -d "$PLUGIN_DIR/.git" ]; then
-    ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
-    S="$(chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" status --porcelain)"
-    [ -z "$S" ] || fail 'ad5x_custom содержит локальные изменения; переключение ветки запрещено'
-    chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" fetch origin "refs/heads/$REF:refs/remotes/origin/$REF"
-    chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" checkout -B "$REF" "origin/$REF"
-    exec "$PLUGIN_DIR/install.sh" --apply-only
+    if [ "$REF_EXPLICIT" -eq 1 ]; then
+        ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
+        S="$(chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" status --porcelain)"
+        [ -z "$S" ] || fail 'ad5x_custom содержит локальные изменения; переключение ветки запрещено'
+        chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" fetch origin "refs/heads/$REF:refs/remotes/origin/$REF"
+        chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" checkout -B "$REF" "origin/$REF"
+        exec "$PLUGIN_DIR/install.sh" --apply-only
+    fi
+    MODE=--enable-hook
 fi
 
 [ -f "$PLUGIN_DIR/VERSION" ] || fail "неполная установка: $PLUGIN_DIR"
 mkdir -p "$GENERATED" "$STATE" "$BACKUPS" "$LOG_DIR"
+
+if [ "$MODE" = --update-hook ]; then
+    # Called by Moonraker Update Manager after it has updated the plugin checkout.
+    # Never stop/restart Moonraker here: update.sh is its child process.
+    validate_backend_source
+    validate_backend_destination_ownership
+    validate_klipper_bridge_source
+    validate_klipper_bridge_destination_ownership
+    generate_configs
+    remove_lines "$KLIPPER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/'
+    append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.cfg]'
+    append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/notify.cfg]'
+    append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/timelapse.cfg]'
+    deploy_klipper_bridge_plugin_link || fail 'IFS Klipper bridge re-link failed'
+    configure_moonraker_includes
+    deploy_backend_plugin_links || fail 'Moonraker plugin re-link failed'
+    install_power_on_hook
+    rm -f /etc/init.d/S99zzcamera2 /etc/init.d/S59ad5x-custom-refresh /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S98ad5x-camera-select /etc/init.d/S99zzad5x-camera2 2>/dev/null || true
+    : >"$STATE/runtime-restart-required"
+    echo 'AD5X Custom update hook: plugin links/config reconciled; no Moonraker self-restart was attempted.'
+    exit 0
+fi
 
 if [ "$MODE" = --refresh-only ]; then
     generate_configs
@@ -652,7 +686,7 @@ if [ "$MODE" = --status ]; then
     fi
     wget -qO- 'http://127.0.0.1:8080/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 1' || echo '[FAIL] Camera 1'
     wget -qO- 'http://127.0.0.1:8081/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 2' || echo '[FAIL] Camera 2'
-    wget -qO- http://127.0.0.1:7913/api/health >/dev/null 2>&1 && echo '[OK] IFS' || echo '[FAIL] IFS'
+    wget -qO- "$MOONRAKER_HTTP_BASE/server/plugins_ad5x/ifs/spoolman/status" >/dev/null 2>&1 && echo '[OK] IFS / Spoolman backend endpoint' || echo '[OPTIONAL/UNAVAILABLE] IFS / Spoolman backend endpoint'
     echo '=== Git ==='
     repo_status "$ROOT" Z-Mod /opt/config/mod
     repo_status "$ROOT" klippy /opt/config/base/klipper
@@ -663,7 +697,7 @@ if [ "$MODE" = --status ]; then
     exit 0
 fi
 
-if [ "$MODE" = --uninstall ]; then
+if [ "$MODE" = --uninstall ] || [ "$MODE" = --disable-hook ]; then
     check_idle
     validate_backend_destination_ownership
     validate_klipper_bridge_destination_ownership
@@ -676,8 +710,12 @@ if [ "$MODE" = --uninstall ]; then
     snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
     snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py
     snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256
+    snapshot "$BACKEND_INTEROP_DEST" backend-ifs-interop-runtime.py
+    snapshot "$BACKEND_SPOOLMAN_DEST" backend-ifs-spoolman-runtime.py
     snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
     snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
+    snapshot "$MOONRAKER_REPO_ROOT/.git/info/exclude" moonraker-git-exclude
+    snapshot "$KLIPPER_REPO_ROOT/.git/info/exclude" klipper-git-exclude
     UNINSTALL_SUCCESS=0
     rollback_uninstall(){
         set +e
@@ -693,8 +731,12 @@ if [ "$MODE" = --uninstall ]; then
         restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
         restore_snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py
         restore_snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256
+        restore_snapshot "$BACKEND_INTEROP_DEST" backend-ifs-interop-runtime.py
+        restore_snapshot "$BACKEND_SPOOLMAN_DEST" backend-ifs-spoolman-runtime.py
         restore_snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
         restore_snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
+        restore_snapshot "$MOONRAKER_REPO_ROOT/.git/info/exclude" moonraker-git-exclude
+        restore_snapshot "$KLIPPER_REPO_ROOT/.git/info/exclude" klipper-git-exclude
         remove_backend_bytecode
         remove_klipper_bridge_bytecode
         restore_moonraker_after_rollback || true
@@ -718,12 +760,20 @@ if [ "$MODE" = --uninstall ]; then
     else
         strip_block "$POWER_ON" 'AD5X_CUSTOM_POWER_ON_BEGIN' 'AD5X_CUSTOM_POWER_ON_END'
     fi
-    remove_klipper_bridge_managed_copy || fail 'IFS Klipper bridge uninstall failed'
+    remove_klipper_bridge_plugin_link || fail 'IFS Klipper bridge uninstall failed'
     ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
-    run_moonraker_transition backend_uninstall_transition verify_backend_absent || fail 'backend uninstall lifecycle failed'
+    if [ "$MODE" = --disable-hook ]; then
+        run_moonraker_transition backend_disable_transition verify_backend_absent || fail 'backend disable lifecycle failed'
+    else
+        run_moonraker_transition backend_uninstall_transition verify_backend_absent || fail 'backend uninstall lifecycle failed'
+    fi
     UNINSTALL_SUCCESS=1
     trap - EXIT HUP INT TERM
-    echo 'Интеграция отключена. Backend, IFS Manager model и IFS bridge удалены; исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
+    if [ "$MODE" = --disable-hook ]; then
+        echo 'AD5X Custom отключён через Z-Mod plugin lifecycle; репозиторий и Update Manager registration сохранены.'
+    else
+        echo 'Интеграция полностью удалена; runtime links сняты и Update Manager registration удалена; пользовательские данные сохранены.'
+    fi
     exit 0
 fi
 
@@ -753,8 +803,12 @@ rollback_install(){
     restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
     restore_snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py
     restore_snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256
+    restore_snapshot "$BACKEND_INTEROP_DEST" backend-ifs-interop-runtime.py
+    restore_snapshot "$BACKEND_SPOOLMAN_DEST" backend-ifs-spoolman-runtime.py
     restore_snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
     restore_snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
+    restore_snapshot "$MOONRAKER_REPO_ROOT/.git/info/exclude" moonraker-git-exclude
+    restore_snapshot "$KLIPPER_REPO_ROOT/.git/info/exclude" klipper-git-exclude
     remove_backend_bytecode
     remove_klipper_bridge_bytecode
     [ -f "$B/upstream/notify.cfg" ] && cp -p "$B/upstream/notify.cfg" /opt/config/mod_data/plugins/notify/ru/notify.cfg
@@ -785,8 +839,12 @@ snapshot "$BACKEND_DEST" backend-runtime.py
 snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
 snapshot "$BACKEND_MODEL_DEST" backend-ifs-model-runtime.py
 snapshot "$BACKEND_MODEL_HASH_STATE" backend-ifs-model-runtime.sha256
+snapshot "$BACKEND_INTEROP_DEST" backend-ifs-interop-runtime.py
+snapshot "$BACKEND_SPOOLMAN_DEST" backend-ifs-spoolman-runtime.py
 snapshot "$KLIPPER_BRIDGE_DEST" klipper-ifs-bridge.py
 snapshot "$KLIPPER_BRIDGE_HASH_STATE" klipper-ifs-bridge.sha256
+snapshot "$MOONRAKER_REPO_ROOT/.git/info/exclude" moonraker-git-exclude
+snapshot "$KLIPPER_REPO_ROOT/.git/info/exclude" klipper-git-exclude
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.cfg "$B/upstream/notify.cfg"
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg "$B/upstream/notify.moonraker.cfg"
 [ -f /opt/config/mod_data/plugins/timelapse/timelapse.cfg ] && cp -p /opt/config/mod_data/plugins/timelapse/timelapse.cfg "$B/upstream/timelapse.cfg"
@@ -822,7 +880,7 @@ append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.cfg]'
 append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/notify.cfg]'
 append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/timelapse.cfg]'
 
-deploy_klipper_bridge_managed_copy || fail 'IFS Klipper bridge deployment failed'
+deploy_klipper_bridge_plugin_link || fail 'IFS Klipper bridge deployment failed'
 install_power_on_hook
 rm -f /etc/init.d/S99zzcamera2 /etc/init.d/S59ad5x-custom-refresh /etc/init.d/S66ad5x-ifs-spoolman /etc/init.d/S98ad5x-camera-select /etc/init.d/S99zzad5x-camera2 2>/dev/null || true
 
@@ -831,6 +889,6 @@ run_moonraker_transition backend_install_transition verify_backend_runtime || fa
 SUCCESS=1
 trap - EXIT HUP INT TERM
 echo "AD5X Custom применён. Backup: $B"
-echo 'Plugins AD5X backend + IFS Manager model применены через managed copy и controlled Moonraker lifecycle.'
-echo 'IFS Klipper bridge установлен managed-copy; загрузка изменённого Python extra требует полного перезапуска процесса Klipper — firmware restart недостаточен.'
+echo 'Plugins AD5X backend + IFS Manager model применены через plugin-owned symlinks; tracked Moonraker/Klipper files не изменяются.'
+echo 'IFS Klipper bridge подключён plugin-owned symlink; загрузка изменённого Python extra требует полного перезапуска процесса Klipper — firmware restart недостаточен.'
 echo 'Надёжный AD5X путь: полное выключение и включение принтера; оно также активирует остальные camera/power-on изменения.'

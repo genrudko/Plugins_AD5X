@@ -72,9 +72,24 @@ class FakeKlippyAPIs:
         return "ok"
 
 
+class FakeSpoolman:
+    def __init__(self, spool_id=None, connected=True):
+        self.spool_id = spool_id
+        self.ws_connected = connected
+        self.calls = []
+
+    def connected(self):
+        return self.ws_connected
+
+    def set_active_spool(self, spool_id):
+        self.calls.append(spool_id)
+        self.spool_id = spool_id
+
+
 class FakeServer:
-    def __init__(self, klippy_apis):
+    def __init__(self, klippy_apis, spoolman=None):
         self.klippy_apis = klippy_apis
+        self.spoolman = spoolman
         self.handlers = {}
         self.events = []
         self.endpoints = {}
@@ -89,9 +104,11 @@ class FakeServer:
         self.handlers[event] = callback
 
     def lookup_component(self, name):
-        if name != "klippy_apis":
-            raise KeyError(name)
-        return self.klippy_apis
+        if name == "klippy_apis":
+            return self.klippy_apis
+        if name == "spoolman" and self.spoolman is not None:
+            return self.spoolman
+        raise KeyError(name)
 
     def send_event(self, event, *args):
         self.events.append((event, args))
@@ -169,27 +186,116 @@ def assert_ready_core(testcase, module):
 
 
 class PluginsAD5XIFSBackendTests(unittest.TestCase):
-    def make_component(self, objects=None, initial=None):
+    def make_component(self, objects=None, initial=None, spoolman=None):
         api = FakeKlippyAPIs(objects, initial)
-        server = FakeServer(api)
+        server = FakeServer(api, spoolman=spoolman)
         component = component_module.load_component(FakeConfig(server))
         return component, server, api
 
-    def make_live_component(self, print_state="standby", head=True):
+    def make_live_component(self, print_state="standby", head=True, spoolman=None):
         return self.make_component(
             objects=["ad5x_ifs", HEAD],
             initial=live_initial(print_state, head),
+            spoolman=spoolman,
         )
 
     def test_registers_lifecycle_and_action_endpoint_without_polling(self):
         _component, server, _api = self.make_component()
         self.assertEqual(
-            set(server.handlers), {"server:klippy_ready", "server:klippy_disconnect"}
+            set(server.handlers),
+            {
+                "server:klippy_ready",
+                "server:klippy_disconnect",
+                "spoolman:spoolman_status_changed",
+                "spoolman:active_spool_set",
+            },
         )
         self.assertEqual(
             server.endpoints[component_module.IFS_ACTION_ENDPOINT][0], RequestType.POST
         )
         self.assertFalse(hasattr(server, "timer"))
+
+    def test_spoolman_is_optional_and_absent_does_not_reduce_ifs(self):
+        component, server, _api = self.make_live_component(spoolman=None)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        module = component.get_snapshot()["modules"]["ifs"]
+        self.assertFalse(module["capabilities"]["integrations"]["spoolman"])
+        self.assertFalse(module["spoolman"]["configured"])
+        self.assertTrue(module["available"])
+
+    def test_spoolman_configured_is_exposed_as_optional_capability(self):
+        spoolman = FakeSpoolman()
+        component, server, _api = self.make_live_component(spoolman=spoolman)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        module = component.get_snapshot()["modules"]["ifs"]
+        self.assertTrue(module["capabilities"]["integrations"]["spoolman"])
+        self.assertTrue(module["capabilities"]["spoolman"]["optional"])
+        self.assertTrue(module["capabilities"]["spoolman"]["consumption_tracking"])
+        self.assertTrue(module["spoolman"]["configured"])
+        self.assertTrue(module["spoolman"]["connected"])
+
+    def test_active_ifs_slot_drives_native_moonraker_spoolman_tracking(self):
+        spoolman = FakeSpoolman()
+        component, server, _api = self.make_live_component(spoolman=spoolman)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        component._ifs_metadata = {
+            "active_slot": 1,
+            "slots": {
+                1: {
+                    "spool": {
+                        "source": "spoolman",
+                        "spoolman_spool_id": 42,
+                        "spoolman_filament_id": 77,
+                    }
+                }
+            },
+        }
+        component._set_ifs_module(component._compose_ifs_module())
+        asyncio.run(component._sync_spoolman_active_tracking(component._ifs_module))
+        self.assertEqual(spoolman.calls[-1], 42)
+        self.assertEqual(spoolman.spool_id, 42)
+        module = component.get_snapshot()["modules"]["ifs"]
+        self.assertEqual(module["spoolman"]["tracking_slot"], 1)
+        self.assertEqual(module["spoolman"]["tracking_spool_id"], 42)
+
+        component._ifs_metadata = {
+            "active_slot": 2,
+            "slots": {
+                2: {
+                    "spool": {
+                        "source": "spoolman",
+                        "spoolman_spool_id": 99,
+                    }
+                }
+            },
+        }
+        component._set_ifs_module(component._compose_ifs_module())
+        asyncio.run(component._sync_spoolman_active_tracking(component._ifs_module))
+        self.assertEqual(spoolman.calls[-1], 99)
+        self.assertEqual(spoolman.spool_id, 99)
+
+    def test_tracking_clears_when_toolhead_filament_is_not_confirmed(self):
+        spoolman = FakeSpoolman(spool_id=42)
+        component, server, _api = self.make_live_component(head=False, spoolman=spoolman)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        self.assertIsNone(spoolman.spool_id)
+        self.assertIn(None, spoolman.calls)
+
+    def test_tracking_does_not_repeat_same_native_active_spool_write(self):
+        spoolman = FakeSpoolman(spool_id=42)
+        component, server, _api = self.make_live_component(spoolman=spoolman)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        spoolman.calls.clear()
+        component._ifs_metadata = {
+            "active_slot": 1,
+            "slots": {1: {"spool": {"spoolman_spool_id": 42}}},
+        }
+        component._set_ifs_module(component._compose_ifs_module())
+        asyncio.run(component._sync_spoolman_active_tracking(component._ifs_module))
+        self.assertEqual(spoolman.calls, [42])
+        spoolman.calls.clear()
+        asyncio.run(component._sync_spoolman_active_tracking(component._ifs_module))
+        self.assertEqual(spoolman.calls, [])
 
     def test_missing_bridge_is_safe_and_explicit(self):
         component, server, _api = self.make_component(objects=[])
@@ -361,11 +467,94 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
                 self.assertEqual(module["slots"][2]["color"], "#F330F9")
                 self.assertEqual(module["slots"][2]["appearance"]["colors"], ["#F330F9"])
                 self.assertFalse(module["slots"][3]["present"])
-                self.assertEqual(module["slots"][3]["material"], "TPU")
+                self.assertNotIn("material", module["slots"][3])
+                self.assertIsNone(module["slots"][3]["spool"]["spoolman_spool_id"])
+                self.assertEqual(module["slots"][3]["spool"]["material"], "")
                 self.assertEqual(module["slots"][3]["metadata_status"], "stale")
+                self.assertEqual(module["slots"][3]["current_identity_status"], "empty")
+                self.assertTrue(module["slots"][3]["stale_metadata_available"])
         finally:
             component_module.FFCONFIG_PATH = old_ffconfig
             component_module.FILE_MAPPING_PATH = old_mapping
+
+    def test_startup_empty_slot_clears_stale_persisted_binding(self):
+        component, server, api = self.make_live_component()
+        store = {
+            "schema_version": "1.0",
+            "slots": {"4": {
+                "spool": {"source": "spoolman", "name": "Gone", "spoolman_spool_id": 88},
+                "appearance": {"colors": ["#112233"], "finish": "standard"},
+            }},
+            "identity_invalidated_slots": [],
+        }
+        def read_store():
+            return json.loads(json.dumps(store)), {"status": "ok", "error": ""}
+        def write_store(value):
+            store.clear(); store.update(json.loads(json.dumps(value)))
+        component._read_manual_metadata_store_sync = read_store
+        component._write_manual_metadata_store_sync = write_store
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        self.assertNotIn("4", store["slots"])
+        self.assertIn(4, store["identity_invalidated_slots"])
+        slot4 = component.get_snapshot()["modules"]["ifs"]["slots"][3]
+        self.assertEqual(slot4["current_identity_status"], "empty")
+        self.assertIsNone(slot4["spool"]["spoolman_spool_id"])
+        inserted = [dict(item) for item in READY["slots"]]
+        inserted[3]["present"] = True
+        asyncio.run(api.callback({"ad5x_ifs": {"slots": inserted}}, 3.0))
+        slot4 = component.get_snapshot()["modules"]["ifs"]["slots"][3]
+        self.assertEqual(slot4["current_identity_status"], "unassigned")
+        self.assertIsNone(slot4["spool"]["spoolman_spool_id"])
+
+    def test_physical_spool_removal_invalidates_binding_and_does_not_resurrect(self):
+        component, server, api = self.make_live_component()
+        store = {
+            "schema_version": "1.0",
+            "slots": {
+                "2": {
+                    "spool": {
+                        "source": "spoolman",
+                        "name": "Old spool",
+                        "material": "PLA",
+                        "spoolman_spool_id": 42,
+                        "spoolman_filament_id": 77,
+                    },
+                    "appearance": {"colors": ["#AA0000"], "finish": "standard"},
+                }
+            },
+            "identity_invalidated_slots": [],
+        }
+
+        def read_store():
+            return json.loads(json.dumps(store)), {"status": "ok", "error": ""}
+
+        def write_store(value):
+            store.clear()
+            store.update(json.loads(json.dumps(value)))
+
+        component._read_manual_metadata_store_sync = read_store
+        component._write_manual_metadata_store_sync = write_store
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        slot2 = component.get_snapshot()["modules"]["ifs"]["slots"][1]
+        self.assertEqual(slot2["spool"]["spoolman_spool_id"], 42)
+
+        removed_slots = [dict(item) for item in READY["slots"]]
+        removed_slots[1]["present"] = False
+        asyncio.run(api.callback({"ad5x_ifs": {"slots": removed_slots}}, 1.0))
+        self.assertNotIn("2", store["slots"])
+        self.assertIn(2, store["identity_invalidated_slots"])
+        slot2 = component.get_snapshot()["modules"]["ifs"]["slots"][1]
+        self.assertFalse(slot2["present"])
+        self.assertIsNone(slot2["spool"]["spoolman_spool_id"])
+        self.assertEqual(slot2["current_identity_status"], "empty")
+
+        inserted_slots = [dict(item) for item in removed_slots]
+        inserted_slots[1]["present"] = True
+        asyncio.run(api.callback({"ad5x_ifs": {"slots": inserted_slots}}, 2.0))
+        slot2 = component.get_snapshot()["modules"]["ifs"]["slots"][1]
+        self.assertTrue(slot2["present"])
+        self.assertIsNone(slot2["spool"]["spoolman_spool_id"])
+        self.assertEqual(slot2["current_identity_status"], "unassigned")
 
     def test_snapshot_request_refreshes_metadata_without_polling(self):
         old_ffconfig = component_module.FFCONFIG_PATH

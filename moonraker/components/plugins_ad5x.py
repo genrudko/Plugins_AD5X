@@ -7,7 +7,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlencode
 
 from ..common import RequestType, TransportType
 
@@ -35,13 +36,65 @@ except ImportError:
     normalize_module = _model_module.normalize_module
     normalize_spool_metadata = _model_module.normalize_spool_metadata
 
+try:
+    from .plugins_ad5x_ifs_interop import (
+        ORCA_LANE_NAMESPACE,
+        build_orca_lane_data_projection,
+        get_architecture_profile,
+        summarize_orca_projection,
+    )
+except ImportError:
+    _interop_path = Path(__file__).with_name("plugins_ad5x_ifs_interop.py")
+    _interop_spec = importlib.util.spec_from_file_location(
+        "moonraker.components.plugins_ad5x_ifs_interop",
+        _interop_path,
+    )
+    if _interop_spec is None or _interop_spec.loader is None:
+        raise
+    _interop_module = importlib.util.module_from_spec(_interop_spec)
+    _interop_spec.loader.exec_module(_interop_module)
+    ORCA_LANE_NAMESPACE = _interop_module.ORCA_LANE_NAMESPACE
+    build_orca_lane_data_projection = _interop_module.build_orca_lane_data_projection
+    get_architecture_profile = _interop_module.get_architecture_profile
+    summarize_orca_projection = _interop_module.summarize_orca_projection
+
+try:
+    from .plugins_ad5x_ifs_spoolman import (
+        fallback_filter_library,
+        merge_spoolman_binding,
+        normalize_spoolman_spool,
+        spoolman_binding_id,
+        summarize_bindings,
+        unbind_spoolman_record,
+    )
+except ImportError:
+    _spoolman_path = Path(__file__).with_name("plugins_ad5x_ifs_spoolman.py")
+    _spoolman_spec = importlib.util.spec_from_file_location(
+        "moonraker.components.plugins_ad5x_ifs_spoolman", _spoolman_path
+    )
+    if _spoolman_spec is None or _spoolman_spec.loader is None:
+        raise
+    _spoolman_module = importlib.util.module_from_spec(_spoolman_spec)
+    _spoolman_spec.loader.exec_module(_spoolman_module)
+    fallback_filter_library = _spoolman_module.fallback_filter_library
+    merge_spoolman_binding = _spoolman_module.merge_spoolman_binding
+    normalize_spoolman_spool = _spoolman_module.normalize_spoolman_spool
+    spoolman_binding_id = _spoolman_module.spoolman_binding_id
+    summarize_bindings = _spoolman_module.summarize_bindings
+    unbind_spoolman_record = _spoolman_module.unbind_spoolman_record
+
 API_VERSION = "1.0"
-BACKEND_VERSION = "0.1.6"
+BACKEND_VERSION = "0.2.0"
 
 SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/snapshot"
 IFS_ACTION_ENDPOINT = "/server/plugins_ad5x/ifs/action"
 IFS_METADATA_ENDPOINT = "/server/plugins_ad5x/ifs/metadata"
 IFS_JOB_PREVIEW_ENDPOINT = "/server/plugins_ad5x/ifs/job/preview"
+IFS_SPOOLMAN_STATUS_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/status"
+IFS_SPOOLMAN_LIBRARY_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/library"
+IFS_SPOOLMAN_BIND_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/bind"
+IFS_SPOOLMAN_UNBIND_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/unbind"
+IFS_SPOOLMAN_REFRESH_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/refresh"
 SNAPSHOT_CHANGED_EVENT = "plugins_ad5x:snapshot_changed"
 SNAPSHOT_CHANGED_NOTIFY_NAME = "plugins_ad5x_snapshot_changed"
 IFS_OBJECT = "ad5x_ifs"
@@ -79,6 +132,14 @@ class PluginsAD5X:
         self._operation_error = ""
         self._metadata_store_status = self._store_status("missing")
         self._metadata_write_lock = asyncio.Lock()
+        self._database = None
+        self._spoolman = None
+        self._spoolman_error = ""
+        self._spoolman_tracking_slot = 0
+        self._spoolman_tracking_spool_id = None
+        self._last_orca_lane_fingerprint = ""
+        self._orca_lane_status = self._new_orca_lane_status(False, "unavailable")
+        self._lookup_database_component()
 
         self.server.register_endpoint(
             SNAPSHOT_ENDPOINT,
@@ -108,6 +169,21 @@ class PluginsAD5X:
             transports=TransportType.HTTP | TransportType.WEBSOCKET,
             auth_required=True,
         )
+        for endpoint, request_type, handler in (
+            (IFS_SPOOLMAN_STATUS_ENDPOINT, RequestType.GET, self._handle_spoolman_status),
+            (IFS_SPOOLMAN_LIBRARY_ENDPOINT, RequestType.GET, self._handle_spoolman_library),
+            (IFS_SPOOLMAN_BIND_ENDPOINT, RequestType.POST, self._handle_spoolman_bind),
+            (IFS_SPOOLMAN_UNBIND_ENDPOINT, RequestType.POST, self._handle_spoolman_unbind),
+            (IFS_SPOOLMAN_REFRESH_ENDPOINT, RequestType.POST, self._handle_spoolman_refresh),
+        ):
+            self.server.register_endpoint(
+                endpoint,
+                request_type,
+                handler,
+                transports=TransportType.HTTP | TransportType.WEBSOCKET,
+                auth_required=True,
+            )
+
         self.server.register_notification(
             SNAPSHOT_CHANGED_EVENT,
             SNAPSHOT_CHANGED_NOTIFY_NAME,
@@ -121,6 +197,12 @@ class PluginsAD5X:
             self.server.register_event_handler(
                 "server:klippy_disconnect", self._on_klippy_disconnect
             )
+            self.server.register_event_handler(
+                "spoolman:spoolman_status_changed", self._on_spoolman_event
+            )
+            self.server.register_event_handler(
+                "spoolman:active_spool_set", self._on_spoolman_event
+            )
 
     @staticmethod
     def _store_status(status: str, error: str = "") -> Dict[str, Any]:
@@ -131,11 +213,199 @@ class PluginsAD5X:
         }
 
     @staticmethod
+    def _new_orca_lane_status(enabled: bool, state: str, error: str = "") -> Dict[str, Any]:
+        return {
+            "namespace": ORCA_LANE_NAMESPACE,
+            "enabled": enabled,
+            "direction": "printer_to_orca",
+            "publishable": False,
+            "record_count": 0,
+            "conflicts": [],
+            "fingerprint": "",
+            "requires_moonraker_agent": True,
+            "target_version": "2.4.2",
+            "state": state,
+            "error": error,
+        }
+
+    def _lookup_database_component(self) -> Any:
+        if self._database is not None:
+            return self._database
+        try:
+            self._database = self.server.lookup_component("database")
+        except Exception:
+            self._database = None
+        if self._database is not None and not self._orca_lane_status.get("enabled", False):
+            self._orca_lane_status = self._new_orca_lane_status(True, "idle")
+        return self._database
+
+    def _lookup_spoolman_component(self) -> Any:
+        if self._spoolman is not None:
+            return self._spoolman
+        try:
+            self._spoolman = self.server.lookup_component("spoolman")
+        except Exception:
+            self._spoolman = None
+        return self._spoolman
+
+    def _spoolman_connected(self) -> bool:
+        component = self._lookup_spoolman_component()
+        if component is None:
+            return False
+        try:
+            return bool(component.connected())
+        except Exception:
+            return bool(getattr(component, "ws_connected", False))
+
+    def _spoolman_status(self, module: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        component = self._lookup_spoolman_component()
+        module = module if isinstance(module, dict) else {}
+        slots = module.get("slots") if isinstance(module.get("slots"), list) else []
+        bindings = summarize_bindings(slots)
+        active_spool_id = getattr(component, "spool_id", None) if component is not None else None
+        expected_slot = 0
+        expected_spool_id = None
+        if self._head_filament is True:
+            active_slot = module.get("active_slot")
+            if isinstance(active_slot, int) and not isinstance(active_slot, bool):
+                for slot in slots:
+                    if isinstance(slot, dict) and slot.get("slot") == active_slot:
+                        expected_slot = active_slot
+                        expected_spool_id = spoolman_binding_id(slot)
+                        break
+        return {
+            "configured": component is not None,
+            "connected": self._spoolman_connected(),
+            "library_available": component is not None and self._spoolman_connected(),
+            "binding_supported": component is not None,
+            "consumption_tracking_supported": bool(
+                component is not None and hasattr(component, "set_active_spool")
+            ),
+            "active_spool_id": active_spool_id,
+            "expected_active_spool_id": expected_spool_id,
+            "expected_active_slot": expected_slot,
+            "tracking_slot": self._spoolman_tracking_slot,
+            "tracking_spool_id": self._spoolman_tracking_spool_id,
+            "bindings": bindings,
+            "error": self._spoolman_error,
+        }
+
+    async def _spoolman_request(self, path: str) -> Any:
+        component = self._lookup_spoolman_component()
+        if component is None:
+            raise RuntimeError("Spoolman is not configured in Moonraker")
+        if not self._spoolman_connected():
+            raise RuntimeError("Spoolman is not connected")
+        if not path.startswith("/v1/"):
+            raise RuntimeError("Invalid Spoolman API path")
+        http_client = getattr(component, "http_client", None)
+        base_url = getattr(component, "spoolman_url", "")
+        if http_client is None or not isinstance(base_url, str) or not base_url:
+            raise RuntimeError("Moonraker Spoolman transport is unavailable")
+        response = await http_client.request(method="GET", url=f"{base_url}{path}")
+        if response.has_error():
+            status = getattr(response, "status_code", 500)
+            error = str(getattr(response, "error", "") or "Spoolman request failed")
+            raise RuntimeError(f"Spoolman HTTP {status}: {error}")
+        return response.json()
+
+    async def component_init(self) -> None:
+        # Components may load after __init__; resolve optional Spoolman only when
+        # Moonraker has completed component construction.
+        self._lookup_spoolman_component()
+
+    async def _on_spoolman_event(self, *args: Any) -> None:
+        if self._ifs_raw:
+            await self._sync_spoolman_active_tracking(self._ifs_module)
+            self._set_ifs_module(self._compose_ifs_module())
+
+    async def _sync_spoolman_active_tracking(
+        self, module: Optional[Dict[str, Any]] = None
+    ) -> None:
+        component = self._lookup_spoolman_component()
+        if component is None or not hasattr(component, "set_active_spool"):
+            return
+        module = module if isinstance(module, dict) else self._ifs_module
+        module = module if isinstance(module, dict) else {}
+        desired_spool_id = None
+        desired_slot = 0
+        if module.get("available", False) and self._head_filament is True:
+            active_slot = module.get("active_slot")
+            slots = module.get("slots") if isinstance(module.get("slots"), list) else []
+            if isinstance(active_slot, int) and not isinstance(active_slot, bool):
+                for slot in slots:
+                    if isinstance(slot, dict) and slot.get("slot") == active_slot:
+                        desired_spool_id = spoolman_binding_id(slot)
+                        desired_slot = active_slot if desired_spool_id is not None else 0
+                        break
+        try:
+            if getattr(component, "spool_id", None) != desired_spool_id:
+                # Z-Mod Moonraker already owns extrusion accounting. We only
+                # select which bound physical IFS spool receives that accounting.
+                component.set_active_spool(desired_spool_id)
+            self._spoolman_tracking_spool_id = desired_spool_id
+            self._spoolman_tracking_slot = desired_slot
+            self._spoolman_error = ""
+        except Exception as exc:
+            self._spoolman_error = (str(exc) or exc.__class__.__name__)[:240]
+        if self._ifs_raw:
+            self._set_ifs_module(self._compose_ifs_module())
+
+    @staticmethod
     def _empty_manual_store() -> Dict[str, Any]:
         return {
             "schema_version": IFS_SCHEMA_VERSION,
             "slots": {},
+            "identity_invalidated_slots": [],
         }
+
+    def _decorate_ifs_module(self, module: Dict[str, Any]) -> Dict[str, Any]:
+        profile = get_architecture_profile()
+        module["architecture_version"] = profile["architecture_version"]
+        module["ui"] = dict(profile["ui"])
+        module["topology"] = dict(profile["topology"])
+        interoperability = dict(profile["interoperability"])
+        interoperability["orca_lane_data"] = dict(self._orca_lane_status)
+        module["interoperability"] = interoperability
+        spoolman_status = self._spoolman_status(module)
+        module["spoolman"] = spoolman_status
+
+        capabilities = module.get("capabilities")
+        if isinstance(capabilities, dict):
+            capabilities = dict(capabilities)
+            integrations = capabilities.get("integrations")
+            if isinstance(integrations, dict):
+                integrations = dict(integrations)
+                integrations["orca_slicer"] = True
+                integrations["spoolman"] = bool(spoolman_status["configured"])
+                capabilities["integrations"] = integrations
+            metadata_caps = capabilities.get("metadata")
+            if isinstance(metadata_caps, dict):
+                metadata_caps = dict(metadata_caps)
+                metadata_caps["spoolman"] = bool(spoolman_status["configured"])
+                capabilities["metadata"] = metadata_caps
+            capabilities["spoolman"] = {
+                "optional": True,
+                "configured": bool(spoolman_status["configured"]),
+                "connected": bool(spoolman_status["connected"]),
+                "browse_library": True,
+                "bind_slot": True,
+                "refresh_binding": True,
+                "consumption_tracking": bool(
+                    spoolman_status["consumption_tracking_supported"]
+                ),
+            }
+            capabilities["ui_expertise"] = {
+                "auto": True,
+                "hybrid": True,
+                "expert": True,
+                "canonical": "expert",
+            }
+            capabilities["interoperability"] = {
+                "orca_lane_data": True,
+            }
+            module["capabilities"] = capabilities
+        return module
 
     def _unavailable_ifs(self, reason: str) -> Dict[str, Any]:
         raw = {
@@ -165,7 +435,7 @@ class PluginsAD5X:
             },
         )
         module["metadata_store"] = dict(self._metadata_store_status)
-        return module
+        return self._decorate_ifs_module(module)
 
     def get_snapshot(self) -> Dict[str, Any]:
         return {
@@ -202,6 +472,74 @@ class PluginsAD5X:
         self.invalidate_snapshot()
         return True
 
+    def _set_orca_lane_status(self, status: Dict[str, Any]) -> bool:
+        normalized = dict(status)
+        if normalized == self._orca_lane_status:
+            return False
+        self._orca_lane_status = normalized
+        if self._ifs_raw:
+            self._set_ifs_module(self._compose_ifs_module())
+        elif self._ifs_module is not None:
+            module = dict(self._ifs_module)
+            interoperability = module.get("interoperability")
+            interoperability = dict(interoperability) if isinstance(interoperability, dict) else {}
+            interoperability["orca_lane_data"] = dict(self._orca_lane_status)
+            module["interoperability"] = interoperability
+            self._set_ifs_module(module)
+        return True
+
+    async def _publish_orca_lane_data(self, module: Dict[str, Any]) -> None:
+        if not isinstance(module, dict) or not module.get("available", False):
+            return
+        database = self._lookup_database_component()
+        if database is None:
+            self._set_orca_lane_status(
+                self._new_orca_lane_status(False, "unavailable", "moonraker_database_unavailable")
+            )
+            return
+
+        slots = module.get("slots")
+        slots = slots if isinstance(slots, list) else []
+        try:
+            existing = await database.get_item(ORCA_LANE_NAMESPACE, default={})
+            existing = existing if isinstance(existing, dict) else {}
+            projection = build_orca_lane_data_projection(slots, existing)
+            summary = summarize_orca_projection(projection)
+            summary["state"] = "ready"
+            summary["error"] = ""
+
+            if not projection.get("publishable", False):
+                summary["state"] = "conflict"
+                summary["error"] = "duplicate_lane_record"
+                self._set_orca_lane_status(summary)
+                return
+
+            fingerprint = summary.get("fingerprint", "")
+            if fingerprint and fingerprint == self._last_orca_lane_fingerprint:
+                summary["state"] = "in_sync"
+                self._set_orca_lane_status(summary)
+                return
+
+            records = projection.get("records")
+            records = records if isinstance(records, dict) else {}
+            await database.insert_batch(ORCA_LANE_NAMESPACE, records)
+            self._last_orca_lane_fingerprint = fingerprint
+            summary["state"] = "published"
+            self._set_orca_lane_status(summary)
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+            if len(error) > 240:
+                error = error[:240]
+            status = dict(self._orca_lane_status)
+            status.update(
+                {
+                    "enabled": True,
+                    "state": "error",
+                    "error": error,
+                }
+            )
+            self._set_orca_lane_status(status)
+
     def _compose_ifs_module(self) -> Dict[str, Any]:
         module = normalize_module(
             self._ifs_raw,
@@ -216,7 +554,7 @@ class PluginsAD5X:
             },
         )
         module["metadata_store"] = dict(self._metadata_store_status)
-        return module
+        return self._decorate_ifs_module(module)
 
     def _apply_ifs_status(self, payload: Dict[str, Any]) -> bool:
         # Klipper subscriptions may deliver partial object updates. Merge into
@@ -304,6 +642,16 @@ class PluginsAD5X:
         raw_slots = payload.get("slots", {})
         if not isinstance(raw_slots, dict):
             return self._empty_manual_store(), self._store_status("invalid", "invalid_slots")
+        raw_invalidated = payload.get("identity_invalidated_slots", [])
+        if not isinstance(raw_invalidated, list):
+            return self._empty_manual_store(), self._store_status("invalid", "invalid_identity_invalidated_slots")
+        invalidated_slots: List[int] = []
+        for value in raw_invalidated:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 4:
+                return self._empty_manual_store(), self._store_status("invalid", "invalid_identity_invalidated_slot")
+            if value not in invalidated_slots:
+                invalidated_slots.append(value)
+        invalidated_slots.sort()
 
         slots: Dict[str, Dict[str, Any]] = {}
         for raw_slot, raw_record in raw_slots.items():
@@ -328,6 +676,7 @@ class PluginsAD5X:
         return {
             "schema_version": IFS_SCHEMA_VERSION,
             "slots": slots,
+            "identity_invalidated_slots": invalidated_slots,
         }, self._store_status("ok")
 
     def _write_manual_metadata_store_sync(self, store: Dict[str, Any]) -> None:
@@ -460,6 +809,9 @@ class PluginsAD5X:
         manual_store, store_status = self._read_manual_metadata_store_sync()
         if store_status.get("status") != "invalid":
             self._overlay_manual_metadata(metadata, manual_store)
+            invalidated = manual_store.get("identity_invalidated_slots", [])
+            if isinstance(invalidated, list) and invalidated:
+                metadata["identity_invalidated_slots"] = list(invalidated)
         return metadata, store_status
 
     async def _run_io(self, callback: Any, *args: Any) -> Any:
@@ -471,6 +823,56 @@ class PluginsAD5X:
             return await event_loop.run_in_thread(callback, *args)
         return callback(*args)
 
+    @staticmethod
+    def _slot_presence_map(raw_module: Dict[str, Any]) -> Dict[int, bool]:
+        result: Dict[int, bool] = {}
+        slots = raw_module.get("slots") if isinstance(raw_module, dict) else None
+        for item in slots if isinstance(slots, list) else []:
+            if not isinstance(item, dict):
+                continue
+            slot = item.get("slot")
+            if isinstance(slot, int) and not isinstance(slot, bool) and 1 <= slot <= 4:
+                result[slot] = bool(item.get("present", False))
+        return result
+
+    @staticmethod
+    def _set_slot_identity_invalidated(store: Dict[str, Any], slot: int, value: bool) -> bool:
+        raw = store.get("identity_invalidated_slots", [])
+        current = {
+            item for item in raw
+            if isinstance(item, int) and not isinstance(item, bool) and 1 <= item <= 4
+        } if isinstance(raw, list) else set()
+        before = set(current)
+        if value:
+            current.add(slot)
+        else:
+            current.discard(slot)
+        store["identity_invalidated_slots"] = sorted(current)
+        return current != before
+
+    async def _invalidate_removed_slot_identities(self, slots_to_clear: List[int]) -> bool:
+        slots_to_clear = sorted({slot for slot in slots_to_clear if 1 <= slot <= 4})
+        if not slots_to_clear:
+            return False
+        changed = False
+        async with self._metadata_write_lock:
+            store, status = await self._run_io(self._read_manual_metadata_store_sync)
+            if status.get("status") == "invalid":
+                self._metadata_store_status = status
+                return False
+            records = store.setdefault("slots", {})
+            for slot in slots_to_clear:
+                removed = records.pop(str(slot), None) is not None
+                if removed:
+                    changed = True
+                    if self._set_slot_identity_invalidated(store, slot, True):
+                        changed = True
+            if changed:
+                await self._run_io(self._write_manual_metadata_store_sync, store)
+        if changed:
+            await self._refresh_ifs_metadata()
+        return changed
+
     async def _refresh_ifs_metadata(self) -> bool:
         metadata, store_status = await self._run_io(self._read_ifs_metadata_sync)
         metadata_changed = metadata != self._ifs_metadata
@@ -480,7 +882,10 @@ class PluginsAD5X:
         self._ifs_metadata = metadata
         self._metadata_store_status = store_status
         if self._ifs_raw:
-            return self._set_ifs_module(self._compose_ifs_module())
+            changed = self._set_ifs_module(self._compose_ifs_module())
+            await self._publish_orca_lane_data(self._ifs_module or {})
+            await self._sync_spoolman_active_tracking(self._ifs_module)
+            return changed
         return False
 
     def _operation_begin(self, action: str, slot: int) -> None:
@@ -595,7 +1000,9 @@ class PluginsAD5X:
             slots = store.setdefault("slots", {})
             slot_key = str(slot)
             if clear:
-                if slot_key not in slots:
+                removed = slots.pop(slot_key, None) is not None
+                invalidated = self._set_slot_identity_invalidated(store, slot, True)
+                if not removed and not invalidated:
                     await self._refresh_ifs_metadata()
                     return {
                         "ok": True,
@@ -603,10 +1010,10 @@ class PluginsAD5X:
                         "result": "already_clear",
                         "snapshot": self.get_snapshot(),
                     }
-                slots.pop(slot_key, None)
                 result = "cleared"
             else:
                 slots[slot_key] = record
+                self._set_slot_identity_invalidated(store, slot, False)
                 result = "updated"
             try:
                 await self._run_io(self._write_manual_metadata_store_sync, store)
@@ -622,6 +1029,223 @@ class PluginsAD5X:
             "result": result,
             "snapshot": self.get_snapshot(),
         }
+
+    async def _handle_spoolman_status(self, _web_request: Any) -> Dict[str, Any]:
+        await self._refresh_ifs_metadata()
+        module = self._ifs_module if isinstance(self._ifs_module, dict) else {}
+        return {"ok": True, "spoolman": self._spoolman_status(module)}
+
+    async def _spoolman_library_items(
+        self, query: str, limit: int, allow_archived: bool
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 100))
+        if query:
+            try:
+                params = urlencode({
+                    "q": query,
+                    "limit": limit,
+                    "allow_archived": str(bool(allow_archived)).lower(),
+                    "spools_per_filament": min(limit, 10),
+                })
+                payload = await self._spoolman_request(f"/v1/search?{params}")
+                ids: List[int] = []
+                for match in payload.get("spools", []) if isinstance(payload, dict) else []:
+                    raw = match.get("spool") if isinstance(match, dict) else None
+                    if isinstance(raw, dict) and isinstance(raw.get("id"), int):
+                        ids.append(raw["id"])
+                for match in payload.get("filaments", []) if isinstance(payload, dict) else []:
+                    for ref in match.get("spools", []) if isinstance(match, dict) else []:
+                        if isinstance(ref, dict) and isinstance(ref.get("id"), int):
+                            ids.append(ref["id"])
+                result = []
+                for spool_id in list(dict.fromkeys(ids))[:limit]:
+                    raw = await self._spoolman_request(f"/v1/spool/{spool_id}")
+                    if isinstance(raw, dict):
+                        result.append(normalize_spoolman_spool(raw))
+                if result:
+                    return result
+            except Exception:
+                # Older Spoolman versions do not have /v1/search. Fall back to
+                # the stable spool list and local bounded matching.
+                pass
+        params = urlencode({"allow_archived": str(bool(allow_archived)).lower()})
+        payload = await self._spoolman_request(f"/v1/spool?{params}")
+        return fallback_filter_library(payload, query, limit)
+
+    async def _handle_spoolman_library(self, web_request: Any) -> Dict[str, Any]:
+        try:
+            query = web_request.get_str("q", "").strip()
+            limit = web_request.get_int("limit", 20)
+            allow_archived = web_request.get_boolean("allow_archived", False)
+            items = await self._spoolman_library_items(query, limit, allow_archived)
+            self._spoolman_error = ""
+            return {"ok": True, "query": query, "items": items, "count": len(items)}
+        except Exception as exc:
+            self._spoolman_error = (str(exc) or exc.__class__.__name__)[:240]
+            return {"ok": False, "error": self._spoolman_error, "items": []}
+
+    async def _persist_spoolman_binding(
+        self, slot: int, normalized: Dict[str, Any]
+    ) -> None:
+        async with self._metadata_write_lock:
+            store, status = await self._run_io(self._read_manual_metadata_store_sync)
+            if status.get("status") == "invalid":
+                raise RuntimeError(
+                    f"metadata store is invalid: {status.get('error', 'unknown')}"
+                )
+            slots = store.setdefault("slots", {})
+            key = str(slot)
+            existing = slots.get(key) if isinstance(slots.get(key), dict) else {}
+            slots[key] = merge_spoolman_binding(existing, normalized)
+            self._set_slot_identity_invalidated(store, slot, False)
+            await self._run_io(self._write_manual_metadata_store_sync, store)
+        await self._refresh_ifs_metadata()
+        await self._sync_spoolman_active_tracking(self._ifs_module)
+
+    async def _handle_spoolman_bind(self, web_request: Any) -> Dict[str, Any]:
+        try:
+            slot = web_request.get_int("slot")
+            spool_id = web_request.get_int("spool_id")
+            allow_archived = web_request.get_boolean("allow_archived", False)
+            if slot < 1 or slot > 4 or spool_id <= 0:
+                raise ValueError("invalid slot or spool_id")
+            raw = await self._spoolman_request(f"/v1/spool/{spool_id}")
+            normalized = normalize_spoolman_spool(raw)
+            if normalized.get("spoolman_spool_id") != spool_id:
+                raise RuntimeError("Spoolman returned an unexpected spool id")
+            inventory = normalized.get("inventory")
+            if (
+                isinstance(inventory, dict)
+                and inventory.get("archived", False)
+                and not allow_archived
+            ):
+                raise RuntimeError("Archived Spoolman spool requires allow_archived=true")
+            await self._persist_spoolman_binding(slot, normalized)
+            self._spoolman_error = ""
+            return {
+                "ok": True,
+                "slot": slot,
+                "spool_id": spool_id,
+                "binding": normalized,
+                "snapshot": self.get_snapshot(),
+            }
+        except Exception as exc:
+            error = (str(exc) or exc.__class__.__name__)[:240]
+            self._spoolman_error = error
+            return {
+                "ok": False,
+                "error": error,
+                "snapshot": self.get_snapshot(),
+            }
+
+    async def _handle_spoolman_unbind(self, web_request: Any) -> Dict[str, Any]:
+        try:
+            slot = web_request.get_int("slot")
+            keep_metadata = web_request.get_boolean("keep_metadata", True)
+            if slot < 1 or slot > 4:
+                raise ValueError("invalid slot")
+            async with self._metadata_write_lock:
+                store, status = await self._run_io(self._read_manual_metadata_store_sync)
+                if status.get("status") == "invalid":
+                    raise RuntimeError(
+                        f"metadata store is invalid: {status.get('error', 'unknown')}"
+                    )
+                slots = store.setdefault("slots", {})
+                key = str(slot)
+                existing = slots.get(key) if isinstance(slots.get(key), dict) else None
+                if existing is None:
+                    result = "already_unbound"
+                else:
+                    spool = existing.get("spool") if isinstance(existing, dict) else {}
+                    bound = isinstance(spool, dict) and bool(
+                        spool.get("spoolman_spool_id") or spool.get("spoolman_id")
+                    )
+                    if not bound:
+                        result = "already_unbound"
+                    else:
+                        replacement = unbind_spoolman_record(existing, keep_metadata)
+                        if replacement is None:
+                            slots.pop(key, None)
+                        else:
+                            slots[key] = replacement
+                        self._set_slot_identity_invalidated(store, slot, True)
+                        await self._run_io(self._write_manual_metadata_store_sync, store)
+                        result = "unbound"
+            await self._refresh_ifs_metadata()
+            await self._sync_spoolman_active_tracking(self._ifs_module)
+            self._spoolman_error = ""
+            return {
+                "ok": True,
+                "slot": slot,
+                "result": result,
+                "snapshot": self.get_snapshot(),
+            }
+        except Exception as exc:
+            error = (str(exc) or exc.__class__.__name__)[:240]
+            self._spoolman_error = error
+            return {"ok": False, "error": error, "snapshot": self.get_snapshot()}
+
+    async def _refresh_spoolman_bindings(self, slot_filter: int = 0) -> Dict[str, Any]:
+        updated = 0
+        errors: List[Dict[str, Any]] = []
+        async with self._metadata_write_lock:
+            store, status = await self._run_io(self._read_manual_metadata_store_sync)
+            if status.get("status") == "invalid":
+                raise RuntimeError(
+                    f"metadata store is invalid: {status.get('error', 'unknown')}"
+                )
+            slots = store.setdefault("slots", {})
+            changed = False
+            for raw_slot, record in list(slots.items()):
+                try:
+                    slot = int(raw_slot)
+                except (TypeError, ValueError):
+                    continue
+                if slot_filter and slot != slot_filter:
+                    continue
+                spool = record.get("spool") if isinstance(record, dict) else {}
+                if not isinstance(spool, dict):
+                    continue
+                spool_id = spool.get("spoolman_spool_id") or spool.get("spoolman_id")
+                if isinstance(spool_id, bool) or not isinstance(spool_id, int) or spool_id <= 0:
+                    continue
+                try:
+                    raw = await self._spoolman_request(f"/v1/spool/{spool_id}")
+                    normalized = normalize_spoolman_spool(raw)
+                    merged = merge_spoolman_binding(record, normalized)
+                    if merged != record:
+                        slots[raw_slot] = merged
+                        changed = True
+                        updated += 1
+                except Exception as exc:
+                    errors.append({
+                        "slot": slot,
+                        "spool_id": spool_id,
+                        "error": (str(exc) or exc.__class__.__name__)[:240],
+                    })
+            if changed:
+                await self._run_io(self._write_manual_metadata_store_sync, store)
+        await self._refresh_ifs_metadata()
+        await self._sync_spoolman_active_tracking(self._ifs_module)
+        return {"updated": updated, "errors": errors}
+
+    async def _handle_spoolman_refresh(self, web_request: Any) -> Dict[str, Any]:
+        try:
+            slot = web_request.get_int("slot", 0)
+            if slot < 0 or slot > 4:
+                raise ValueError("invalid slot")
+            result = await self._refresh_spoolman_bindings(slot)
+            self._spoolman_error = result["errors"][0]["error"] if result["errors"] else ""
+            return {
+                "ok": not bool(result["errors"]),
+                "slot": slot,
+                **result,
+                "snapshot": self.get_snapshot(),
+            }
+        except Exception as exc:
+            error = (str(exc) or exc.__class__.__name__)[:240]
+            self._spoolman_error = error
+            return {"ok": False, "error": error, "snapshot": self.get_snapshot()}
 
     @staticmethod
     def _job_preview_rejection(filename: str, error: str) -> Dict[str, Any]:
@@ -722,6 +1346,8 @@ class PluginsAD5X:
         await self._refresh_ifs_metadata()
         if self._ifs_raw:
             self._set_ifs_module(self._compose_ifs_module())
+            await self._publish_orca_lane_data(self._ifs_module or {})
+            await self._sync_spoolman_active_tracking(self._ifs_module)
 
     async def _handle_ifs_action(self, web_request: Any) -> Dict[str, Any]:
         try:
@@ -804,23 +1430,54 @@ class PluginsAD5X:
         if isinstance(initial, dict):
             self._apply_aux_status(initial)
         await self._refresh_ifs_metadata()
+        empty_slots = [
+            slot for slot, present in self._slot_presence_map(self._ifs_raw).items()
+            if not present
+        ]
+        if empty_slots:
+            await self._invalidate_removed_slot_identities(empty_slots)
         if self._ifs_raw:
             self._apply_ifs_status({})
+            await self._publish_orca_lane_data(self._ifs_module or {})
+            if self._spoolman_connected():
+                await self._refresh_spoolman_bindings()
+            else:
+                await self._sync_spoolman_active_tracking(self._ifs_module)
         else:
             self._set_ifs_module(self._unavailable_ifs("bridge_empty"))
 
     async def _on_status_update(
         self, status: Dict[str, Dict[str, Any]], _eventtime: float
     ) -> None:
+        previous_print_state = self._print_state
+        previous_presence = self._slot_presence_map(self._ifs_raw)
         changed = False
         payload = status.get(IFS_OBJECT)
         if isinstance(payload, dict):
             self._ifs_raw.update(payload)
+            current_presence = self._slot_presence_map(self._ifs_raw)
+            removed_slots = [
+                slot for slot, was_present in previous_presence.items()
+                if was_present and current_presence.get(slot) is False
+            ]
+            if removed_slots:
+                await self._invalidate_removed_slot_identities(removed_slots)
             changed = True
         if self._apply_aux_status(status):
             changed = True
         if changed and self._ifs_raw:
             self._set_ifs_module(self._compose_ifs_module())
+            await self._publish_orca_lane_data(self._ifs_module or {})
+            await self._sync_spoolman_active_tracking(self._ifs_module)
+
+        if (
+            previous_print_state in {"printing", "paused"}
+            and self._print_state in {"standby", "complete", "cancelled", "error"}
+            and self._spoolman_connected()
+        ):
+            # Moonraker owns usage accounting. Refresh bound inventory once the
+            # job ends so all UI surfaces see the new remaining amounts.
+            await self._refresh_spoolman_bindings()
 
     async def _on_klippy_disconnect(self) -> None:
         self._ifs_raw.clear()
@@ -830,6 +1487,12 @@ class PluginsAD5X:
         self._operation_action = ""
         self._operation_slot = 0
         self._operation_error = ""
+        # Do not clear lane_data here: disconnect/offline is unknown state, not
+        # proof that the user physically removed all four spools.
+        status = dict(self._orca_lane_status)
+        status["state"] = "stale"
+        status["error"] = "klippy_disconnected"
+        self._orca_lane_status = status
         self._set_ifs_module(self._unavailable_ifs("klippy_disconnected"))
 
 

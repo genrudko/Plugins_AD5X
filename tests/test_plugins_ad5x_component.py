@@ -112,6 +112,11 @@ class PluginsAD5XComponentTests(unittest.TestCase):
                 component_module.IFS_ACTION_ENDPOINT,
                 component_module.IFS_METADATA_ENDPOINT,
                 component_module.IFS_JOB_PREVIEW_ENDPOINT,
+                component_module.IFS_SPOOLMAN_STATUS_ENDPOINT,
+                component_module.IFS_SPOOLMAN_LIBRARY_ENDPOINT,
+                component_module.IFS_SPOOLMAN_BIND_ENDPOINT,
+                component_module.IFS_SPOOLMAN_UNBIND_ENDPOINT,
+                component_module.IFS_SPOOLMAN_REFRESH_ENDPOINT,
             },
         )
 
@@ -124,7 +129,13 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         preview = endpoints[component_module.IFS_JOB_PREVIEW_ENDPOINT]
         self.assertEqual(preview["request_types"], RequestType.POST)
 
-        for endpoint in (snapshot, action, metadata, preview):
+        self.assertEqual(endpoints[component_module.IFS_SPOOLMAN_STATUS_ENDPOINT]["request_types"], RequestType.GET)
+        self.assertEqual(endpoints[component_module.IFS_SPOOLMAN_LIBRARY_ENDPOINT]["request_types"], RequestType.GET)
+        self.assertEqual(endpoints[component_module.IFS_SPOOLMAN_BIND_ENDPOINT]["request_types"], RequestType.POST)
+        self.assertEqual(endpoints[component_module.IFS_SPOOLMAN_UNBIND_ENDPOINT]["request_types"], RequestType.POST)
+        self.assertEqual(endpoints[component_module.IFS_SPOOLMAN_REFRESH_ENDPOINT]["request_types"], RequestType.POST)
+
+        for endpoint in endpoints.values():
             self.assertEqual(
                 endpoint["transports"],
                 TransportType.HTTP | TransportType.WEBSOCKET,
