@@ -22,9 +22,9 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertIn(f'variable_policy_id: "{policy_id}"', self.asset)
         self.assertIn(f"**Policy ID:** `{policy_id}`", self.policy)
         self.assertIn('variable_saved_profile: "auto"', self.asset)
-        self.assertIn("variable_saved_reference: -1.925833", self.asset)
-        self.assertIn("variable_reference_tolerance: 0.000500", self.asset)
-        self.assertIn("saved_reference = -1.925833 mm", self.policy)
+        guard = self.asset[self.asset.index("[gcode_macro _ADZ_SAVED_CHECK_POLICY]"):self.asset.index("[gcode_macro _ADZ_ACTION_CONTRACT]")]
+        self.assertNotIn("saved_reference", guard)
+        self.assertNotIn("reference_tolerance", guard)
 
     def test_rc_alignment_limit_matches_documented_margin(self) -> None:
         self.assertIn("variable_max_auto_alignment: 0.120000", self.asset)
@@ -47,7 +47,6 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             "_ADZ_RC_ABORT_PATH",
             "_ADZ_RC_ABORT_MODE",
             "_ADZ_RC_ABORT_PROFILE",
-            "_ADZ_RC_ABORT_REFERENCE",
             "_ADZ_RC_ABORT_ALIGNMENT",
         )
         for macro in guarded_abort_calls:
@@ -115,16 +114,24 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertIn("_ADZ_PREPRINT_FRESH_MESH", guard)
         self.assertIn("_ADZ_PREPRINT_DISABLED", guard)
         self.assertLess(guard.index("mesh_test == 0"), guard.index("mesh_test != 3"))
-        self.assertLess(guard.index("fresh_mesh_proven %}"), guard.index("native_leveling_ambiguous %}"))
+        self.assertLess(guard.index("mesh_test != 3"), guard.index("fresh_mesh_proven %}"))
 
-    def test_fresh_mesh_path_resets_transient_alignment_without_second_probe(self) -> None:
+    def test_fresh_mesh_path_runs_native_final_autoz_once(self) -> None:
         start = self.asset.index("[gcode_macro _ADZ_PREPRINT_FRESH_MESH]")
         end = self.asset.index("[gcode_macro _ADZ_SAVED_CHECK_POLICY]")
         block = self.asset[start:end]
-        self.assertIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset VALUE=0.0", block)
+        self.assertNotIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset VALUE=0.0", block)
         self.assertIn("LOAD_GCODE_OFFSET", block)
-        self.assertNotIn("_MESH_TEST", block)
-        self.assertNotIn("PROBE", block)
+        self.assertEqual(block.count("_MESH_TEST"), 1)
+        self.assertIn("_ADZ_VALIDATE_NATIVE_RESULT", block)
+        self.assertNotIn("\n    PROBE", block)
+
+    def test_active_policy_does_not_hard_gate_absolute_mesh_center(self) -> None:
+        guard = self.asset[self.asset.index("[gcode_macro _ADZ_SAVED_CHECK_POLICY]"):self.asset.index("[gcode_macro _ADZ_ACTION_CONTRACT]")]
+        self.assertNotIn("saved_reference", guard)
+        self.assertNotIn("reference_tolerance", guard)
+        self.assertNotIn("_ADZ_RC_ABORT_REFERENCE", guard)
+        self.assertNotIn("probed_matrix", guard)
 
     def test_native_screen_leveling_choice_is_not_guessed(self) -> None:
         guard_start = self.asset.index("[gcode_macro _ADZ_SAVED_CHECK_POLICY]")
