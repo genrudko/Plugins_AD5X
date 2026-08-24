@@ -214,6 +214,9 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         self.assertEqual(
             server.endpoints[component_module.IFS_ACTION_ENDPOINT][0], RequestType.POST
         )
+        self.assertEqual(
+            server.endpoints[component_module.IFS_PROVIDER_IDENTITY_ENDPOINT][0], RequestType.POST
+        )
         self.assertFalse(hasattr(server, "timer"))
 
     def test_provider_print_leveling_is_read_only_optional_snapshot_state(self):
@@ -434,6 +437,34 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         self.assertFalse(preview["ok"])
         self.assertIn("suspended", preview["error"])
         self.assertEqual(api.gcodes, [])
+
+    def test_provider_identity_is_source_verified_but_hardware_gated(self):
+        initial = live_initial()
+        initial["ad5x_ifs"]["provider_material_types"] = ["PLA", "PETG", "?"]
+        component, server, api = self.make_component(objects=["ad5x_ifs", HEAD], initial=initial)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        compatibility = component.get_snapshot()["modules"]["ifs"]["capabilities"]["compatibility"]
+        self.assertTrue(compatibility["zmod_projection_source_verified"])
+        self.assertFalse(compatibility["zmod_projection_hardware_accepted"])
+        result = asyncio.run(component._handle_ifs_provider_identity(FakeRequest(slot=2, material="PETG", color="#112233")))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "hardware_acceptance_required")
+        self.assertEqual(api.gcodes, [])
+
+    def test_provider_identity_maps_to_change_zcolor_when_acceptance_gate_is_open(self):
+        initial = live_initial()
+        initial["ad5x_ifs"]["provider_material_types"] = ["PLA", "PETG", "?"]
+        component, server, api = self.make_component(objects=["ad5x_ifs", HEAD], initial=initial)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        old = component_module.IFS_PROVIDER_IDENTITY_HARDWARE_ACCEPTED
+        component_module.IFS_PROVIDER_IDENTITY_HARDWARE_ACCEPTED = True
+        try:
+            result = asyncio.run(component._handle_ifs_provider_identity(FakeRequest(slot=2, material="petg", color="#112233")))
+        finally:
+            component_module.IFS_PROVIDER_IDENTITY_HARDWARE_ACCEPTED = old
+        self.assertTrue(result["ok"])
+        self.assertEqual(api.gcodes[-1], "CHANGE_ZCOLOR SLOT=2 TYPE=PETG HEX=112233")
+
 
     def test_select_load_and_active_unload_translate_to_zmod_commands(self):
         component, server, api = self.make_live_component()

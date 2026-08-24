@@ -97,6 +97,7 @@ BACKEND_VERSION = "0.2.0"
 SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/snapshot"
 IFS_ACTION_ENDPOINT = "/server/plugins_ad5x/ifs/action"
 IFS_METADATA_ENDPOINT = "/server/plugins_ad5x/ifs/metadata"
+IFS_PROVIDER_IDENTITY_ENDPOINT = "/server/plugins_ad5x/ifs/provider/identity"
 IFS_JOB_PREVIEW_ENDPOINT = "/server/plugins_ad5x/ifs/job/preview"
 IFS_JOB_MAPPING_DRAFT_ENDPOINT = "/server/plugins_ad5x/ifs/job/mapping/draft"
 IFS_JOB_LAUNCH_PREPARE_ENDPOINT = "/server/plugins_ad5x/ifs/job/launch/prepare"
@@ -116,6 +117,7 @@ FFCONFIG_PATH = "/usr/prog/config/Adventurer5M.json"
 FILE_MAPPING_PATH = "/usr/data/config/mod_data/file.json"
 IFS_METADATA_STORE_PATH = "/opt/config/mod_data/ad5x_custom/ifs_metadata.json"
 IFS_METADATA_STORE_MAX_BYTES = 64 * 1024
+IFS_PROVIDER_IDENTITY_HARDWARE_ACCEPTED = False
 
 SAFE_FILAMENT_OP_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
 SAFE_JOB_PREVIEW_PRINT_STATES = {"standby", "complete", "cancelled", "error"}
@@ -171,6 +173,13 @@ class PluginsAD5X:
             IFS_METADATA_ENDPOINT,
             RequestType.POST,
             self._handle_ifs_metadata,
+            transports=TransportType.HTTP | TransportType.WEBSOCKET,
+            auth_required=True,
+        )
+        self.server.register_endpoint(
+            IFS_PROVIDER_IDENTITY_ENDPOINT,
+            RequestType.POST,
+            self._handle_ifs_provider_identity,
             transports=TransportType.HTTP | TransportType.WEBSOCKET,
             auth_required=True,
         )
@@ -1006,6 +1015,71 @@ class PluginsAD5X:
             if self._head_filament is not True:
                 return "Toolhead filament presence is not confirmed; use Manage/recovery instead"
         return ""
+
+    def _provider_identity_rejection(self, slot: int, error: str) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "slot": slot,
+            "error": error,
+            "hardware_accepted": IFS_PROVIDER_IDENTITY_HARDWARE_ACCEPTED,
+            "snapshot": self.get_snapshot(),
+        }
+
+    def _validate_provider_identity(self, slot: int, material: str, color: str) -> str:
+        if slot < 1 or slot > 4:
+            return f"Invalid IFS slot: {slot}"
+        module = self._ifs_module if isinstance(self._ifs_module, dict) else {}
+        provider_mode = module.get("provider_mode")
+        if provider_mode == "native_display":
+            return "IFS Manager is suspended while the native display owns IFS"
+        if provider_mode not in (None, "", "display_off"):
+            return f"IFS provider mode is not supported: {provider_mode}"
+        if not module.get("available", False) or module.get("state") != "ready":
+            return "IFS is not ready"
+        if self._operation_state != "idle":
+            return "Another IFS operation is already running"
+        if self._print_state not in SAFE_FILAMENT_OP_PRINT_STATES:
+            return f"IFS provider identity write is blocked while print state is {self._print_state}"
+        slots = module.get("slots") or []
+        slot_data = next((item for item in slots if isinstance(item, dict) and item.get("slot") == slot), {})
+        if not bool(slot_data.get("present", False)):
+            return f"IFS slot {slot} is empty"
+        valid_types = {value.strip().upper() for value in module.get("provider_material_types", []) if isinstance(value, str) and value.strip() and value.strip() != "?"}
+        if not material or (valid_types and material not in valid_types):
+            return f"Unsupported provider material: {material or 'empty'}"
+        if len(color) != 7 or not color.startswith("#"):
+            return "Provider color must be #RRGGBB"
+        try:
+            int(color[1:], 16)
+        except ValueError:
+            return "Provider color must be #RRGGBB"
+        return ""
+
+    async def _handle_ifs_provider_identity(self, web_request: Any) -> Dict[str, Any]:
+        try:
+            slot = web_request.get_int("slot")
+            material = web_request.get_str("material").strip().upper()
+            color = web_request.get_str("color").strip().upper()
+        except Exception as exc:
+            return self._provider_identity_rejection(0, f"Invalid provider identity request: {exc}")
+        await self._refresh_ifs_metadata()
+        rejection = self._validate_provider_identity(slot, material, color)
+        if rejection:
+            return self._provider_identity_rejection(slot, rejection)
+        if not IFS_PROVIDER_IDENTITY_HARDWARE_ACCEPTED:
+            return self._provider_identity_rejection(slot, "hardware_acceptance_required")
+        command = f"CHANGE_ZCOLOR SLOT={slot} TYPE={material} HEX={color[1:]}"
+        self._operation_begin("set_provider_identity", slot)
+        try:
+            klippy_apis = self.server.lookup_component("klippy_apis")
+            result = await klippy_apis.run_gcode(command)
+            self._operation_end()
+            await self._refresh_ifs_metadata()
+            return {"ok": True, "slot": slot, "material": material, "color": color, "result": result, "hardware_accepted": True, "snapshot": self.get_snapshot()}
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+            self._operation_end(error)
+            return self._provider_identity_rejection(slot, error)
 
     async def _handle_ifs_metadata(self, web_request: Any) -> Dict[str, Any]:
         try:

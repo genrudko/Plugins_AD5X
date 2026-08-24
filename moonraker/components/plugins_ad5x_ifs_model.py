@@ -227,6 +227,9 @@ def get_ifs_capabilities() -> Dict[str, Any]:
         "compatibility": {
             "zmod_projection_preview": True,
             "zmod_projection_write": False,
+            "zmod_projection_source_verified": True,
+            "zmod_projection_hardware_accepted": False,
+            "zmod_provider_command": "CHANGE_ZCOLOR",
         },
         "recovery": {
             "preview": True,

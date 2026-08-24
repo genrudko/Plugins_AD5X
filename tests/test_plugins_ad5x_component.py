@@ -111,6 +111,7 @@ class PluginsAD5XComponentTests(unittest.TestCase):
                 component_module.SNAPSHOT_ENDPOINT,
                 component_module.IFS_ACTION_ENDPOINT,
                 component_module.IFS_METADATA_ENDPOINT,
+                component_module.IFS_PROVIDER_IDENTITY_ENDPOINT,
                 component_module.IFS_JOB_PREVIEW_ENDPOINT,
                 component_module.IFS_JOB_MAPPING_DRAFT_ENDPOINT,
                 component_module.IFS_JOB_LAUNCH_PREPARE_ENDPOINT,
