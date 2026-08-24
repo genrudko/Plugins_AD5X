@@ -103,6 +103,9 @@ No IFS presence/stall/selector telemetry may be fabricated for it. Provider/runt
 
 Earlier parity documents treated endless-spool support mostly as future custom functionality. The expanded Z-Mod review changes that conclusion.
 
+
+Source re-verification against `ghzserg/z_ad5x` branch `1.7` at `da8c94c9edd6b16253fed7e0e35d171c2adf256a` establishes the exact provider rule: `ANALOG_PRUTOK` reads the active physical slot from `FFMInfo.channel`, normalizes an unsupported current material to `PLA` using Z-Mod `temp_defaults`, then scans other physical slots in ascending numeric order. A fallback is eligible only when it is physically present and its raw `ffmTypeN` and `ffmColorN` exactly equal the provider-effective current material and color. The first match rewrites the provider `file.json` mapping, invokes the established change-filament lifecycle, and resumes the print. Plugins AD5X therefore exposes only a read-only candidate preview from provider-observed FFM metadata; automatic transition remains disabled and Z-Mod-owned pending real-printer acceptance.
+
 Z-Mod already has an analogous/equivalent-spool concept and `ANALOG_PRUTOK` provider primitive. Plugins AD5X therefore must:
 
 - discover exact current semantics/configuration;

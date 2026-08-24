@@ -223,6 +223,7 @@ class IFSManagerModelTests(unittest.TestCase):
         self.assertFalse(capabilities["metadata"]["rfid"])
         self.assertTrue(capabilities["mapping"]["preprint_preview"])
         self.assertFalse(capabilities["mapping"]["apply_preprint_mapping"])
+        self.assertTrue(capabilities["mapping"]["equivalent_spool_preview"])
         self.assertFalse(capabilities["mapping"]["endless_spool"])
 
     def test_spool_fields_are_normalized_without_inventing_missing_data(self):

@@ -333,6 +333,8 @@ class AD5XIFS:
                 })
 
             available = bool(getattr(zmod_ifs, "get_ifs_status", lambda: True)())
+            temp_defaults = getattr(zmod_ifs, "temp_defaults", {})
+            provider_material_types = sorted(str(key) for key in temp_defaults) if isinstance(temp_defaults, dict) else []
         except Exception:
             return self._unavailable()
 
@@ -344,6 +346,7 @@ class AD5XIFS:
             "state": FFS_STATE_NAMES.get(state_code, "unknown"),
             "state_code": state_code,
             "active_slot": active_slot,
+            "provider_material_types": provider_material_types,
             "slots": slots,
             "silk_mask": silk_mask,
             "raw_channel": raw_channel,

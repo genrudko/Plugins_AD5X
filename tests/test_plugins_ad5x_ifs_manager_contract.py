@@ -144,6 +144,7 @@ class IFSManagerContractTests(unittest.TestCase):
         self.assertFalse(caps["integrations"]["rfid"])
         self.assertTrue(caps["mapping"]["preprint_preview"])
         self.assertFalse(caps["mapping"]["apply_preprint_mapping"])
+        self.assertTrue(caps["mapping"]["equivalent_spool_preview"])
         self.assertFalse(caps["mapping"]["endless_spool"])
 
     def test_native_display_is_maintenance_suspended_not_missing_hardware(self):

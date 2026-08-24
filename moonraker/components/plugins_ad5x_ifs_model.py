@@ -221,6 +221,7 @@ def get_ifs_capabilities() -> Dict[str, Any]:
             "preprint_preview": True,
             "draft_preprint_mapping": True,
             "apply_preprint_mapping": False,
+            "equivalent_spool_preview": True,
             "endless_spool": False,
         },
         "compatibility": {
@@ -393,6 +394,59 @@ def normalize_slot(
     return result
 
 
+def build_equivalent_spool_preview(slots, active_slot, provider_metadata, provider_material_types, provider_mode='display_off'):
+    """Mirror Z-Mod ANALOG_PRUTOK eligibility without performing its transition."""
+    meta = provider_metadata if isinstance(provider_metadata, dict) else {}
+    sm = meta.get('slots') if isinstance(meta.get('slots'), dict) else {}
+    valid = {x for x in provider_material_types or [] if isinstance(x, str) and x}
+    by_slot = {x.get('slot'): x for x in slots or [] if isinstance(x, dict) and isinstance(x.get('slot'), int)}
+
+    def ident(n):
+        r = sm.get(n, sm.get(str(n), {}))
+        r = r if isinstance(r, dict) else {}
+        z = r.get('zmod_compat') if isinstance(r.get('zmod_compat'), dict) else {}
+        m = z.get('material') if isinstance(z.get('material'), str) else ''
+        c = z.get('color') if isinstance(z.get('color'), str) else ''
+        return {'material': m.strip(), 'color': c.strip()}
+    source_slot = active_slot if isinstance(active_slot, int) and (not isinstance(active_slot, bool)) and (1 <= active_slot <= SLOT_COUNT) else 0
+    base = {'provider': 'zmod', 'provider_command': 'ANALOG_PRUTOK', 'automatic_transition_enabled': False, 'transition_hardware_accepted': False, 'matching': {'material': 'exact_provider_value', 'color': 'exact_provider_value', 'presence_required': True, 'priority': 'ascending_physical_slot'}, 'source_slot': source_slot, 'candidates': [], 'eligible_slots': [], 'next_slot': 0}
+    if provider_mode != 'display_off':
+        return {**base, 'status': 'suspended', 'reason': 'provider_mode_not_supported'}
+    src = by_slot.get(source_slot)
+    if not src or not src.get('present', False):
+        return {**base, 'status': 'unknown', 'reason': 'source_slot_unavailable'}
+    si = ident(source_slot)
+    material = si['material']
+    color = si['color']
+    if not material or not color or (not valid):
+        return {**base, 'source': si, 'status': 'unknown', 'reason': 'provider_identity_incomplete'}
+    effective = material if material in valid else 'PLA'
+    source = {**si, 'effective_material': effective, 'material_normalized_to_pla': effective != material}
+    candidates = []
+    eligible = []
+    for n in sorted(by_slot):
+        if n == source_slot:
+            continue
+        item = by_slot[n]
+        ob = ident(n)
+        blockers = []
+        if not item.get('present', False):
+            blockers.append('slot_empty')
+        if not ob['material']:
+            blockers.append('provider_material_unknown')
+        elif ob['material'] != effective:
+            blockers.append('material_mismatch')
+        if not ob['color']:
+            blockers.append('provider_color_unknown')
+        elif ob['color'] != color:
+            blockers.append('color_mismatch')
+        ok = not blockers
+        if ok:
+            eligible.append(n)
+        candidates.append({'slot': n, 'present': bool(item.get('present', False)), 'material': ob['material'], 'color': ob['color'], 'eligible': ok, 'blockers': blockers})
+    return {**base, 'source': source, 'candidates': candidates, 'eligible_slots': eligible, 'next_slot': eligible[0] if eligible else 0, 'status': 'available' if eligible else 'no_candidate', 'reason': ''}
+
+
 def normalize_module(
     raw_module: Dict[str, Any],
     metadata: Optional[Dict[str, Any]],
@@ -472,6 +526,9 @@ def normalize_module(
             )
         )
     module["slots"] = normalized_slots
+    module["equivalent_spool"] = build_equivalent_spool_preview(
+        normalized_slots, active_slot, metadata, module.get("provider_material_types"), provider_mode
+    )
     module["preprint_plan"] = build_preprint_plan(
         module.get("job_preview"), normalized_slots
     )

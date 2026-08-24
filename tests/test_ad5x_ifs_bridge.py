@@ -43,6 +43,7 @@ class FakeIfsData:
 class FakeZmodIfs:
     def __init__(self):
         self.ifs_data = FakeIfsData()
+        self.temp_defaults = {"PLA": 220, "PETG": 250, "TPU": 230}
 
     def get_ifs_status(self):
         return True
@@ -176,6 +177,7 @@ class AD5XIFSBridgeTests(unittest.TestCase):
         self.assertEqual(status["state"], "ready")
         self.assertEqual(status["state_code"], 5)
         self.assertEqual(status["active_slot"], 1)
+        self.assertEqual(status["provider_material_types"], ["PETG", "PLA", "TPU"])
         self.assertEqual(status["silk_mask"], 7)
         self.assertEqual(status["raw_channel"], 0)
         self.assertEqual(

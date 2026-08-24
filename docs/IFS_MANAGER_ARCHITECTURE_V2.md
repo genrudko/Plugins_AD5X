@@ -203,6 +203,8 @@ Z-Mod remains provider authority for:
 
 Plugins AD5X should expose semantic actions/states and never raw provider implementation details as the normal UX.
 
+For equivalent/endless-spool behavior, the backend may expose a read-only candidate preview that mirrors the source-verified Z-Mod `ANALOG_PRUTOK` eligibility rule from provider-observed FFM metadata. This preview is advisory only: it must not use manual/Spoolman overlay metadata as provider truth, must keep `endless_spool=false`, and must not execute the provider transition until real-AD5X hardware acceptance enables that capability explicitly.
+
 ## 11. OrcaSlicer projection
 
 ### 11.1 Transport prerequisite
