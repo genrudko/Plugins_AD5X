@@ -691,6 +691,32 @@ def build_job_mapping_draft(
     }
 
 
+def build_zmod_print_zcolor_plan(job_preview: Optional[Dict[str, Any]], leveling: Optional[int] = None) -> Dict[str, Any]:
+    """Describe the provider-owned PRINT_ZCOLOR invocation without executing it."""
+    preview = job_preview if isinstance(job_preview, dict) else {}
+    blockers: List[str] = []
+    missing: List[str] = []
+    filename = preview.get("filename") if isinstance(preview.get("filename"), str) else ""
+    allowed = preview.get("allowed_tool_count")
+    mapping = preview.get("resolved_tool_map")
+    if not preview.get("available", False): blockers.append("preview_unavailable")
+    if not filename: blockers.append("missing_filename")
+    valid_count = isinstance(allowed, int) and not isinstance(allowed, bool) and allowed > 0
+    valid_map = valid_count and isinstance(mapping, list) and len(mapping) == allowed and all(isinstance(x, int) and not isinstance(x, bool) and 1 <= x <= SLOT_COUNT for x in mapping)
+    if not valid_map: blockers.append("invalid_resolved_tool_map")
+    if leveling is None:
+        missing.append("LEVELING")
+    elif isinstance(leveling, bool) or not isinstance(leveling, int) or leveling not in (0, 1):
+        blockers.append("invalid_leveling")
+    params: Dict[str, Any] = {}
+    if filename: params["FILENAME"] = filename
+    if leveling in (0, 1) and not isinstance(leveling, bool): params["LEVELING"] = leveling
+    if valid_count: params["ALLOWED_TOOL_COUNT"] = allowed
+    if valid_map:
+        for i, slot in enumerate(mapping): params[f"T{i}"] = slot
+    return {"provider": "zmod", "command": "PRINT_ZCOLOR", "parameters": params, "missing_parameters": missing, "blockers": blockers, "ready": not blockers and not missing, "execution_enabled": False}
+
+
 def build_job_launch_gate(
     job_preview: Optional[Dict[str, Any]],
     preprint_plan: Optional[Dict[str, Any]],
@@ -773,6 +799,7 @@ def build_job_launch_gate(
         "plan_status": plan_status,
         "blockers": blockers,
         "warnings": warnings,
+        "provider_launch_plan": build_zmod_print_zcolor_plan(preview),
     }
 
 

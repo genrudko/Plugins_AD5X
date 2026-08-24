@@ -201,6 +201,31 @@ class IFSLaunchContractTests(unittest.TestCase):
         self.assertFalse(gate["candidate"])
         self.assertIn("invalid_resolved_tool_map", gate["blockers"])
 
+    def test_zmod_provider_plan_preserves_complete_mapping_and_requires_explicit_leveling(self):
+        source = preview()
+        plan = model.build_zmod_print_zcolor_plan(source)
+        self.assertEqual(plan["provider"], "zmod")
+        self.assertEqual(plan["command"], "PRINT_ZCOLOR")
+        self.assertFalse(plan["execution_enabled"])
+        self.assertFalse(plan["ready"])
+        self.assertEqual(plan["missing_parameters"], ["LEVELING"])
+        self.assertEqual(plan["parameters"]["FILENAME"], source["filename"])
+        self.assertEqual(plan["parameters"]["ALLOWED_TOOL_COUNT"], 2)
+        self.assertEqual(plan["parameters"]["T0"], 3)
+        self.assertEqual(plan["parameters"]["T1"], 1)
+        self.assertNotIn("LEVELING", plan["parameters"])
+
+        selected = model.build_zmod_print_zcolor_plan(source, leveling=1)
+        self.assertTrue(selected["ready"])
+        self.assertEqual(selected["parameters"]["LEVELING"], 1)
+        self.assertFalse(selected["execution_enabled"])
+
+    def test_zmod_provider_plan_rejects_invalid_leveling(self):
+        plan = model.build_zmod_print_zcolor_plan(preview(), leveling=2)
+        self.assertFalse(plan["ready"])
+        self.assertIn("invalid_leveling", plan["blockers"])
+        self.assertNotIn("LEVELING", plan["parameters"])
+
     def test_capability_keeps_start_and_mapping_write_disabled(self):
         caps = model.get_ifs_capabilities()
         self.assertFalse(caps["actions"]["start_job"])

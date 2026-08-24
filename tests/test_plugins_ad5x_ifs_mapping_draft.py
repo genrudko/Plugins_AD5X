@@ -86,6 +86,11 @@ class IFSMappingDraftTests(unittest.TestCase):
         self.assertTrue(result["launch_gate"]["candidate"])
         self.assertFalse(result["launch_gate"]["write_enabled"])
         self.assertEqual(result["launch_gate"]["mapping_source"], "manual")
+        provider_plan = result["launch_gate"]["provider_launch_plan"]
+        self.assertEqual(provider_plan["parameters"]["T0"], 2)
+        self.assertEqual(provider_plan["parameters"]["T1"], 1)
+        self.assertEqual(provider_plan["missing_parameters"], ["LEVELING"])
+        self.assertFalse(provider_plan["execution_enabled"])
         self.assertEqual(api.gcodes, [])
 
     def test_endpoint_rejects_stale_preview_without_gcode(self):

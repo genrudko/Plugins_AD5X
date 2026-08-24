@@ -132,6 +132,12 @@ Therefore Plugins AD5X MUST NOT independently write `file.json`, call `/printGco
 
 After real-printer acceptance, the Plugins AD5X launch adapter may call validated `PRINT_ZCOLOR` with the complete mapping. That replaces only the presentation of Z-Mod's mapping prompt, not its print lifecycle.
 
+## 9.1 Inert provider launch plan
+
+Reverified against `ghzserg/z_ad5x` branch `1.7` at `da8c94c9edd6b16253fed7e0e35d171c2adf256a`: `PRINT_ZCOLOR` accepts `FILENAME`, `LEVELING` (`0|1`), `ALLOWED_TOOL_COUNT`, and the complete `T0..Tn` slot vector; every slot value is validated as `1..4`. Z-Mod itself owns the subsequent native-display or DISPLAY_OFF launch lifecycle.
+
+Plugins AD5X may therefore prepare a structured, non-executing provider plan from a validated preview/draft. The plan must preserve the complete `T0..Tn` vector and must not guess `LEVELING`; until an explicit caller supplies `0` or `1`, it remains a required parameter. The plan is evidence/contract data only: `execution_enabled=false`, `start_job=false`, and `apply_preprint_mapping=false` remain unchanged until controlled real-AD5X acceptance.
+
 ## 10. Avoiding duplicate pre-print dialogs
 
 A native Fluidd mapping dialog cannot simply run before the ordinary Moonraker print endpoint and then call that endpoint unchanged, because `SET_ZCOLOR` would open the provider mapping flow again.
