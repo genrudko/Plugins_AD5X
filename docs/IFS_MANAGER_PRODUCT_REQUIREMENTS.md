@@ -282,6 +282,8 @@ Expert should provide semantic recovery around real provider evidence:
 
 Do not turn diagnostics into an always-on high-rate logger.
 
+The normalized backend may expose source-verified recovery primitives and provider-observed failure sequences as a **read-only recovery preview**. For Z-Mod `DISPLAY_OFF`, the currently verified primitives are driver reset (`IFS_F15`), force-stop motion (`IFS_F112`), unlock all (`IFS_F18`) and per-slot unlock (`IFS_F39 PRUTOK=n`). Z-Mod itself uses `IFS_F15` for driver-error retry (`FFS_state=127`) and `IFS_F112` + `IFS_F18` on timeout/error cleanup. Publishing these semantics does not enable execution: `actions.recovery=false`, recovery execution remains hardware-gated, and raw stall bits alone must never manufacture a recommended recovery action.
+
 ## 14. Capability/permission UX
 
 Frontend button availability comes from backend permissions.

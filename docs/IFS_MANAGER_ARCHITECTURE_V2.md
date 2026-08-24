@@ -205,6 +205,8 @@ Plugins AD5X should expose semantic actions/states and never raw provider implem
 
 For equivalent/endless-spool behavior, the backend may expose a read-only candidate preview that mirrors the source-verified Z-Mod `ANALOG_PRUTOK` eligibility rule from provider-observed FFM metadata. This preview is advisory only: it must not use manual/Spoolman overlay metadata as provider truth, must keep `endless_spool=false`, and must not execute the provider transition until real-AD5X hardware acceptance enables that capability explicitly.
 
+Recovery follows the same separation. The canonical module may publish a read-only recovery model containing provider evidence, source-verified primitives and provider-observed sequences. Current Z-Mod evidence includes `IFS_F15` driver reset, `IFS_F112` force-stop, `IFS_F18` unlock-all and `IFS_F39 PRUTOK=n` per-slot unlock; driver state 127 triggers provider reset/retry and timeout cleanup uses force-stop followed by unlock-all. This model is descriptive only until real-AD5X acceptance: capability `recovery.preview=true` does not imply `actions.recovery=true` or any executable endpoint. Diagnostic masks are evidence, not instructions.
+
 ## 11. OrcaSlicer projection
 
 ### 11.1 Transport prerequisite

@@ -228,6 +228,10 @@ def get_ifs_capabilities() -> Dict[str, Any]:
             "zmod_projection_preview": True,
             "zmod_projection_write": False,
         },
+        "recovery": {
+            "preview": True,
+            "execute": False,
+        },
     }
 
 
@@ -447,6 +451,40 @@ def build_equivalent_spool_preview(slots, active_slot, provider_metadata, provid
     return {**base, 'source': source, 'candidates': candidates, 'eligible_slots': eligible, 'next_slot': eligible[0] if eligible else 0, 'status': 'available' if eligible else 'no_candidate', 'reason': ''}
 
 
+def build_recovery_preview(module_state, state_code, need_insert, insert_slot, provider_mode='display_off'):
+    """Describe source-verified Z-Mod recovery evidence without executing it."""
+    code = state_code if isinstance(state_code, int) and not isinstance(state_code, bool) else 0
+    slot = insert_slot if isinstance(insert_slot, int) and not isinstance(insert_slot, bool) and 1 <= insert_slot <= SLOT_COUNT else 0
+    suspended = provider_mode != 'display_off'
+    driver_error = code == 127
+    insertion_pending = bool(need_insert)
+    status = 'suspended' if suspended else 'driver_error' if driver_error else 'attention' if insertion_pending else 'idle'
+    return {
+        'provider': 'zmod',
+        'read_only': True,
+        'execution_enabled': False,
+        'hardware_accepted': False,
+        'status': status,
+        'evidence': {
+            'module_state': module_state if isinstance(module_state, str) else 'unknown',
+            'state_code': code,
+            'driver_error': driver_error,
+            'need_insert': insertion_pending,
+            'insert_slot': slot,
+        },
+        'primitives': [
+            {'id': 'reset_driver', 'provider_command': 'IFS_F15', 'scope': 'driver', 'source_verified': True, 'execution_enabled': False, 'hardware_accepted': False},
+            {'id': 'force_stop_motion', 'provider_command': 'IFS_F112', 'scope': 'all_motion', 'source_verified': True, 'execution_enabled': False, 'hardware_accepted': False},
+            {'id': 'unlock_all', 'provider_command': 'IFS_F18', 'scope': 'all_slots', 'source_verified': True, 'execution_enabled': False, 'hardware_accepted': False},
+            {'id': 'unlock_slot', 'provider_command': 'IFS_F39', 'scope': 'slot', 'parameter': 'PRUTOK', 'slot_range': [1, SLOT_COUNT], 'source_verified': True, 'execution_enabled': False, 'hardware_accepted': False},
+        ],
+        'provider_sequences': {
+            'driver_error_retry': ['IFS_F15'],
+            'timeout_cleanup': ['IFS_F112', 'IFS_F18'],
+        },
+    }
+
+
 def normalize_module(
     raw_module: Dict[str, Any],
     metadata: Optional[Dict[str, Any]],
@@ -571,6 +609,13 @@ def normalize_module(
         "stall_mask": module.get("stall_mask", 0),
         "runtime_active_slot": module.get("runtime_active_slot", runtime_active_slot),
     }
+    module["recovery"] = build_recovery_preview(
+        module_state,
+        module.get("state_code", 0),
+        module.get("need_insert", False),
+        module.get("insert_slot", 0),
+        provider_mode,
+    )
     return module
 
 
