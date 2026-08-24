@@ -144,6 +144,10 @@ Z-Mod persists the last/default leveling choice in `save_variables.variables.pri
 
 This reflected setting is a UI default/source hint, not implicit launch consent. The inert `provider_launch_plan` still requires explicit `LEVELING`; Plugins AD5X does not write `print_leveling` or other Z-Mod save variables.
 
+### 9.3 Explicit leveling dry-run
+
+The read-only mapping-draft endpoint may accept an explicit `leveling` value and use it only to materialize the inert `provider_launch_plan`. A valid `0|1` makes that provider plan structurally complete; invalid values block the launch candidate. This remains a dry-run: the endpoint emits no G-code and `execution_enabled`, `start_job`, and mapping write capabilities stay false.
+
 ## 10. Avoiding duplicate pre-print dialogs
 
 A native Fluidd mapping dialog cannot simply run before the ordinary Moonraker print endpoint and then call that endpoint unchanged, because `SET_ZCOLOR` would open the provider mapping flow again.

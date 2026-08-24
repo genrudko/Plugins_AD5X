@@ -1382,6 +1382,7 @@ class PluginsAD5X:
         try:
             preview_token = web_request.get_str("preview_token").strip()
             resolved_tool_map = web_request.get("resolved_tool_map", None)
+            provider_leveling = web_request.get("leveling", None)
         except Exception as exc:
             return {
                 "ok": False,
@@ -1435,6 +1436,7 @@ class PluginsAD5X:
             else "unknown",
             print_state=self._print_state,
             operation_state=self._operation_state,
+            provider_leveling=provider_leveling,
         )
         gate["mapping_source"] = "manual"
         gate["provider_preview_token"] = draft["preview_token"]

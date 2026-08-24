@@ -724,6 +724,7 @@ def build_job_launch_gate(
     print_state: str,
     operation_state: str,
     expected_preview_token: Optional[str] = None,
+    provider_leveling: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Describe launch eligibility without enabling or performing the write."""
     preview = job_preview if isinstance(job_preview, dict) else {}
@@ -789,6 +790,13 @@ def build_job_launch_gate(
     elif plan_status not in ("ready", "warning"):
         block("plan_not_ready")
 
+    provider_launch_plan = build_zmod_print_zcolor_plan(preview, leveling=provider_leveling)
+    if provider_leveling is not None:
+        for code in provider_launch_plan["blockers"]:
+            block(code)
+        if provider_launch_plan["missing_parameters"]:
+            block("provider_launch_plan_incomplete")
+
     candidate = not blockers
     block("launch_write_not_enabled")
     return {
@@ -799,7 +807,7 @@ def build_job_launch_gate(
         "plan_status": plan_status,
         "blockers": blockers,
         "warnings": warnings,
-        "provider_launch_plan": build_zmod_print_zcolor_plan(preview),
+        "provider_launch_plan": provider_launch_plan,
     }
 
 
