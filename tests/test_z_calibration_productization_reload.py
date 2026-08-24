@@ -87,6 +87,10 @@ class ZCalibrationReloadLifecycleTests(unittest.TestCase):
             "original_clear": {"present": True, "value": "_CLEAR2"},
             "original_disable_priming": {"present": True, "value": 0},
             "original_prime_delegate": {"present": False, "value": None},
+            "original_mesh_policy": {"present": False, "value": None},
+            "original_mesh_profile": {"present": False, "value": None},
+            "original_mesh_points": {"present": False, "value": None},
+            "measurement_policy_id": product.MEASUREMENT_POLICY_ID,
             "policy_original_present": False,
             "policy_original_b64": "",
         }

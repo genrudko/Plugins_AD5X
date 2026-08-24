@@ -201,3 +201,11 @@ Not required for this RC first-layer/unattended-print objective:
 - canonical packaging of the separate camera startup hardening proof.
 
 Those remain follow-on work and must not block validation of the narrow owner-useful saved+check path.
+
+## AD5X measurement policy validated 2026-08-24
+
+The release-candidate measurement policy is `adz-metrology-s05-median3-reuse-v1-20260824`: bed-mesh acquisition and the final in-mesh reconciliation probe use **0.5 mm/s**, **3** samples and **median**. The native edge-cleaning probe keeps Z-Mod's own probe defaults; its tare is reused for the immediately following final reconciliation probe during an active print. Plugins AD5X still delegates physical tare/probe/motion to Z-Mod.
+
+Hardware evidence: stock-like full native Auto-Z produced a 40 µm delta range. With 0.5 mm/s / median3 / no second center tare, five independent full native cleaning cycles produced center medians `-1.9025, -1.9050, -1.9000, -1.9000, -1.8975` (7.5 µm range). A fresh 5x5 mesh under the same policy had center `-1.9000`; final no-retare reconciliation was `-1.9075` (delta -7.5 µm). A subsequent saved-mesh cycle returned `-1.8925` against the same center (delta +7.5 µm).
+
+Saved-mesh compatibility is fail-closed: the plugin fingerprints the accepted `auto` mesh with policy id, profile name, and exact probed matrix. Old 5 mm/s / average3 meshes are not mixed with 0.5 mm/s reconciliation. A measurement-policy upgrade invalidates this fingerprint once; a fresh `auto` must be built before saved-mesh Auto-Z is accepted. Rollback/uninstall restores pre-plugin saved-variable state.

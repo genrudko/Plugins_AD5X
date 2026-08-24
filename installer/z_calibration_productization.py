@@ -42,6 +42,10 @@ POLICY_ID = _impl.POLICY_ID
 POLICY_MAX_AUTO = _impl.POLICY_MAX_AUTO
 PRIME_GATE = "_ADZ_PRIME_GATE"
 PRIME_DELEGATE_VARIABLE = "adz_prime_delegate"
+MEASUREMENT_POLICY_ID = "adz-metrology-s05-median3-reuse-v1-20260824"
+MESH_POLICY_VARIABLE = "adz_mesh_policy"
+MESH_PROFILE_VARIABLE = "adz_mesh_profile"
+MESH_POINTS_VARIABLE = "adz_mesh_points"
 _LEGACY_BUILD_PREFLIGHT = _impl.build_preflight_plan
 _LEGACY_UNINSTALL = _impl.uninstall
 _LEGACY_VERIFY_LIVE = _impl.verify_live
@@ -71,6 +75,11 @@ def build_preflight_plan(printer_config: Path, policy_source: Path, policy_dest:
         plan["original_prime_delegate"] = _variable_spec(v, PRIME_DELEGATE_VARIABLE)
     else:
         _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
+    if manifest is None or "original_mesh_policy" not in manifest:
+        plan["original_mesh_policy"] = _variable_spec(v, MESH_POLICY_VARIABLE)
+        plan["original_mesh_profile"] = _variable_spec(v, MESH_PROFILE_VARIABLE)
+        plan["original_mesh_points"] = _variable_spec(v, MESH_POINTS_VARIABLE)
+    plan["measurement_policy_id"] = MEASUREMENT_POLICY_ID
     return plan
 
 
@@ -188,6 +197,8 @@ def _legacy_candidates(
 
 def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
     state_dir = Path(plan["state_dir"])
+    previous_manifest = _impl._load_manifest(state_dir)
+    previous_measurement_policy = (previous_manifest or {}).get("measurement_policy_id")
     manifest = _impl._write_manifest_from_plan(plan, policy_source)
     manifest_path, original_hook_path, _ = _impl._manifest_paths(state_dir)
     original = original_hook_path.read_bytes()
@@ -206,11 +217,12 @@ def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
     )
     manifest["expected_patched_hook_sha256"] = _impl._sha(expected)
 
-    for key in ("original_clear", "original_disable_priming", "original_prime_delegate"):
+    for key in ("original_clear", "original_disable_priming", "original_prime_delegate", "original_mesh_policy", "original_mesh_profile", "original_mesh_points"):
         if key not in manifest:
             if key not in plan:
-                raise ProductizationError(f"missing prime-gate ownership field: {key}")
+                raise ProductizationError(f"missing ZCAL ownership field: {key}")
             manifest[key] = plan[key]
+    manifest["measurement_policy_id"] = MEASUREMENT_POLICY_ID
     delegate = _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
     variables = Path(plan["variables_file"])
     _set_variable(variables, "mesh_test", 3, True)
@@ -218,6 +230,10 @@ def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
     _set_variable(variables, "clear", PRIME_GATE, True)
     _set_variable(variables, "disable_priming", 0, True)
     _set_variable(variables, PRIME_DELEGATE_VARIABLE, delegate, True)
+    if previous_measurement_policy != MEASUREMENT_POLICY_ID:
+        _set_variable(variables, MESH_POLICY_VARIABLE, "", True)
+        _set_variable(variables, MESH_PROFILE_VARIABLE, "", True)
+        _set_variable(variables, MESH_POINTS_VARIABLE, [], True)
 
     manifest_path.write_text(
         _impl.json.dumps(manifest, sort_keys=True, indent=2) + "\n",
@@ -227,7 +243,7 @@ def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
 
 
 def _restore_extra_variables(manifest: dict[str, Any], variables_file: Path) -> None:
-    for key, name in (("original_clear", "clear"), ("original_disable_priming", "disable_priming"), ("original_prime_delegate", PRIME_DELEGATE_VARIABLE)):
+    for key, name in (("original_clear", "clear"), ("original_disable_priming", "disable_priming"), ("original_prime_delegate", PRIME_DELEGATE_VARIABLE), ("original_mesh_policy", MESH_POLICY_VARIABLE), ("original_mesh_profile", MESH_PROFILE_VARIABLE), ("original_mesh_points", MESH_POINTS_VARIABLE)):
         spec = manifest.get(key)
         if spec is not None:
             _set_variable(variables_file, name, spec.get("value"), bool(spec.get("present")))
@@ -254,14 +270,28 @@ def verify_live(live_payload: str, state_dir: Path) -> None:
     if int(v.get("disable_priming", -1)) != 0: raise ProductizationError("Z-Mod line priming disabled; prime gate cannot run")
     if v.get(PRIME_DELEGATE_VARIABLE) != d: raise ProductizationError("ZCAL prime delegate mismatch")
     settings = status.get("configfile", {}).get("settings", {})
-    if "gcode_macro _adz_prime_gate" not in {str(k).strip().lower() for k in settings}: raise ProductizationError("ZCAL prime gate macro is not loaded")
+    normalized = {str(k).strip().lower(): value for k, value in settings.items()}
+    if "gcode_macro _adz_prime_gate" not in normalized: raise ProductizationError("ZCAL prime gate macro is not loaded")
+    measurement = normalized.get("gcode_macro _adz_measurement_policy", {})
+    if measurement.get("policy_id") != MEASUREMENT_POLICY_ID: raise ProductizationError("ZCAL measurement policy identity missing/mismatched")
+    tare = normalized.get("gcode_macro load_cell_tare", {})
+    if "adz_reuse_armed" not in tare: raise ProductizationError("ZCAL LOAD_CELL_TARE policy wrapper is not loaded")
+    if abs(float(measurement.get("probe_speed", -1.0)) - 0.5) > 1e-12: raise ProductizationError("ZCAL precision probe speed mismatch")
+    if int(measurement.get("probe_samples", -1)) != 3: raise ProductizationError("ZCAL precision probe sample-count mismatch")
+    if str(measurement.get("probe_result", "")).lower() != "median": raise ProductizationError("ZCAL precision probe estimator mismatch")
+    if "final_probe_armed" not in measurement: raise ProductizationError("ZCAL precision one-shot state missing")
+    mesh_adapter = normalized.get("gcode_macro _bed_mesh_calibrate", {})
+    if mesh_adapter.get("rename_existing") != "_ADZ_BED_MESH_CALIBRATE_BASE": raise ProductizationError("ZCAL bed-mesh precision adapter is not loaded")
+    probe_adapter = normalized.get("gcode_macro probe", {})
+    if probe_adapter.get("rename_existing") != "_ADZ_PROBE_BASE": raise ProductizationError("ZCAL final-probe precision adapter is not loaded")
+    if manifest.get("measurement_policy_id") != MEASUREMENT_POLICY_ID: raise ProductizationError("ZCAL productization measurement policy provenance mismatch")
 
 def verify_uninstalled(live_payload: str, state_dir: Path) -> None:
     _LEGACY_VERIFY_UNINSTALLED(live_payload, state_dir)
     manifest = _impl._load_manifest(state_dir)
     if manifest is None: raise ProductizationError("productization manifest missing during uninstall verify")
     runtime, _ = _impl._runtime_payload(live_payload); v = runtime["variables"]
-    for key, name in (("original_clear", "clear"), ("original_disable_priming", "disable_priming"), ("original_prime_delegate", PRIME_DELEGATE_VARIABLE)):
+    for key, name in (("original_clear", "clear"), ("original_disable_priming", "disable_priming"), ("original_prime_delegate", PRIME_DELEGATE_VARIABLE), ("original_mesh_policy", MESH_POLICY_VARIABLE), ("original_mesh_profile", MESH_PROFILE_VARIABLE), ("original_mesh_points", MESH_POINTS_VARIABLE)):
         spec = manifest.get(key)
         if spec is not None: _verify_spec(v, spec, name)
 

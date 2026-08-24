@@ -61,7 +61,7 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             self.assertNotEqual(restore_pos, -1, macro)
             branch_pos = preceding.rfind("{% ")
             self.assertGreater(restore_pos, branch_pos, macro)
-        self.assertEqual(guard.count("LOAD_GCODE_OFFSET"), 7)
+        self.assertEqual(guard.count("LOAD_GCODE_OFFSET"), 8)
 
     def test_policy_guard_is_pure_klipper_and_does_not_own_start_hook(self) -> None:
         self.assertIn('RESPOND PREFIX="info" MSG="Plugins AD5X saved+check PASS:', self.asset)
@@ -131,7 +131,9 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertNotIn("saved_reference", guard)
         self.assertNotIn("reference_tolerance", guard)
         self.assertNotIn("_ADZ_RC_ABORT_REFERENCE", guard)
-        self.assertNotIn("probed_matrix", guard)
+        self.assertIn("stored_points == active_points", guard)
+        self.assertNotIn("saved_reference", guard)
+        self.assertNotIn("reference_tolerance", guard)
 
     def test_native_screen_leveling_choice_is_not_guessed(self) -> None:
         guard_start = self.asset.index("[gcode_macro _ADZ_SAVED_CHECK_POLICY]")
