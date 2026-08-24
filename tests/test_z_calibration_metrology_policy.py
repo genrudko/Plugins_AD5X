@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY = (ROOT / "z_calibration_rc_policy.cfg").read_text(encoding="utf-8")
 PRODUCT = (ROOT / "installer" / "z_calibration_productization.py").read_text(encoding="utf-8")
 RUNTIME = (ROOT / "installer" / "z_calibration_runtime.sh").read_text(encoding="utf-8")
-MEASUREMENT_ID = "adz-metrology-mesh5-median3-final05-median3-reuse-v2-20260825"
+MEASUREMENT_ID = "adz-metrology-mesh5-median3-final05-median3-bias130-reuse-v3-20260825"
 
 class MetrologyPolicyTests(unittest.TestCase):
     def test_precision_policy_is_scoped_not_global(self):
@@ -16,6 +16,7 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("PROBE_SPEED={m.mesh_probe_speed} SAMPLES={m.mesh_probe_samples} SAMPLES_RESULT={m.mesh_probe_result}", POLICY)
         self.assertIn("variable_mesh_probe_speed: 5.0", POLICY)
         self.assertIn("variable_final_probe_speed: 0.5", POLICY)
+        self.assertIn("variable_mesh_final_bias: 0.130000", POLICY)
         self.assertIn("[gcode_macro PROBE]", POLICY)
         self.assertIn("rename_existing: _ADZ_PROBE_BASE", POLICY)
         commands = [line.strip() for line in POLICY.splitlines()]
@@ -79,7 +80,9 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("stored_policy == measurement.policy_id", block)
         self.assertIn("stored_profile == active_profile", block)
         self.assertIn("stored_points == active_points", block)
-        self.assertLess(block.index("not mesh_policy_match"), block.index("auto_alignment|abs"))
+        self.assertIn("bias_residual = auto_alignment - expected_bias", block)
+        self.assertIn("variable_max_bias_residual: 0.050000", POLICY)
+        self.assertLess(block.index("not mesh_policy_match"), block.index("bias_residual|abs"))
 
     def test_real_print_time_mesh_build_sets_transient_fresh_proof(self):
         start = POLICY.index("[gcode_macro _BED_MESH_CALIBRATE]")
@@ -102,6 +105,7 @@ class MetrologyPolicyTests(unittest.TestCase):
 
     def test_live_verifier_queries_runtime_macro_variables(self):
         self.assertIn("gcode_macro%20_ADZ_MEASUREMENT_POLICY", RUNTIME)
+        self.assertIn("gcode_macro%20_ADZ_SAVED_CHECK_POLICY", RUNTIME)
         self.assertIn("gcode_macro%20LOAD_CELL_TARE", RUNTIME)
         self.assertIn('status.get("gcode_macro _ADZ_MEASUREMENT_POLICY", {})', PRODUCT)
         self.assertIn('status.get("gcode_macro LOAD_CELL_TARE", {})', PRODUCT)
