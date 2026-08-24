@@ -451,6 +451,32 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
         self.assertEqual(result["error"], "hardware_acceptance_required")
         self.assertEqual(api.gcodes, [])
 
+    def test_provider_identity_rejects_unknown_provider_material_types_without_gcode(self):
+        for provider_material_types in (None, []):
+            with self.subTest(provider_material_types=provider_material_types):
+                initial = live_initial()
+                if provider_material_types is None:
+                    initial["ad5x_ifs"].pop("provider_material_types", None)
+                else:
+                    initial["ad5x_ifs"]["provider_material_types"] = provider_material_types
+                component, server, api = self.make_component(
+                    objects=["ad5x_ifs", HEAD], initial=initial
+                )
+                asyncio.run(server.handlers["server:klippy_ready"]())
+
+                result = asyncio.run(
+                    component._handle_ifs_provider_identity(
+                        FakeRequest(slot=2, material="PETG", color="#112233")
+                    )
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(
+                    result["error"],
+                    "Provider-supported material identity is unknown",
+                )
+                self.assertEqual(api.gcodes, [])
+
     def test_provider_identity_maps_to_change_zcolor_when_acceptance_gate_is_open(self):
         initial = live_initial()
         initial["ad5x_ifs"]["provider_material_types"] = ["PLA", "PETG", "?"]

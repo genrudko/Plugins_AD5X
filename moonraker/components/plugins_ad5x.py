@@ -1044,7 +1044,14 @@ class PluginsAD5X:
         slot_data = next((item for item in slots if isinstance(item, dict) and item.get("slot") == slot), {})
         if not bool(slot_data.get("present", False)):
             return f"IFS slot {slot} is empty"
-        valid_types = {value.strip().upper() for value in module.get("provider_material_types", []) if isinstance(value, str) and value.strip() and value.strip() != "?"}
+        provider_material_types = module.get("provider_material_types") or []
+        valid_types = {
+            value.strip().upper()
+            for value in provider_material_types
+            if isinstance(value, str) and value.strip() and value.strip() != "?"
+        }
+        if not valid_types:
+            return "Provider-supported material identity is unknown"
         if not material or (valid_types and material not in valid_types):
             return f"Unsupported provider material: {material or 'empty'}"
         if len(color) != 7 or not color.startswith("#"):
