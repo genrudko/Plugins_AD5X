@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY = (ROOT / "z_calibration_rc_policy.cfg").read_text(encoding="utf-8")
 PRODUCT = (ROOT / "installer" / "z_calibration_productization.py").read_text(encoding="utf-8")
 RUNTIME = (ROOT / "installer" / "z_calibration_runtime.sh").read_text(encoding="utf-8")
-MEASUREMENT_ID = "adz-metrology-mesh5-median3-final05-median3-bias130-reuse-v3-20260825"
+MEASUREMENT_ID = "adz-metrology-mesh5-median3-final05-median3-bias130-normalized-v4-20260825"
 
 class MetrologyPolicyTests(unittest.TestCase):
     def test_precision_policy_is_scoped_not_global(self):
@@ -33,6 +33,7 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("final_probe_y", block)
         self.assertIn("final_probe_armed VALUE=0", block)
         self.assertIn("_ADZ_PROBE_BASE {rawparams} PROBE_SPEED={m.final_probe_speed} SAMPLES={m.final_probe_samples} SAMPLES_RESULT={m.final_probe_result}", block)
+        self.assertIn("native_bias_pending VALUE=1", block)
 
     def test_tare_reuse_is_print_scoped_and_fail_closed(self):
         start = POLICY.index("[gcode_macro LOAD_CELL_TARE]")
@@ -80,9 +81,19 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("stored_policy == measurement.policy_id", block)
         self.assertIn("stored_profile == active_profile", block)
         self.assertIn("stored_points == active_points", block)
-        self.assertIn("bias_residual = auto_alignment - expected_bias", block)
         self.assertIn("variable_max_bias_residual: 0.050000", POLICY)
-        self.assertLess(block.index("not mesh_policy_match"), block.index("bias_residual|abs"))
+        self.assertLess(block.index("not mesh_policy_match"), block.index("_ADZ_VALIDATE_NATIVE_RESULT", block.index("not mesh_policy_match")))
+
+    def test_split_speed_bias_is_removed_from_runtime_autoz_once(self):
+        start = POLICY.index("[gcode_macro _ADZ_VALIDATE_NATIVE_RESULT]")
+        end = POLICY.index("[gcode_macro _ADZ_RC_ABORT_PRIME]", start)
+        block = POLICY[start:end]
+        self.assertIn("pending = measurement.native_bias_pending", block)
+        self.assertIn("residual = auto_alignment - expected if pending else auto_alignment", block)
+        self.assertIn('_SET_GCODE_OFFSET_FAST Z_ADJUST={-expected} FROM="Plugins_AD5X_split_speed_bias"', block)
+        self.assertIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset VALUE={residual}", block)
+        self.assertIn("native_bias_pending VALUE=0", block)
+        self.assertIn("native Auto-Z normalized", block)
 
     def test_real_print_time_mesh_build_sets_transient_fresh_proof(self):
         start = POLICY.index("[gcode_macro _BED_MESH_CALIBRATE]")

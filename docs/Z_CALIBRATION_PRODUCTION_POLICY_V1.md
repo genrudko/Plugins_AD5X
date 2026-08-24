@@ -111,41 +111,34 @@ The earlier diagnostic reboot run produced a shifted two-series level around `-1
 
 ## 5. RC Auto-Z alignment envelope
 
-Accepted maximum absolute temporary Auto-Z alignment:
+The split-speed policy separates the raw Z-Mod delta from the physically applicable alignment correction:
 
 ```text
-abs(auto_alignment) < 0.120000 mm
+raw_native_delta = slow_final_probe - fast_mesh_reference
+expected_speed_bias = +0.130000 mm
+applied_alignment = raw_native_delta - expected_speed_bias
+abs(applied_alignment) < 0.050000 mm
 ```
 
-The guard rejects `abs(auto_alignment) >= 0.120000 mm`.
+The `+0.130000 mm` term is a hardware-measured policy constant for the accepted 5.0 mm/s mesh / 0.5 mm/s final-probe pair. It is not asserted to be a universal AD5X constant or a proven model of trigger latency. The guard rejects `abs(applied_alignment) >= 0.050000 mm`.
 
-Margin rationale:
+This remains deliberately tighter than Z-Mod's broad internal `abs(zdelta) < 0.31` acceptance. Z-Mod still owns the native contact and raw `zdelta`; Plugins AD5X normalizes the known split-speed component before accepting the result as a physical Auto-Z correction.
 
-```text
-largest accepted clean median alignment = 0.064167 mm
-RC limit                                = 0.120000 mm
-absolute headroom                       = 0.055833 mm
-limit / observed clean maximum          ≈ 1.87
-```
-
-This is deliberately much tighter than Z-Mod's current broad internal `abs(zdelta) < 0.31` acceptance for AutoZOffset. Z-Mod's value remains upstream behavior; Plugins AD5X RC adds the evidence-bound owner guard after that path.
-
-A delta at or beyond `0.120000 mm` is classified operationally as **hardware change suspected / full calibration required**, not as permission for a larger automatic correction.
-
-The value is an owner-RC policy for this hardware/mesh. It must be revisited after a nozzle/hotend/plate geometry change, a rebuilt accepted mesh, or contradictory field evidence.
+A residual at or beyond `0.050000 mm` is classified operationally as **hardware/measurement change suspected / calibration review required**, not as permission for a larger automatic correction. The bias and residual envelope must be revisited after nozzle/hotend/plate geometry changes or contradictory field evidence.
 
 ## 6. Offset ownership and rollback behavior
 
 For this RC path:
 
 - Z-Mod loads the owner's persistent global Z-offset;
-- Z-Mod performs its existing temporary AutoZOffset adjustment through ordinary Klipper `gcode_offset`;
-- Plugins AD5X does not perform an additional production motion or Z-offset write;
-- on policy rejection, the hook calls `LOAD_GCODE_OFFSET` before raising the abort so the persistent global baseline is restored and Z-Mod's temporary Auto-Z value is cleared;
-- on acceptance, Plugins AD5X adopts the already-effective Z-Mod state into its lifecycle/diagnostics without applying the Auto-Z a second time;
+- Z-Mod performs its native `_TEST_POINT` calculation and initially applies the raw `zdelta` through its own `_SET_GCODE_OFFSET_FAST`;
+- after a precision final probe, Plugins AD5X validates the split-speed residual and, once per new native result, calls that same Z-Mod `_SET_GCODE_OFFSET_FAST` helper with `Z_ADJUST=-expected_speed_bias`;
+- Plugins AD5X then rewrites Z-Mod's `_TEST_POINT.temp_z_offset` provenance value from the raw delta to the normalized residual, so runtime diagnostics and later saved-mesh checks describe the correction that is actually effective;
+- the persistent global Z value is not modified by this normalization; no direct Klipper `SET_GCODE_OFFSET` implementation or independent Plugins offset stack is introduced;
+- on policy rejection, the hook calls `LOAD_GCODE_OFFSET` before raising the abort so the persistent global baseline is restored and temporary Auto-Z state is cleared;
 - terminal print lifecycle still clears Plugins transient provenance state.
 
-Therefore the existing Plugins-owned production motion and write gates remain closed for RC v1. This is intentional: the owner RC delegates those physical operations to the already-proven Z-Mod path rather than pretending a new Plugins adapter has been accepted.
+Thus physical contact and the offset primitive remain Z-Mod-owned, while Plugins AD5X owns the policy-specific one-shot normalization of Z-Mod's raw split-speed result.
 
 ## 7. Fail-closed conditions
 
@@ -153,7 +146,7 @@ Unattended saved+check must abort when any guarded condition is true:
 
 - `MESH_TEST != 3`;
 - active mesh profile is not the accepted `auto` profile;
-- `abs(_TEST_POINT.temp_z_offset) >= 0.120000 mm`;
+- normalized split-speed Auto-Z residual is `>= 0.050000 mm` in absolute value;
 - the existing Plugins lifecycle hook/backend cannot complete its late adoption;
 - Z-Mod itself aborts its preceding nozzle-clean/contact/mesh check.
 
@@ -204,9 +197,9 @@ Those remain follow-on work and must not block validation of the narrow owner-us
 
 ## AD5X measurement policy validated 2026-08-25
 
-The release-candidate measurement policy is `adz-metrology-mesh5-median3-final05-median3-bias130-reuse-v3-20260825`: bed-mesh acquisition is a fast relative-shape scan at **5 mm/s**, **3** samples and **median**, while the final in-mesh reconciliation probe remains the precision absolute-Z measurement at **0.5 mm/s**, **3** samples and **median**. This split limits exposure of the relative mesh shape to the long slow-scan failure mode seen in first-layer acceptance. Time-domain drift and speed-dependent local mechanics remain hypotheses for that spatial error, not established root causes. The native edge-cleaning probe keeps Z-Mod's own probe defaults; its tare is reused for the immediately following final reconciliation probe during an active print. Plugins AD5X still delegates physical tare/probe/motion to Z-Mod.
+The release-candidate measurement policy is `adz-metrology-mesh5-median3-final05-median3-bias130-normalized-v4-20260825`: bed-mesh acquisition is a fast relative-shape scan at **5 mm/s**, **3** samples and **median**, while the final in-mesh reconciliation probe remains the precision absolute-Z measurement at **0.5 mm/s**, **3** samples and **median**. This split limits exposure of the relative mesh shape to the long slow-scan failure mode seen in first-layer acceptance. Time-domain drift and speed-dependent local mechanics remain hypotheses for that spatial error, not established root causes. The native edge-cleaning probe keeps Z-Mod's own probe defaults; its tare is reused for the immediately following final reconciliation probe during an active print. Plugins AD5X still delegates physical tare/probe/motion to Z-Mod.
 
-Split-speed hardware acceptance on 2026-08-25 measured a fast-mesh center of `-2.0125 mm` and a slow final reconciliation probe of `-1.8825 mm`, producing native Auto-Z `+0.1300 mm`. That raw delta is therefore treated as the policy-specific mesh-to-final speed bias, not as alignment error. The safety guard evaluates `residual = native Auto-Z - 0.1300 mm` and accepts only `|residual| < 0.0500 mm`; the full native Auto-Z value remains applied so the fast relative mesh is anchored to the slow absolute probe.
+Split-speed hardware acceptance on 2026-08-25 measured a fast-mesh center of `-2.0125 mm` and a slow final reconciliation probe of `-1.8825 mm`, producing raw native Auto-Z `+0.1300 mm`. A subsequent normal print produced fast center `-2.0050 mm`, slow final probe `-1.8900 mm`, and raw `+0.1150 mm`; leaving that raw value applied changed the persistent `-0.0560 mm` baseline to `+0.0590 mm`, which has the wrong physical direction for the observed under-squish. Exact Z-Mod source confirms `_TEST_POINT` applies `zdelta` via `_SET_GCODE_OFFSET_FAST Z_ADJUST={zdelta}`, and Fluidd maps positive Z adjustment to Z-up. The live-source baseline is `ghzserg/z_ad5x` branch `1.7`, commit `2e32155d00e464094b8c7197e23783ec821a112c` (version `1.7.2-5`); `translate/ru/base.cfg` is unchanged from that commit through the inspected current branch head. Therefore v4 subtracts the measured `+0.1300 mm` split-speed bias from the temporary runtime Auto-Z. For the latter run the normalized result is `-0.0150 mm`, yielding an expected effective offset near `-0.0710 mm` from the unchanged persistent `-0.0560 mm`. The safety guard accepts only `|normalized residual| < 0.0500 mm`.
 
 First-layer acceptance on 2026-08-25 rejected the all-slow mesh policy: the 80x80 layer was spatially non-uniform, with adjacent lines locally under-squished by roughly 0.02-0.03 mm. The slow 5x5 scan and the prior saved map had almost zero mean shift but local point differences spanning about 0.073 mm. This proves the all-slow policy is unsuitable for mesh shape even though center reconciliation remained repeatable.
 
