@@ -4,6 +4,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = (ROOT / "z_calibration_rc_policy.cfg").read_text(encoding="utf-8")
 PRODUCT = (ROOT / "installer" / "z_calibration_productization.py").read_text(encoding="utf-8")
+RUNTIME = (ROOT / "installer" / "z_calibration_runtime.sh").read_text(encoding="utf-8")
 MEASUREMENT_ID = "adz-metrology-s05-median3-reuse-v1-20260824"
 
 class MetrologyPolicyTests(unittest.TestCase):
@@ -38,6 +39,7 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("persistent_match", block)
         self.assertIn("fresh_match", block)
         self.assertIn("fresh_context", block)
+        self.assertIn("measurement.fresh_mesh_built", block)
         self.assertIn('state == "printing" and armed == 1 and inside_mesh', block)
         self.assertIn("final_probe_armed VALUE=1", block)
         self.assertIn("_ADZ_RC_ABORT_MESH_POLICY", block)
@@ -48,7 +50,7 @@ class MetrologyPolicyTests(unittest.TestCase):
         tare_block = POLICY[tare_start:tare_end]
         self.assertIn('active_profile != "" and y <', tare_block)
         self.assertIn("force_kamp == True or force_leveling == True", tare_block)
-        self.assertIn("active_profile != \"\" and fresh_context", tare_block)
+        self.assertIn("measurement.fresh_mesh_built|int == 1 or fresh_context", tare_block)
 
         saved_start = POLICY.index("[gcode_macro _ADZ_SAVED_CHECK_POLICY]")
         saved_end = POLICY.index("[gcode_macro _ADZ_ACTION_CONTRACT]", saved_start)
@@ -73,6 +75,20 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("stored_profile == active_profile", block)
         self.assertIn("stored_points == active_points", block)
         self.assertLess(block.index("not mesh_policy_match"), block.index("auto_alignment|abs"))
+
+    def test_real_print_time_mesh_build_sets_transient_fresh_proof(self):
+        start = POLICY.index("[gcode_macro _BED_MESH_CALIBRATE]")
+        end = POLICY.index("[gcode_macro PROBE]", start)
+        block = POLICY[start:end]
+        self.assertIn('printer.print_stats.state|default("unknown")|string == "printing"', block)
+        self.assertLess(block.index("fresh_mesh_built VALUE=0"), block.index("_ADZ_BED_MESH_CALIBRATE_BASE {rawparams}"))
+        self.assertGreater(block.index("fresh_mesh_built VALUE=1"), block.index("_ADZ_BED_MESH_CALIBRATE_BASE {rawparams}"))
+
+    def test_live_verifier_queries_runtime_macro_variables(self):
+        self.assertIn("gcode_macro%20_ADZ_MEASUREMENT_POLICY", RUNTIME)
+        self.assertIn("gcode_macro%20LOAD_CELL_TARE", RUNTIME)
+        self.assertIn('status.get("gcode_macro _ADZ_MEASUREMENT_POLICY", {})', PRODUCT)
+        self.assertIn('status.get("gcode_macro LOAD_CELL_TARE", {})', PRODUCT)
 
     def test_productizer_owns_and_invalidates_mesh_fingerprint(self):
         self.assertIn(f'MEASUREMENT_POLICY_ID = "{MEASUREMENT_ID}"', PRODUCT)

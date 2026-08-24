@@ -235,7 +235,7 @@ zcal_rc_uninstall(){
 
 zcal_rc_query_live_policy(){
     ad5x_http_get 5 \
-        "$MOONRAKER_HTTP_BASE/printer/objects/query?configfile&save_variables&gcode_macro%20_AD5X_Z_SAVED_CHECK_POLICY" \
+        "$MOONRAKER_HTTP_BASE/printer/objects/query?configfile&save_variables&gcode_macro%20_AD5X_Z_SAVED_CHECK_POLICY&gcode_macro%20_ADZ_MEASUREMENT_POLICY&gcode_macro%20LOAD_CELL_TARE" \
         2>/dev/null
 }
 

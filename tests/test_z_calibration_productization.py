@@ -36,14 +36,16 @@ def live_payload(commands: list[str], *, mesh_test: int = 2, cc_enabled: int | N
     if prime_delegate is not None: variables[product.PRIME_DELEGATE_VARIABLE] = prime_delegate
     settings = {"gcode_macro _user_start_print": {"gcode": "\n".join(commands)}}
     if policy:
-        settings["gcode_macro _adz_prime_gate"] = {"fresh_finalized": 0}
-        settings["gcode_macro _adz_measurement_policy"] = {"policy_id": product.MEASUREMENT_POLICY_ID, "probe_speed": 0.5, "probe_samples": 3, "probe_result": "median", "final_probe_armed": 0}
-        settings["gcode_macro load_cell_tare"] = {"adz_reuse_armed": 0}
+        settings["gcode_macro _adz_prime_gate"] = {"variable_fresh_finalized": "0"}
+        settings["gcode_macro _adz_measurement_policy"] = {"variable_policy_id": f'"{product.MEASUREMENT_POLICY_ID}"', "variable_probe_speed": "0.5", "variable_probe_samples": "3", "variable_probe_result": '"median"', "variable_final_probe_armed": "0", "variable_fresh_mesh_built": "0"}
+        settings["gcode_macro load_cell_tare"] = {"variable_adz_reuse_armed": "0"}
         settings["gcode_macro _bed_mesh_calibrate"] = {"rename_existing": "_ADZ_BED_MESH_CALIBRATE_BASE"}
         settings["gcode_macro probe"] = {"rename_existing": "_ADZ_PROBE_BASE"}
     status = {"configfile": {"settings": settings}, "save_variables": {"variables": variables}}
     if policy:
         status["gcode_macro _AD5X_Z_SAVED_CHECK_POLICY"] = {"policy_id": product.POLICY_ID, "max_auto_alignment": product.POLICY_MAX_AUTO}
+        status["gcode_macro _ADZ_MEASUREMENT_POLICY"] = {"policy_id": product.MEASUREMENT_POLICY_ID, "probe_speed": 0.5, "probe_samples": 3, "probe_result": "median", "final_probe_armed": 0, "fresh_mesh_built": 0}
+        status["gcode_macro LOAD_CELL_TARE"] = {"adz_reuse_armed": 0}
     return json.dumps({"result": {"status": status}})
 
 
