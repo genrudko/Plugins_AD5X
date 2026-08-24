@@ -235,6 +235,30 @@ run_moonraker_transition fake_transition fake_verify
             )
             self.assertEqual(ready.returncode, 0, ready.stderr)
 
+    def test_klipper_include_reconcile_preserves_zcal_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            includes = tmp / "plugins.cfg"
+            zcal = "[include ad5x_custom/generated/zcal_owner_rc.cfg]"
+            includes.write_text(
+                zcal + "\n"
+                "[include plugins/ad5x_custom/ad5x_custom.cfg]\n"
+                "[include ad5x_custom/generated/notify.cfg]\n"
+                "[include ad5x_custom/generated/timelapse.cfg]\n"
+                "[include plugins/notify/ru/notify.cfg]\n"
+                "[include plugins/timelapse/timelapse.cfg]\n",
+                encoding="utf-8",
+            )
+            result = self.run_shell("reconcile_klipper_plugin_includes", tmp, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = includes.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines.count(zcal), 1)
+            self.assertEqual(lines.count("[include plugins/ad5x_custom/ad5x_custom.cfg]"), 1)
+            self.assertEqual(lines.count("[include ad5x_custom/generated/notify.cfg]"), 1)
+            self.assertEqual(lines.count("[include ad5x_custom/generated/timelapse.cfg]"), 1)
+            self.assertNotIn("[include plugins/notify/ru/notify.cfg]", lines)
+            self.assertNotIn("[include plugins/timelapse/timelapse.cfg]", lines)
+
     def test_update_hook_never_self_restarts_moonraker(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
         start = text.index('if [ "$MODE" = --update-hook ]; then')

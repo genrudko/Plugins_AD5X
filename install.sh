@@ -60,6 +60,12 @@ find_root(){
 }
 remove_lines(){ F="$1"; P="$2"; [ -f "$F" ] || : >"$F"; grep -Ev "$P" "$F" >"$F.tmp" 2>/dev/null || true; mv "$F.tmp" "$F"; }
 append_line(){ F="$1"; L="$2"; [ -f "$F" ] || : >"$F"; grep -Fqx "$L" "$F" 2>/dev/null || echo "$L" >>"$F"; }
+reconcile_klipper_plugin_includes(){
+    remove_lines "$KLIPPER_INCLUDES" 'plugins/ad5x_custom/ad5x_custom\.cfg|ad5x_custom/generated/(notify|timelapse)\.cfg|plugins/notify/.*/notify\.cfg|plugins/timelapse/timelapse\.cfg'
+    append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.cfg]'
+    append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/notify.cfg]'
+    append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/timelapse.cfg]'
+}
 backup(){ [ -f "$1" ] && cp -p "$1" "$2/${1##*/}" || true; }
 snapshot(){
     FILE="$1"; KEY="$2"
@@ -635,10 +641,7 @@ if [ "$MODE" = --update-hook ]; then
     validate_klipper_bridge_source
     validate_klipper_bridge_destination_ownership
     generate_configs
-    remove_lines "$KLIPPER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/'
-    append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.cfg]'
-    append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/notify.cfg]'
-    append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/timelapse.cfg]'
+    reconcile_klipper_plugin_includes
     deploy_klipper_bridge_plugin_link || fail 'IFS Klipper bridge re-link failed'
     configure_moonraker_includes
     deploy_backend_plugin_links || fail 'Moonraker plugin re-link failed'
@@ -875,10 +878,7 @@ for S in notify:/opt/config/mod_data/plugins/notify timelapse:/opt/config/mod_da
 generate_configs
 
 save_lines "$KLIPPER_INCLUDES" 'plugins/notify/.*/notify\.cfg|plugins/timelapse/timelapse\.cfg' "$STATE/original-klipper-includes.lines"
-remove_lines "$KLIPPER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/|plugins/notify/.*/notify\.cfg|plugins/timelapse/timelapse\.cfg'
-append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.cfg]'
-append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/notify.cfg]'
-append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/timelapse.cfg]'
+reconcile_klipper_plugin_includes
 
 deploy_klipper_bridge_plugin_link || fail 'IFS Klipper bridge deployment failed'
 install_power_on_hook
