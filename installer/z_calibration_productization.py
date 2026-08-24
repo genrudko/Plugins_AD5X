@@ -42,7 +42,7 @@ POLICY_ID = _impl.POLICY_ID
 POLICY_MAX_AUTO = _impl.POLICY_MAX_AUTO
 PRIME_GATE = "_ADZ_PRIME_GATE"
 PRIME_DELEGATE_VARIABLE = "adz_prime_delegate"
-MEASUREMENT_POLICY_ID = "adz-metrology-s05-median3-reuse-v1-20260824"
+MEASUREMENT_POLICY_ID = "adz-metrology-mesh5-median3-final05-median3-reuse-v2-20260825"
 MESH_POLICY_VARIABLE = "adz_mesh_policy"
 MESH_PROFILE_VARIABLE = "adz_mesh_profile"
 MESH_POINTS_VARIABLE = "adz_mesh_points"
@@ -276,13 +276,19 @@ def verify_live(live_payload: str, state_dir: Path) -> None:
     if measurement.get("policy_id") != MEASUREMENT_POLICY_ID: raise ProductizationError("ZCAL measurement policy identity missing/mismatched")
     tare = status.get("gcode_macro LOAD_CELL_TARE", {})
     if "adz_reuse_armed" not in tare: raise ProductizationError("ZCAL LOAD_CELL_TARE policy wrapper is not loaded")
-    if abs(float(measurement.get("probe_speed", -1.0)) - 0.5) > 1e-12: raise ProductizationError("ZCAL precision probe speed mismatch")
-    if int(measurement.get("probe_samples", -1)) != 3: raise ProductizationError("ZCAL precision probe sample-count mismatch")
-    if str(measurement.get("probe_result", "")).lower() != "median": raise ProductizationError("ZCAL precision probe estimator mismatch")
+    if abs(float(measurement.get("mesh_probe_speed", -1.0)) - 5.0) > 1e-12: raise ProductizationError("ZCAL mesh probe speed mismatch")
+    if int(measurement.get("mesh_probe_samples", -1)) != 3: raise ProductizationError("ZCAL mesh probe sample-count mismatch")
+    if str(measurement.get("mesh_probe_result", "")).lower() != "median": raise ProductizationError("ZCAL mesh probe estimator mismatch")
+    if abs(float(measurement.get("final_probe_speed", -1.0)) - 0.5) > 1e-12: raise ProductizationError("ZCAL final probe speed mismatch")
+    if int(measurement.get("final_probe_samples", -1)) != 3: raise ProductizationError("ZCAL final probe sample-count mismatch")
+    if str(measurement.get("final_probe_result", "")).lower() != "median": raise ProductizationError("ZCAL final probe estimator mismatch")
     if "final_probe_armed" not in measurement: raise ProductizationError("ZCAL precision one-shot state missing")
     if "fresh_mesh_built" not in measurement: raise ProductizationError("ZCAL fresh-mesh proof state missing")
+    if "fresh_native_check_done" not in measurement: raise ProductizationError("ZCAL native fresh-check proof state missing")
     mesh_adapter = normalized.get("gcode_macro _bed_mesh_calibrate", {})
     if mesh_adapter.get("rename_existing") != "_ADZ_BED_MESH_CALIBRATE_BASE": raise ProductizationError("ZCAL bed-mesh precision adapter is not loaded")
+    mesh_test_adapter = normalized.get("gcode_macro _mesh_test", {})
+    if mesh_test_adapter.get("rename_existing") != "_ADZ_MESH_TEST_BASE": raise ProductizationError("ZCAL native mesh-test completion adapter is not loaded")
     probe_adapter = normalized.get("gcode_macro probe", {})
     if probe_adapter.get("rename_existing") != "_ADZ_PROBE_BASE": raise ProductizationError("ZCAL final-probe precision adapter is not loaded")
     if manifest.get("measurement_policy_id") != MEASUREMENT_POLICY_ID: raise ProductizationError("ZCAL productization measurement policy provenance mismatch")
