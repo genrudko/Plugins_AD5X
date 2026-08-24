@@ -312,6 +312,8 @@ First-party adapters use each host UI's native navigation/cards/dialogs/notifica
 
 A stable compatibility projection consumed by a UI's own native components is also a valid native integration strategy when the contract is source-verified and does not require faking unsupported AD5X semantics.
 
+For Mainsail, the official Happy Hare `mmu` object is not a safe read-only projection: its presence enables native `MMU_*` mapping, selection, recovery and maintenance paths. Plugins AD5X must not emulate `mmu`/`mmu_machine`. Mainsail theme navigation provides external `href` links only, so native semantic parity requires a small adapter/fork consuming the normalized Plugins AD5X backend directly.
+
 ## 16. Resource policy
 
 - no heavy background daemon;

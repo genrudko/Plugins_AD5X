@@ -308,7 +308,7 @@ Must receive a full native manager/dashboard/pre-print experience or use a sourc
 
 ### Mainsail
 
-Must reach semantic parity with Fluidd while following Mainsail's native presentation conventions.
+Must reach semantic parity with Fluidd while following Mainsail's native presentation conventions. Source verification against official Mainsail `develop@cce05e4958765b224c4b6c56b21dc76f31216626` rejects a synthetic Happy Hare `mmu` compatibility object: Mainsail treats it as an actionable MMU command surface, not a read-only visualization contract. `.theme/navi.json` is link-only and cannot inject a route/component. First-party parity therefore requires a small native Mainsail adapter/fork consuming the shared Plugins AD5X backend directly. See `docs/IFS_MAINSAIL_INTEGRATION_DISCOVERY_2026-08-24.md`.
 
 ### HelixScreen
 
