@@ -152,6 +152,10 @@ The read-only mapping-draft endpoint may accept an explicit `leveling` value and
 
 `launch_gate` exposes a read-only `hardware_acceptance` object. Until exact-SHA real-AD5X evidence exists it is always `required=true`, `accepted=false`, `reason=hardware_acceptance_required`, and `exact_sha_required=true`. The semantic launch candidate may still be structurally ready, but write/start capabilities remain disabled.
 
+### 9.5 Frontend-neutral launch prepare/revalidation
+
+`/server/plugins_ad5x/ifs/job/launch/prepare` is a read-only pre-execution handshake. It accepts `filename`, the prior provider `preview_token`, the validated `draft_token`, the complete `resolved_tool_map`, and explicit `leveling`. It reruns only `ADIFS_JOB_PREVIEW`, rejects stale preview/draft tokens, rebuilds the live physical plan/gate, and returns the inert `PRINT_ZCOLOR` provider plan. It never executes `PRINT_ZCOLOR`, never applies mapping, and leaves `start_job=false`.
+
 ## 10. Avoiding duplicate pre-print dialogs
 
 A native Fluidd mapping dialog cannot simply run before the ordinary Moonraker print endpoint and then call that endpoint unchanged, because `SET_ZCOLOR` would open the provider mapping flow again.

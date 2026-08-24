@@ -201,6 +201,7 @@ def get_ifs_capabilities() -> Dict[str, Any]:
             "recovery": False,
             "manage": True,
             "preview_job": True,
+            "prepare_job_launch": True,
             "start_job": False,
         },
         "metadata_schema": metadata_schema,

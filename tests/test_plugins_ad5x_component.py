@@ -113,6 +113,7 @@ class PluginsAD5XComponentTests(unittest.TestCase):
                 component_module.IFS_METADATA_ENDPOINT,
                 component_module.IFS_JOB_PREVIEW_ENDPOINT,
                 component_module.IFS_JOB_MAPPING_DRAFT_ENDPOINT,
+                component_module.IFS_JOB_LAUNCH_PREPARE_ENDPOINT,
                 component_module.IFS_SPOOLMAN_STATUS_ENDPOINT,
                 component_module.IFS_SPOOLMAN_LIBRARY_ENDPOINT,
                 component_module.IFS_SPOOLMAN_BIND_ENDPOINT,
@@ -129,6 +130,8 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertEqual(metadata["request_types"], RequestType.POST)
         preview = endpoints[component_module.IFS_JOB_PREVIEW_ENDPOINT]
         self.assertEqual(preview["request_types"], RequestType.POST)
+        prepare = endpoints[component_module.IFS_JOB_LAUNCH_PREPARE_ENDPOINT]
+        self.assertEqual(prepare["request_types"], RequestType.POST)
 
         self.assertEqual(endpoints[component_module.IFS_SPOOLMAN_STATUS_ENDPOINT]["request_types"], RequestType.GET)
         self.assertEqual(endpoints[component_module.IFS_SPOOLMAN_LIBRARY_ENDPOINT]["request_types"], RequestType.GET)
@@ -149,10 +152,12 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         action_rpc = action["endpoint"].strip("/").replace("/", ".")
         metadata_rpc = metadata["endpoint"].strip("/").replace("/", ".")
         preview_rpc = preview["endpoint"].strip("/").replace("/", ".")
+        prepare_rpc = prepare["endpoint"].strip("/").replace("/", ".")
         self.assertEqual(snapshot_rpc, "server.plugins_ad5x.snapshot")
         self.assertEqual(action_rpc, "server.plugins_ad5x.ifs.action")
         self.assertEqual(metadata_rpc, "server.plugins_ad5x.ifs.metadata")
         self.assertEqual(preview_rpc, "server.plugins_ad5x.ifs.job.preview")
+        self.assertEqual(prepare_rpc, "server.plugins_ad5x.ifs.job.launch.prepare")
 
     def test_notification_registration_contract(self) -> None:
         self.assertEqual(

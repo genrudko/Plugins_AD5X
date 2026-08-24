@@ -99,6 +99,7 @@ IFS_ACTION_ENDPOINT = "/server/plugins_ad5x/ifs/action"
 IFS_METADATA_ENDPOINT = "/server/plugins_ad5x/ifs/metadata"
 IFS_JOB_PREVIEW_ENDPOINT = "/server/plugins_ad5x/ifs/job/preview"
 IFS_JOB_MAPPING_DRAFT_ENDPOINT = "/server/plugins_ad5x/ifs/job/mapping/draft"
+IFS_JOB_LAUNCH_PREPARE_ENDPOINT = "/server/plugins_ad5x/ifs/job/launch/prepare"
 IFS_SPOOLMAN_STATUS_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/status"
 IFS_SPOOLMAN_LIBRARY_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/library"
 IFS_SPOOLMAN_BIND_ENDPOINT = "/server/plugins_ad5x/ifs/spoolman/bind"
@@ -184,6 +185,13 @@ class PluginsAD5X:
             IFS_JOB_MAPPING_DRAFT_ENDPOINT,
             RequestType.POST,
             self._handle_ifs_job_mapping_draft,
+            transports=TransportType.HTTP | TransportType.WEBSOCKET,
+            auth_required=True,
+        )
+        self.server.register_endpoint(
+            IFS_JOB_LAUNCH_PREPARE_ENDPOINT,
+            RequestType.POST,
+            self._handle_ifs_job_launch_prepare,
             transports=TransportType.HTTP | TransportType.WEBSOCKET,
             auth_required=True,
         )
@@ -1451,6 +1459,47 @@ class PluginsAD5X:
             "launch_gate": gate,
             "snapshot": self.get_snapshot(),
         }
+
+    async def _handle_ifs_job_launch_prepare(self, web_request: Any) -> Dict[str, Any]:
+        """Freshly revalidate a launch candidate without executing PRINT_ZCOLOR."""
+        try:
+            filename = web_request.get_str("filename").strip()
+            preview_token = web_request.get_str("preview_token").strip()
+            draft_token = web_request.get_str("draft_token").strip()
+            resolved_tool_map = web_request.get("resolved_tool_map", None)
+            provider_leveling = web_request.get("leveling", None)
+        except Exception as exc:
+            return {"ok": False, "revalidated": False, "error": f"Invalid IFS launch prepare request: {exc}", "snapshot": self.get_snapshot()}
+
+        fresh = await self._handle_ifs_job_preview(web_request)
+        if not fresh.get("ok", False):
+            return {"ok": False, "revalidated": False, "filename": filename, "error": fresh.get("error") or "job_preview_failed", "snapshot": self.get_snapshot()}
+
+        module = self._ifs_module if isinstance(self._ifs_module, dict) else {}
+        preview = fresh.get("job_preview")
+        preview = preview if isinstance(preview, dict) else {}
+        draft = build_job_mapping_draft(preview, resolved_tool_map, expected_preview_token=preview_token)
+        if draft.get("status") != "ready":
+            return {"ok": False, "revalidated": True, "filename": filename, "error": ",".join(draft.get("blockers") or ["invalid_mapping_draft"]), "mapping_draft": draft, "snapshot": self.get_snapshot()}
+        if not draft_token or draft.get("draft_token") != draft_token:
+            draft = dict(draft)
+            blockers = list(draft.get("blockers") or [])
+            if "stale_draft" not in blockers:
+                blockers.append("stale_draft")
+            draft["status"] = "blocked"
+            draft["blockers"] = blockers
+            return {"ok": False, "revalidated": True, "filename": filename, "error": "stale_draft", "mapping_draft": draft, "snapshot": self.get_snapshot()}
+
+        effective_preview = dict(preview)
+        effective_preview["assignments"] = list(draft["assignments"])
+        effective_preview["resolved_tool_map"] = list(draft["resolved_tool_map"])
+        effective_preview["auto_assign"] = {"flags": 0, "any_success": True, "material_failure": False, "color_failure": False, "weak_color": False, "duplicate_slot": False}
+        plan = build_preprint_plan(effective_preview, module.get("slots") if isinstance(module.get("slots"), list) else [])
+        gate = build_job_launch_gate(effective_preview, plan, module_state=module.get("state") if isinstance(module.get("state"), str) else "unknown", print_state=self._print_state, operation_state=self._operation_state, provider_leveling=provider_leveling)
+        gate["mapping_source"] = "manual"
+        gate["provider_preview_token"] = draft["preview_token"]
+        gate["draft_token"] = draft["draft_token"]
+        return {"ok": True, "revalidated": True, "filename": filename, "mapping_draft": draft, "preprint_plan": plan, "launch_gate": gate, "snapshot": self.get_snapshot()}
 
     async def _refresh_live_after_action(self, klippy_apis: Any) -> None:
         objects: Dict[str, Any] = {
