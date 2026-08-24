@@ -287,8 +287,6 @@ def verify_live(live_payload: str, state_dir: Path) -> None:
     if "fresh_native_check_done" not in measurement: raise ProductizationError("ZCAL native fresh-check proof state missing")
     mesh_adapter = normalized.get("gcode_macro _bed_mesh_calibrate", {})
     if mesh_adapter.get("rename_existing") != "_ADZ_BED_MESH_CALIBRATE_BASE": raise ProductizationError("ZCAL bed-mesh precision adapter is not loaded")
-    mesh_test_adapter = normalized.get("gcode_macro _mesh_test", {})
-    if mesh_test_adapter.get("rename_existing") != "_ADZ_MESH_TEST_BASE": raise ProductizationError("ZCAL native mesh-test completion adapter is not loaded")
     probe_adapter = normalized.get("gcode_macro probe", {})
     if probe_adapter.get("rename_existing") != "_ADZ_PROBE_BASE": raise ProductizationError("ZCAL final-probe precision adapter is not loaded")
     if manifest.get("measurement_policy_id") != MEASUREMENT_POLICY_ID: raise ProductizationError("ZCAL productization measurement policy provenance mismatch")

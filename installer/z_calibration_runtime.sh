@@ -303,7 +303,15 @@ zcal_rc_firmware_restart(){
     zcal_rc_wait_klippy_connected || return 1
     ad5x_http_post 10 \
         "$MOONRAKER_HTTP_BASE/printer/firmware_restart" >/dev/null 2>&1 || return 1
-    wait_klippy_ready
+    # Moonraker may briefly expose the pre-restart ready state after the POST
+    # returns. Do not accept that stale sample as proof that the new Klipper
+    # config loaded. Give Klippy time to enter its restart transition, then
+    # require ready and confirm it once more after a short stability interval.
+    sleep 2
+    wait_klippy_ready || return 1
+    sleep 1
+    INFO="$(moonraker_server_info 2>/dev/null || true)"
+    [ -n "$INFO" ] && klippy_ready_from_json "$INFO"
 }
 
 # Override the generic transition only after this helper is sourced. A

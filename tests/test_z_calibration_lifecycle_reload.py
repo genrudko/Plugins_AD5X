@@ -20,6 +20,17 @@ class ZCalibrationReloadShellContractTests(unittest.TestCase):
         self.assertIn("wait_klippy_ready", self.helper)
         self.assertNotIn("S65moonraker restart", self.helper)
 
+    def test_firmware_restart_rejects_stale_pre_restart_ready_sample(self) -> None:
+        start = self.helper.index("zcal_rc_firmware_restart(){")
+        end = self.helper.index("run_moonraker_transition(){", start)
+        body = self.helper[start:end]
+        post = body.index("/printer/firmware_restart")
+        settle = body.index("sleep 2", post)
+        wait = body.index("wait_klippy_ready || return 1", settle)
+        confirm_delay = body.index("sleep 1", wait)
+        confirm = body.index("klippy_ready_from_json", confirm_delay)
+        self.assertEqual([post, settle, wait, confirm_delay, confirm], sorted([post, settle, wait, confirm_delay, confirm]))
+
     def test_generic_moonraker_transition_is_overridden_with_klipper_reload(self) -> None:
         start = self.helper.index("run_moonraker_transition(){")
         end = self.helper.index("restore_moonraker_after_rollback(){", start)

@@ -90,13 +90,15 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("fresh_native_check_done VALUE=0", block)
         self.assertGreater(block.index("fresh_mesh_built VALUE=1"), block.index("_ADZ_BED_MESH_CALIBRATE_BASE {rawparams}"))
 
-    def test_native_mesh_test_completion_is_tracked_without_repeating_check(self):
-        start = POLICY.index("[gcode_macro _MESH_TEST]")
-        end = POLICY.index("[gcode_macro PROBE]", start)
+    def test_native_completion_is_recorded_by_existing_probe_adapter(self):
+        self.assertNotIn("[gcode_macro _MESH_TEST]\nrename_existing:", POLICY)
+        start = POLICY.index("[gcode_macro PROBE]")
+        end = POLICY.index("[gcode_macro _ADZ_RC_ABORT_MESH_POLICY]", start)
         block = POLICY[start:end]
-        self.assertIn("rename_existing: _ADZ_MESH_TEST_BASE", block)
-        self.assertIn("_ADZ_MESH_TEST_BASE {rawparams}", block)
+        self.assertIn("final_match", block)
+        self.assertIn("fresh_mesh_built", block)
         self.assertIn("fresh_native_check_done VALUE=1", block)
+        self.assertLess(block.index("_ADZ_PROBE_BASE {rawparams} PROBE_SPEED"), block.index("fresh_native_check_done VALUE=1"))
 
     def test_live_verifier_queries_runtime_macro_variables(self):
         self.assertIn("gcode_macro%20_ADZ_MEASUREMENT_POLICY", RUNTIME)
