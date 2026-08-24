@@ -153,6 +153,7 @@ READY = {
 }
 
 HEAD = "filament_switch_sensor head_switch_sensor"
+SAVE_VARIABLES = "save_variables"
 
 
 def live_initial(print_state="standby", head=True):
@@ -214,6 +215,34 @@ class PluginsAD5XIFSBackendTests(unittest.TestCase):
             server.endpoints[component_module.IFS_ACTION_ENDPOINT][0], RequestType.POST
         )
         self.assertFalse(hasattr(server, "timer"))
+
+    def test_provider_print_leveling_is_read_only_optional_snapshot_state(self):
+        initial = live_initial()
+        initial[SAVE_VARIABLES] = {"variables": {"print_leveling": 1}}
+        component, server, api = self.make_component(objects=["ad5x_ifs", HEAD, SAVE_VARIABLES], initial=initial)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        self.assertEqual(api.subscription[SAVE_VARIABLES], ["variables"])
+        settings = component.get_snapshot()["modules"]["ifs"]["provider"]["settings"]
+        self.assertEqual(settings["print_leveling"], 1)
+        self.assertTrue(settings["print_leveling_known"])
+        self.assertEqual(settings["source"], "save_variables")
+        self.assertTrue(settings["read_only"])
+        self.assertEqual(api.gcodes, [])
+
+    def test_provider_print_leveling_updates_fail_soft_without_write(self):
+        initial = live_initial()
+        initial[SAVE_VARIABLES] = {"variables": {"print_leveling": 0}}
+        component, server, api = self.make_component(objects=["ad5x_ifs", HEAD, SAVE_VARIABLES], initial=initial)
+        asyncio.run(server.handlers["server:klippy_ready"]())
+        asyncio.run(component._on_status_update({SAVE_VARIABLES: {"variables": {"print_leveling": 1}}}, 1.0))
+        settings = component.get_snapshot()["modules"]["ifs"]["provider"]["settings"]
+        self.assertEqual(settings["print_leveling"], 1)
+        self.assertTrue(settings["print_leveling_known"])
+        asyncio.run(component._on_status_update({SAVE_VARIABLES: {"variables": {"print_leveling": 2}}}, 2.0))
+        settings = component.get_snapshot()["modules"]["ifs"]["provider"]["settings"]
+        self.assertIsNone(settings["print_leveling"])
+        self.assertFalse(settings["print_leveling_known"])
+        self.assertEqual(api.gcodes, [])
 
     def test_spoolman_is_optional_and_absent_does_not_reduce_ifs(self):
         component, server, _api = self.make_live_component(spoolman=None)

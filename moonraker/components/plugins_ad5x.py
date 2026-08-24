@@ -109,6 +109,7 @@ SNAPSHOT_CHANGED_NOTIFY_NAME = "plugins_ad5x_snapshot_changed"
 IFS_OBJECT = "ad5x_ifs"
 PRINT_STATS_OBJECT = "print_stats"
 HEAD_SENSOR_OBJECT = "filament_switch_sensor head_switch_sensor"
+SAVE_VARIABLES_OBJECT = "save_variables"
 
 FFCONFIG_PATH = "/usr/prog/config/Adventurer5M.json"
 FILE_MAPPING_PATH = "/usr/data/config/mod_data/file.json"
@@ -135,6 +136,7 @@ class PluginsAD5X:
         self._ifs_module = None
         self._print_state = "unknown"
         self._head_filament = None
+        self._provider_print_leveling = None
         self._operation_state = "idle"
         self._operation_action = ""
         self._operation_slot = 0
@@ -385,6 +387,10 @@ class PluginsAD5X:
         module["interoperability"] = interoperability
         spoolman_status = self._spoolman_status(module)
         module["spoolman"] = spoolman_status
+        provider = module.get("provider")
+        provider = dict(provider) if isinstance(provider, dict) else {"name": "zmod"}
+        provider["settings"] = {"print_leveling": self._provider_print_leveling, "print_leveling_known": self._provider_print_leveling in (0, 1), "source": "save_variables", "read_only": True}
+        module["provider"] = provider
 
         capabilities = module.get("capabilities")
         if isinstance(capabilities, dict):
@@ -594,6 +600,16 @@ class PluginsAD5X:
             normalized = bool(detected) if enabled and isinstance(detected, bool) else None
             if normalized != self._head_filament:
                 self._head_filament = normalized
+                changed = True
+
+        save_variables = status.get(SAVE_VARIABLES_OBJECT)
+        if isinstance(save_variables, dict):
+            variables = save_variables.get("variables")
+            variables = variables if isinstance(variables, dict) else {}
+            raw_leveling = variables.get("print_leveling")
+            normalized_leveling = raw_leveling if isinstance(raw_leveling, int) and not isinstance(raw_leveling, bool) and raw_leveling in (0, 1) else None
+            if normalized_leveling != self._provider_print_leveling:
+                self._provider_print_leveling = normalized_leveling
                 changed = True
         return changed
 
@@ -1517,6 +1533,8 @@ class PluginsAD5X:
         }
         if HEAD_SENSOR_OBJECT in objects:
             subscription[HEAD_SENSOR_OBJECT] = ["enabled", "filament_detected"]
+        if SAVE_VARIABLES_OBJECT in objects:
+            subscription[SAVE_VARIABLES_OBJECT] = ["variables"]
 
         try:
             initial = await klippy_apis.subscribe_objects(
@@ -1589,6 +1607,7 @@ class PluginsAD5X:
         self._ifs_raw.clear()
         self._print_state = "unknown"
         self._head_filament = None
+        self._provider_print_leveling = None
         self._operation_state = "idle"
         self._operation_action = ""
         self._operation_slot = 0

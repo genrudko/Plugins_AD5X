@@ -138,6 +138,12 @@ Reverified against `ghzserg/z_ad5x` branch `1.7` at `da8c94c9edd6b16253fed7e0e35
 
 Plugins AD5X may therefore prepare a structured, non-executing provider plan from a validated preview/draft. The plan must preserve the complete `T0..Tn` vector and must not guess `LEVELING`; until an explicit caller supplies `0` or `1`, it remains a required parameter. The plan is evidence/contract data only: `execution_enabled=false`, `start_job=false`, and `apply_preprint_mapping=false` remain unchanged until controlled real-AD5X acceptance.
 
+### 9.2 Provider-owned leveling default
+
+Z-Mod persists the last/default leveling choice in `save_variables.variables.print_leveling`. Plugins AD5X may expose that value read-only when Klipper publishes the optional `save_variables` object. Only `0` or `1` is valid; missing or malformed state remains unknown and must not degrade IFS availability.
+
+This reflected setting is a UI default/source hint, not implicit launch consent. The inert `provider_launch_plan` still requires explicit `LEVELING`; Plugins AD5X does not write `print_leveling` or other Z-Mod save variables.
+
 ## 10. Avoiding duplicate pre-print dialogs
 
 A native Fluidd mapping dialog cannot simply run before the ordinary Moonraker print endpoint and then call that endpoint unchanged, because `SET_ZCOLOR` would open the provider mapping flow again.
