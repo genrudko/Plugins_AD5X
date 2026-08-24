@@ -798,6 +798,13 @@ def build_job_launch_gate(
             block("provider_launch_plan_incomplete")
 
     candidate = not blockers
+    hardware_acceptance = {
+        "required": True,
+        "accepted": False,
+        "reason": "hardware_acceptance_required",
+        "exact_sha_required": True,
+    }
+    block(hardware_acceptance["reason"])
     block("launch_write_not_enabled")
     return {
         "candidate": candidate,
@@ -807,6 +814,7 @@ def build_job_launch_gate(
         "plan_status": plan_status,
         "blockers": blockers,
         "warnings": warnings,
+        "hardware_acceptance": hardware_acceptance,
         "provider_launch_plan": provider_launch_plan,
     }
 

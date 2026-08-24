@@ -148,6 +148,10 @@ This reflected setting is a UI default/source hint, not implicit launch consent.
 
 The read-only mapping-draft endpoint may accept an explicit `leveling` value and use it only to materialize the inert `provider_launch_plan`. A valid `0|1` makes that provider plan structurally complete; invalid values block the launch candidate. This remains a dry-run: the endpoint emits no G-code and `execution_enabled`, `start_job`, and mapping write capabilities stay false.
 
+### 9.4 Explicit hardware-acceptance gate
+
+`launch_gate` exposes a read-only `hardware_acceptance` object. Until exact-SHA real-AD5X evidence exists it is always `required=true`, `accepted=false`, `reason=hardware_acceptance_required`, and `exact_sha_required=true`. The semantic launch candidate may still be structurally ready, but write/start capabilities remain disabled.
+
 ## 10. Avoiding duplicate pre-print dialogs
 
 A native Fluidd mapping dialog cannot simply run before the ordinary Moonraker print endpoint and then call that endpoint unchanged, because `SET_ZCOLOR` would open the provider mapping flow again.

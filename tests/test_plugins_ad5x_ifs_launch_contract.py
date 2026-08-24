@@ -99,9 +99,15 @@ class IFSLaunchContractTests(unittest.TestCase):
         )
         self.assertTrue(gate["candidate"])
         self.assertFalse(gate["write_enabled"])
-        self.assertEqual(gate["blockers"], ["launch_write_not_enabled"])
+        self.assertEqual(gate["blockers"], ["hardware_acceptance_required", "launch_write_not_enabled"])
         self.assertEqual(gate["warnings"], [])
         self.assertEqual(gate["preview_token"], model.build_job_preview_token(source))
+        self.assertEqual(gate["hardware_acceptance"], {
+            "required": True,
+            "accepted": False,
+            "reason": "hardware_acceptance_required",
+            "exact_sha_required": True,
+        })
 
     def test_weak_or_duplicate_match_is_not_silently_promoted_to_ready_launch(self):
         for flag in ("weak", "duplicate"):
