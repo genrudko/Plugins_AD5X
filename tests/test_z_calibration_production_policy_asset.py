@@ -26,12 +26,12 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertNotIn("saved_reference", guard)
         self.assertNotIn("reference_tolerance", guard)
 
-    def test_rc_alignment_limit_matches_split_speed_policy(self) -> None:
-        self.assertIn("variable_mesh_final_bias: 0.130000", self.asset)
-        self.assertIn("variable_max_bias_residual: 0.050000", self.asset)
-        self.assertIn("expected_speed_bias = +0.130000 mm", self.policy)
-        self.assertIn("abs(applied_alignment) < 0.050000 mm", self.policy)
-        self.assertIn("hardware-measured policy constant", self.policy)
+    def test_rc_reconciliation_envelope_is_diagnostic_not_compensation(self) -> None:
+        self.assertIn("variable_expected_reconciliation_delta: 0.130000", self.asset)
+        self.assertIn("variable_max_reconciliation_residual: 0.050000", self.asset)
+        self.assertIn("expected_reconciliation_delta = +0.130000 mm", self.policy)
+        self.assertIn("abs(reconciliation_residual) < 0.050000 mm", self.policy)
+        self.assertIn("is not a compensation term", self.policy)
 
     def test_saved_check_requires_abort_style_zmod_mode_three(self) -> None:
         self.assertIn("mesh_test != 3", self.asset)
@@ -47,6 +47,7 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             "_ADZ_RC_ABORT_PATH",
             "_ADZ_RC_ABORT_MODE",
             "_ADZ_RC_ABORT_PROFILE",
+            "_ADZ_RC_ABORT_ALIGNMENT",
         )
         for macro in guarded_abort_calls:
             call = next(
@@ -60,12 +61,10 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             self.assertNotEqual(restore_pos, -1, macro)
             branch_pos = preceding.rfind("{% ")
             self.assertGreater(restore_pos, branch_pos, macro)
-        self.assertGreaterEqual(guard.count("LOAD_GCODE_OFFSET"), 7)
-        validate = self.asset[self.asset.index("[gcode_macro _ADZ_VALIDATE_NATIVE_RESULT]"):self.asset.index("[gcode_macro _ADZ_RC_ABORT_PRIME]")]
-        self.assertLess(validate.index("LOAD_GCODE_OFFSET"), validate.index("_ADZ_RC_ABORT_ALIGNMENT"))
+        self.assertEqual(guard.count("LOAD_GCODE_OFFSET"), 8)
 
     def test_policy_guard_is_pure_klipper_and_does_not_own_start_hook(self) -> None:
-        self.assertIn('RESPOND PREFIX="info" MSG="Plugins AD5X native Auto-Z normalized:', self.asset)
+        self.assertIn('RESPOND PREFIX="info" MSG="Plugins AD5X saved+check PASS:', self.asset)
         self.assertNotIn("action_call_remote_method", self.asset)
         self.assertNotIn("[gcode_macro _USER_START_PRINT]", self.asset)
         self.assertNotIn("[gcode_macro _USER_START_PRINT]", self.wrapper)
@@ -199,6 +198,16 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertLess(restore, guard)
         self.assertNotIn("SAVE_CONFIG", block)
 
+    def test_native_validation_never_rewrites_successful_zmod_offset(self) -> None:
+        start = self.asset.index("[gcode_macro _ADZ_VALIDATE_NATIVE_RESULT]")
+        end = self.asset.index("[gcode_macro _ADZ_RC_ABORT_PRIME]", start)
+        block = self.asset[start:end]
+        self.assertNotIn("_SET_GCODE_OFFSET_FAST", block)
+        self.assertNotIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset", block)
+        self.assertIn("LOAD_GCODE_OFFSET", block)  # rejection only
+        self.assertIn("native Auto-Z PASS", block)
+        self.assertIn("effective_z=", block)
+
     def test_policy_adds_no_plugins_owned_motion_or_direct_z_write(self) -> None:
         command_lines = [
             line.strip()
@@ -221,7 +230,7 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             self.assertIn(ref, self.policy)
         self.assertIn("universal AD5X numeric default", self.policy)
         self.assertIn("No reboot compensation", self.policy)
-        self.assertIn("hardware/measurement change suspected / calibration review required", self.policy)
+        self.assertIn("hardware/measurement relationship changed", self.policy)
 
 
 if __name__ == "__main__":

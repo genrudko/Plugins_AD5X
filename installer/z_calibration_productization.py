@@ -42,7 +42,7 @@ POLICY_ID = _impl.POLICY_ID
 POLICY_MAX_AUTO = _impl.POLICY_MAX_AUTO
 PRIME_GATE = "_ADZ_PRIME_GATE"
 PRIME_DELEGATE_VARIABLE = "adz_prime_delegate"
-MEASUREMENT_POLICY_ID = "adz-metrology-mesh5-median3-final05-median3-bias130-normalized-v4-20260825"
+MEASUREMENT_POLICY_ID = "adz-metrology-mesh5-median3-final05-median3-anchor-v5-20260825"
 MESH_POLICY_VARIABLE = "adz_mesh_policy"
 MESH_PROFILE_VARIABLE = "adz_mesh_profile"
 MESH_POINTS_VARIABLE = "adz_mesh_points"
@@ -282,13 +282,12 @@ def verify_live(live_payload: str, state_dir: Path) -> None:
     if abs(float(measurement.get("final_probe_speed", -1.0)) - 0.5) > 1e-12: raise ProductizationError("ZCAL final probe speed mismatch")
     if int(measurement.get("final_probe_samples", -1)) != 3: raise ProductizationError("ZCAL final probe sample-count mismatch")
     if str(measurement.get("final_probe_result", "")).lower() != "median": raise ProductizationError("ZCAL final probe estimator mismatch")
-    if abs(float(measurement.get("mesh_final_bias", -99.0)) - 0.130000) > 1e-12: raise ProductizationError("ZCAL mesh/final bias mismatch")
+    if abs(float(measurement.get("expected_reconciliation_delta", -99.0)) - 0.130000) > 1e-12: raise ProductizationError("ZCAL expected reconciliation delta mismatch")
     if "final_probe_armed" not in measurement: raise ProductizationError("ZCAL precision one-shot state missing")
     if "fresh_mesh_built" not in measurement: raise ProductizationError("ZCAL fresh-mesh proof state missing")
     if "fresh_native_check_done" not in measurement: raise ProductizationError("ZCAL native fresh-check proof state missing")
-    if "native_bias_pending" not in measurement: raise ProductizationError("ZCAL split-speed normalization state missing")
     saved_check = status.get("gcode_macro _ADZ_SAVED_CHECK_POLICY", {})
-    if abs(float(saved_check.get("max_bias_residual", -1.0)) - 0.050000) > 1e-12: raise ProductizationError("ZCAL split-speed residual limit mismatch")
+    if abs(float(saved_check.get("max_reconciliation_residual", -1.0)) - 0.050000) > 1e-12: raise ProductizationError("ZCAL split-speed residual limit mismatch")
     mesh_adapter = normalized.get("gcode_macro _bed_mesh_calibrate", {})
     if mesh_adapter.get("rename_existing") != "_ADZ_BED_MESH_CALIBRATE_BASE": raise ProductizationError("ZCAL bed-mesh precision adapter is not loaded")
     probe_adapter = normalized.get("gcode_macro probe", {})
