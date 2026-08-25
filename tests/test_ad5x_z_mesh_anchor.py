@@ -86,6 +86,23 @@ class MeshAnchorTests(unittest.TestCase):
         self.assertIs(bed.get_mesh(), base)
         self.assertFalse(anchor.get_status(None)["active"])
 
+    def test_virtual_sdcard_reset_restores_pristine_mesh_before_next_job(self):
+        anchor, bed, base = self.make()
+        self.assertIn("virtual_sdcard:reset_file", anchor.printer.handlers)
+        anchor.cmd_APPLY(FakeGcmd(SHIFT="0.1375"))
+        anchor.printer.handlers["virtual_sdcard:reset_file"]()
+        self.assertIs(bed.get_mesh(), base)
+        self.assertFalse(anchor.get_status(None)["active"])
+
+    def test_virtual_sdcard_reset_does_not_resurrect_superseded_mesh(self):
+        anchor, bed, _ = self.make()
+        anchor.cmd_APPLY(FakeGcmd(SHIFT="0.1375"))
+        newer = FakeMesh(name="fresh")
+        bed.set_mesh(newer)
+        anchor.printer.handlers["virtual_sdcard:reset_file"]()
+        self.assertIs(bed.get_mesh(), newer)
+        self.assertFalse(anchor.get_status(None)["active"])
+
     def test_double_apply_is_rejected_without_accumulation(self):
         anchor, bed, _ = self.make()
         anchor.cmd_APPLY(FakeGcmd(SHIFT="0.1700"))

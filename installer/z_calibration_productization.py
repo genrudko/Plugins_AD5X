@@ -307,8 +307,6 @@ def verify_live(live_payload: str, state_dir: Path) -> None:
     if mesh_adapter.get("rename_existing") != "_ADZ_BED_MESH_CALIBRATE_BASE": raise ProductizationError("ZCAL bed-mesh precision adapter is not loaded")
     probe_adapter = normalized.get("gcode_macro probe", {})
     if probe_adapter.get("rename_existing") != "_ADZ_PROBE_BASE": raise ProductizationError("ZCAL final-probe precision adapter is not loaded")
-    prepare_adapter = normalized.get("gcode_macro _prepare_print", {})
-    if prepare_adapter.get("rename_existing") != "_ADZ_PREPARE_PRINT_BASE": raise ProductizationError("ZCAL print-preparation reset adapter is not loaded")
     if manifest.get("measurement_policy_id") != MEASUREMENT_POLICY_ID: raise ProductizationError("ZCAL productization measurement policy provenance mismatch")
     if manifest.get("anchor_policy_id") != ANCHOR_POLICY_ID: raise ProductizationError("ZCAL productization anchor policy provenance mismatch")
 

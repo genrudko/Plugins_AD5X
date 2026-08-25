@@ -16,6 +16,8 @@ class AD5XZMeshAnchor:
         self._clear_state()
         self.printer.register_event_handler("klippy:disconnect", self._disconnect)
         self.printer.register_event_handler("klippy:shutdown", self._disconnect)
+        # Reset the transient mesh at the VirtualSD job boundary, before START_PRINT.
+        self.printer.register_event_handler("virtual_sdcard:reset_file", self._reset_file)
 
     def _clear_state(self):
         self.base_mesh = None
@@ -25,6 +27,16 @@ class AD5XZMeshAnchor:
         self.point_count = 0
 
     def _disconnect(self, *args):
+        self._clear_state()
+
+    def _reset_file(self, *args):
+        bed_mesh = self.printer.lookup_object("bed_mesh", None)
+        if bed_mesh is None or not hasattr(bed_mesh, "get_mesh") or not hasattr(bed_mesh, "set_mesh"):
+            self._clear_state()
+            return
+        self._reconcile_owner(bed_mesh)
+        if self.runtime_mesh is not None:
+            bed_mesh.set_mesh(self.base_mesh)
         self._clear_state()
 
     def _bed_mesh(self):

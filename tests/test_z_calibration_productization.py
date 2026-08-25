@@ -41,7 +41,6 @@ def live_payload(commands: list[str], *, mesh_test: int = 2, cc_enabled: int | N
         settings["gcode_macro load_cell_tare"] = {"variable_adz_reuse_armed": "0"}
         settings["gcode_macro _bed_mesh_calibrate"] = {"rename_existing": "_ADZ_BED_MESH_CALIBRATE_BASE"}
         settings["gcode_macro probe"] = {"rename_existing": "_ADZ_PROBE_BASE"}
-        settings["gcode_macro _prepare_print"] = {"rename_existing": "_ADZ_PREPARE_PRINT_BASE"}
     status = {"configfile": {"settings": settings}, "save_variables": {"variables": variables}}
     if policy:
         status["gcode_macro _AD5X_Z_SAVED_CHECK_POLICY"] = {"policy_id": product.POLICY_ID, "max_auto_alignment": product.POLICY_MAX_AUTO}

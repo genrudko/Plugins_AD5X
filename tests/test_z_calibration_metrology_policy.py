@@ -10,6 +10,8 @@ MEASUREMENT_ID = "adz-metrology-mesh5-median3-final05-median3-anchor-v5-20260825
 class MetrologyPolicyTests(unittest.TestCase):
     def test_precision_policy_is_scoped_not_global(self):
         self.assertNotIn("\n[probe]\n", POLICY)
+        self.assertNotIn("[gcode_macro _PREPARE_PRINT]", POLICY)
+        self.assertNotIn("_ADZ_PREPARE_PRINT_BASE", POLICY)
         self.assertIn(f'variable_policy_id: "{MEASUREMENT_ID}"', POLICY)
         self.assertIn("[gcode_macro _BED_MESH_CALIBRATE]", POLICY)
         self.assertIn("rename_existing: _ADZ_BED_MESH_CALIBRATE_BASE", POLICY)
