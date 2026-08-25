@@ -20,8 +20,8 @@ else:
     _ZCORE_IMPORT_ERROR = None
 
 API_VERSION = "1.0"
-MODULE_VERSION = "0.1.5"
-Z_MODULE_SCHEMA_VERSION = "1.2"
+MODULE_VERSION = "0.1.6"
+Z_MODULE_SCHEMA_VERSION = "1.3"
 
 Z_SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/z_calibration/snapshot"
 Z_RECONCILE_ENDPOINT = "/server/plugins_ad5x/z_calibration/reconcile"
@@ -51,6 +51,7 @@ _Z_CAPABILITIES = [
     "read_only_reconciliation",
     "job_thermal_provenance",
     "transient_machine_anchor_provenance",
+    "purge_policy_provenance",
 ]
 
 
@@ -162,6 +163,59 @@ def _derive_job_thermal_context(
             "bed_status": _thermal_match_status(bed_target, meta_bed),
             "extruder_status": _thermal_match_status(extruder_target, meta_extruder),
         },
+    }
+
+
+Z_PURGE_ALGORITHMS = {
+    "_CLEAR1": "orca",
+    "_CLEAR2": "ff",
+    "_CLEAR3": "ff2",
+    "_CLEAR4": "schreider",
+    "LINE_PURGE": "line",
+}
+
+
+def _derive_purge_context(status: Mapping[str, Any]) -> Dict[str, Any]:
+    save_variables = status.get("save_variables")
+    variables = save_variables.get("variables", {}) if isinstance(save_variables, Mapping) else {}
+    if not isinstance(variables, Mapping):
+        variables = {}
+    delegate = str(variables.get("adz_prime_delegate", "") or "").strip()
+    algorithm = Z_PURGE_ALGORITHMS.get(delegate, "custom" if delegate else None)
+    try:
+        use_kamp = int(variables.get("use_kamp", 0))
+    except (TypeError, ValueError):
+        use_kamp = 0
+    start_print = status.get("gcode_macro _START_PRINT")
+    force_kamp = _boolish(start_print.get("zforce_kamp", False)) if isinstance(start_print, Mapping) else False
+    configfile = status.get("configfile")
+    settings = configfile.get("settings", {}) if isinstance(configfile, Mapping) else {}
+    normalized = {str(k).strip().lower(): value for k, value in settings.items()} if isinstance(settings, Mapping) else {}
+    delegate_available = bool(delegate and f"gcode_macro {delegate.lower()}" in normalized)
+    line_available = "gcode_macro line_purge" in normalized
+    legacy_clear = delegate in {"_CLEAR1", "_CLEAR2", "_CLEAR3", "_CLEAR4"}
+    effective_macro: Optional[str] = delegate or None
+    reason = "selected"
+    state = "ready"
+    if not delegate or delegate == "_ADZ_PRIME_GATE":
+        effective_macro, reason, state = None, "invalid_delegate", "invalid_delegate"
+    elif not delegate_available:
+        effective_macro, reason = "LINE_PURGE", "delegate_missing_fallback"
+    elif (force_kamp or use_kamp == 1) and legacy_clear:
+        effective_macro, reason = "LINE_PURGE", "kamp_line"
+    if effective_macro == "LINE_PURGE" and not line_available:
+        state = "line_purge_unavailable"
+    return {
+        "selected_algorithm": algorithm,
+        "selected_macro": delegate or None,
+        "effective_macro": effective_macro,
+        "reason": reason,
+        "status": state,
+        "force_kamp": force_kamp,
+        "use_kamp": use_kamp,
+        "selected_macro_available": delegate_available,
+        "line_purge_available": line_available,
+        "selectable_algorithms": ["orca", "ff", "ff2", "schreider", "line"],
     }
 
 
@@ -549,6 +603,7 @@ def _derive_zmod_provenance(
         "phase": runtime["print_state"],
         "requested_slicer_z_offset": requested_job,
         "slicer_z_offset_effect": slicer_effect,
+        "purge": _derive_purge_context(status),
     }
     return composition, provenance, runtime, job
 
@@ -582,6 +637,7 @@ class PluginsAD5XZCalibration:
             "phase": "unknown",
             "requested_slicer_z_offset": None,
             "slicer_z_offset_effect": "unknown",
+            "purge": {},
         }
         self._z_provenance: Dict[str, Any] = {
             "status": "unavailable",
@@ -881,6 +937,11 @@ class PluginsAD5XZCalibration:
                 job.get("thermal", {}).get("first_layer_extr_temp"),
                 job.get("thermal", {}).get("bed_status"),
                 job.get("thermal", {}).get("extruder_status"),
+                job.get("purge", {}).get("selected_algorithm"),
+                job.get("purge", {}).get("selected_macro"),
+                job.get("purge", {}).get("effective_macro"),
+                job.get("purge", {}).get("reason"),
+                job.get("purge", {}).get("status"),
             )
             semantic_change = signature != self._z_runtime_signature
             self._z_runtime_signature = signature
@@ -909,6 +970,7 @@ class PluginsAD5XZCalibration:
                             "requested_slicer_z_offset"
                         ),
                         "job_thermal": dict(job.get("thermal", {})),
+                        "purge_policy": dict(job.get("purge", {})),
                         "machine_anchor": dict(
                             provenance.get("machine_anchor", {})
                         ),
@@ -972,6 +1034,7 @@ class PluginsAD5XZCalibration:
             "phase": "unknown",
             "requested_slicer_z_offset": None,
             "slicer_z_offset_effect": "unknown",
+            "purge": {},
         }
         if self._z_diagnostics is not None and (semantic_change or force_diagnostic):
             payload: Dict[str, Any] = {"reason": reason}

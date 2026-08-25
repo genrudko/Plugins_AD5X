@@ -159,6 +159,11 @@ def ready_payload(
     anchor_finalized: int = 0,
     anchor_persistent: bool = False,
     include_anchor_runtime: bool = True,
+    prime_delegate: str = "_CLEAR2",
+    use_kamp: int = 0,
+    force_kamp: bool = False,
+    delegate_available: bool = True,
+    line_purge_available: bool = True,
 ) -> Dict[str, Any]:
     if actual is None:
         actual = (
@@ -178,13 +183,15 @@ def ready_payload(
                 "mesh_test": 3,
                 "print_leveling": 0,
                 "gcode_offsets": {"z": persistent},
+                "adz_prime_delegate": prime_delegate,
+                "use_kamp": use_kamp,
             }
         },
         "gcode_macro _TEST_POINT": {"temp_z_offset": auto},
         "gcode_macro _SCREEN": {"screen": False},
         "gcode_macro _START_PRINT": {
             "zzoffset": requested_job,
-            "zforce_kamp": False,
+            "zforce_kamp": force_kamp,
             "zforce_leveling": False,
             "zbed_temp": bed_temp,
             "zextruder_temp": extruder_temp,
@@ -205,6 +212,11 @@ def ready_payload(
             }
         },
     }
+    settings = payload["configfile"]["settings"]
+    if delegate_available and prime_delegate:
+        settings[f"gcode_macro {prime_delegate.lower()}"] = {}
+    if line_purge_available:
+        settings["gcode_macro line_purge"] = {}
     if v6:
         payload[component_module.Z_V6_POLICY_OBJECT] = {
             "policy_id": component_module.Z_RC_POLICY_ID,
@@ -283,6 +295,44 @@ class PluginsAD5XZCalComponentTests(unittest.TestCase):
         )
         self.assertTrue(state["runtime"]["effective_valid"])
         self.assertEqual(klippy.gcode, [])
+
+    def test_purge_provenance_reports_selected_zmod_algorithm(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(prime_delegate="_CLEAR4"))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        module = asyncio.run(component._handle_snapshot(object()))["module"]
+        purge = module["state"]["job"]["purge"]
+        self.assertEqual(module["schema_version"], "1.3")
+        self.assertIn("purge_policy_provenance", module["capabilities"])
+        self.assertEqual(purge["selected_algorithm"], "schreider")
+        self.assertEqual(purge["selected_macro"], "_CLEAR4")
+        self.assertEqual(purge["effective_macro"], "_CLEAR4")
+        self.assertEqual(purge["reason"], "selected")
+        self.assertEqual(purge["status"], "ready")
+
+    def test_purge_provenance_reports_kamp_override_without_changing_selection(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(prime_delegate="_CLEAR4", force_kamp=True))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        purge = asyncio.run(component._handle_snapshot(object()))["module"]["state"]["job"]["purge"]
+        self.assertEqual(purge["selected_algorithm"], "schreider")
+        self.assertEqual(purge["selected_macro"], "_CLEAR4")
+        self.assertEqual(purge["effective_macro"], "LINE_PURGE")
+        self.assertEqual(purge["reason"], "kamp_line")
+
+    def test_purge_provenance_reports_missing_delegate_fallback(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(delegate_available=False))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        purge = asyncio.run(component._handle_snapshot(object()))["module"]["state"]["job"]["purge"]
+        self.assertEqual(purge["selected_algorithm"], "ff")
+        self.assertEqual(purge["effective_macro"], "LINE_PURGE")
+        self.assertEqual(purge["reason"], "delegate_missing_fallback")
+        self.assertEqual(purge["status"], "ready")
+
+    def test_purge_provenance_fails_closed_when_fallback_is_unavailable(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(delegate_available=False, line_purge_available=False))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        purge = asyncio.run(component._handle_snapshot(object()))["module"]["state"]["job"]["purge"]
+        self.assertEqual(purge["effective_macro"], "LINE_PURGE")
+        self.assertEqual(purge["status"], "line_purge_unavailable")
 
     def test_v6_machine_anchor_is_not_composed_into_user_offset(self) -> None:
         klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.1375, actual=-0.091, v6=True, anchor_active=True, anchor_shift=0.1375, anchor_finalized=1))

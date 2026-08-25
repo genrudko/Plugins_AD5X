@@ -33,6 +33,30 @@ class PrePrimeGateTests(unittest.TestCase):
         self.assertIn("preserving Z-Mod fallback to LINE_PURGE", gate)
         self.assertIn('_ADZ_RC_ABORT_PRIME DELEGATE="LINE_PURGE"', gate)
 
+    def test_public_purge_selector_maps_only_supported_zmod_algorithms(self) -> None:
+        start = POLICY.index("[gcode_macro ADZ_SET_PURGE]")
+        end = POLICY.index("[gcode_macro ADZ_SET_PREPRINT]", start)
+        setter = POLICY[start:end]
+        for token in (
+            '"orca": "_CLEAR1"',
+            '"ff": "_CLEAR2"',
+            '"ff2": "_CLEAR3"',
+            '"schreider": "_CLEAR4"',
+            '"line": "LINE_PURGE"',
+        ):
+            self.assertIn(token, setter)
+        self.assertIn("SAVE_VARIABLE VARIABLE=adz_prime_delegate", setter)
+        self.assertNotIn("VARIABLE=clear", setter)
+        self.assertNotIn("CLEAR_TRAP", setter)
+
+    def test_public_purge_selector_is_idle_only_and_checks_macro_presence(self) -> None:
+        start = POLICY.index("[gcode_macro ADZ_SET_PURGE]")
+        end = POLICY.index("[gcode_macro ADZ_SET_PREPRINT]", start)
+        setter = POLICY[start:end]
+        self.assertIn('state == "printing" or state == "paused"', setter)
+        self.assertIn("delegate_settings is none", setter)
+        self.assertIn('_ADZ_RC_ABORT_PRIME DELEGATE="{delegate}"', setter)
+
     def test_end_hook_cannot_run_fresh_autoz_late(self) -> None:
         self.assertIn("fresh_mesh_proven and pre_prime == 1", POLICY)
         self.assertIn("fresh_mesh_proven and fresh_finalized == 1", POLICY)

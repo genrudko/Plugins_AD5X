@@ -12,6 +12,8 @@
 
 > **2026-08-25 KAMP software-compatibility correction.** Interposing `_ADZ_PRIME_GATE` would otherwise hide the original `CLEAR` value from Z-Mod's purge router. The gate now preserves Z-Mod semantics after v6 anchor finalization: missing configured purge macros fall back to `LINE_PURGE`, and KAMP with `_CLEAR1..4` forces `LINE_PURGE`. The Auto-Z/machine-anchor step always completes before either route. This closes the software seam but does **not** by itself constitute owner hardware acceptance of unattended KAMP.
 
+> **2026-08-25 purge selector contract.** Plugins AD5X exposes only Z-Mod purge algorithms whose callable macro exists in the audited AD5X configuration: `ORCA -> _CLEAR1`, `FF -> _CLEAR2`, `FF2 -> _CLEAR3`, `SCHREIDER -> _CLEAR4`, and `LINE -> LINE_PURGE`. `ADZ_SET_PURGE` changes only the persisted `adz_prime_delegate`; `clear` remains owned by `_ADZ_PRIME_GATE`, so machine-anchor finalization still precedes every purge. Update/repair preserve the current delegate and uninstall restores the pre-plugin `CLEAR`/delegate state. KAMP may temporarily execute `LINE_PURGE` for `_CLEAR1..4` without rewriting the user's selection. Z-Mod's UI/source also references `CLEAR_TRAP`, but the audited AD5X config defines `_CLEAR_TRAP` rather than callable `CLEAR_TRAP`; it is therefore not exposed until upstream semantics are unambiguous.
+
 Observed control case after load-cell calibration: `Probe=-1.7850`, `Mesh=-1.8125`, `Delta=+0.0275`, persistent `Z=-0.1010`, effective native result `Z=-0.0735`.
 
 ## 1. Purpose

@@ -77,6 +77,12 @@ def build_preflight_plan(printer_config: Path, policy_source: Path, policy_dest:
         plan["original_prime_delegate"] = _variable_spec(v, PRIME_DELEGATE_VARIABLE)
     else:
         _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
+    fallback_delegate = (
+        manifest["original_clear"].get("value", "LINE_PURGE")
+        if manifest is not None and "original_clear" in manifest
+        else plan["original_clear"].get("value", "LINE_PURGE")
+    )
+    plan["desired_prime_delegate"] = _validate_prime_delegate(v.get(PRIME_DELEGATE_VARIABLE, fallback_delegate))
     if manifest is None or "original_mesh_policy" not in manifest:
         plan["original_mesh_policy"] = _variable_spec(v, MESH_POLICY_VARIABLE)
         plan["original_mesh_profile"] = _variable_spec(v, MESH_PROFILE_VARIABLE)
@@ -227,7 +233,7 @@ def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
             manifest[key] = plan[key]
     manifest["measurement_policy_id"] = MEASUREMENT_POLICY_ID
     manifest["anchor_policy_id"] = ANCHOR_POLICY_ID
-    delegate = _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
+    delegate = _validate_prime_delegate(plan.get("desired_prime_delegate", manifest["original_clear"].get("value", "LINE_PURGE")))
     variables = Path(plan["variables_file"])
     _set_variable(variables, "mesh_test", 3, True)
     _set_variable(variables, "cc_enabled", 0, True)
@@ -269,10 +275,10 @@ def verify_live(live_payload: str, state_dir: Path) -> None:
     manifest = _impl._load_manifest(state_dir)
     if manifest is None or "original_clear" not in manifest: raise ProductizationError("prime-gate ownership missing from manifest")
     runtime, status = _impl._runtime_payload(live_payload); v = runtime["variables"]
-    d = _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
+    d = _validate_prime_delegate(v.get(PRIME_DELEGATE_VARIABLE))
     if v.get("clear") != PRIME_GATE: raise ProductizationError("Z-Mod CLEAR is not routed through ZCAL prime gate")
     if int(v.get("disable_priming", -1)) != 0: raise ProductizationError("Z-Mod line priming disabled; prime gate cannot run")
-    if v.get(PRIME_DELEGATE_VARIABLE) != d: raise ProductizationError("ZCAL prime delegate mismatch")
+    if not d: raise ProductizationError("ZCAL prime delegate missing")
     settings = status.get("configfile", {}).get("settings", {})
     normalized = {str(k).strip().lower(): value for k, value in settings.items()}
     if "gcode_macro _adz_prime_gate" not in normalized: raise ProductizationError("ZCAL prime gate macro is not loaded")

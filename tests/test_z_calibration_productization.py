@@ -221,6 +221,22 @@ class ZCalibrationProductizationTests(unittest.TestCase):
             self.assertEqual(fx.user.read_bytes(), updated_hook)
             self.assertEqual(fx.policy_dest.read_bytes(), updated_policy)
 
+    def test_update_preserves_user_selected_prime_delegate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            fx = Fixture(Path(td), stock=[], user=[product.CC])
+            product.apply_plan(fx.plan([product.CC]), fx.policy)
+            variables = fx.variables.read_text(encoding="utf-8")
+            variables = variables.replace("adz_prime_delegate = '_CLEAR2'", "adz_prime_delegate = '_CLEAR4'")
+            fx.variables.write_text(variables, encoding="utf-8")
+
+            plan = fx.plan([product.CC, product.GUARD], mesh_test=3, cc_enabled=0)
+            self.assertEqual(plan["desired_prime_delegate"], "_CLEAR4")
+            product.apply_plan(plan, fx.policy)
+
+            updated = fx.variables.read_text(encoding="utf-8")
+            self.assertIn("adz_prime_delegate = '_CLEAR4'", updated)
+            self.assertIn("clear = '_ADZ_PRIME_GATE'", updated)
+
     def test_successful_update_snapshot_can_restore_previous_owned_version(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
