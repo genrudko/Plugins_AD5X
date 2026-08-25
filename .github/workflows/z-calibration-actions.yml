@@ -1,0 +1,91 @@
+name: Z Calibration Actions
+
+on:
+  push:
+    branches:
+      - feature/z-calibration-subsystem-v2
+    paths:
+      - 'moonraker/components/plugins_ad5x.py'
+      - 'moonraker/components/plugins_ad5x_zcal.py'
+      - 'moonraker/components/plugins_ad5x_zcalibration.py'
+      - 'moonraker/components/plugins_ad5x_zactions.py'
+      - 'moonraker/components/plugins_ad5x_zpolicy.py'
+      - 'moonraker/components/plugins_ad5x_zorchestrator.py'
+      - 'moonraker/components/plugins_ad5x_zcleanup_safety.py'
+      - 'moonraker/components/plugins_ad5x_zevidence.py'
+      - 'plugins_ad5x_zcal.moonraker.conf'
+      - 'installer/z_calibration_backend_lifecycle.sh'
+      - 'tests/test_plugins_ad5x_component.py'
+      - 'tests/test_plugins_ad5x_zcal_component.py'
+      - 'tests/test_z_calibration_backend_lifecycle.py'
+      - 'tests/test_z_calibration_actions.py'
+      - 'tests/test_z_calibration_policy_gate.py'
+      - 'tests/test_z_calibration_orchestrator.py'
+      - 'tests/test_z_calibration_orchestrator_atomicity.py'
+      - 'tests/test_z_calibration_cleanup_safety.py'
+      - 'tests/test_z_calibration_hardware_evidence.py'
+      - 'docs/Z_CALIBRATION_HARDWARE_EVIDENCE_RUN_V1.md'
+      - 'docs/evidence/Z_CALIBRATION_BACKEND_COEXISTENCE_REPAIR_2026-08-18.md'
+      - '.github/workflows/z-calibration-actions.yml'
+  pull_request:
+    paths:
+      - 'moonraker/components/plugins_ad5x.py'
+      - 'moonraker/components/plugins_ad5x_zcal.py'
+      - 'moonraker/components/plugins_ad5x_zcalibration.py'
+      - 'moonraker/components/plugins_ad5x_zactions.py'
+      - 'moonraker/components/plugins_ad5x_zpolicy.py'
+      - 'moonraker/components/plugins_ad5x_zorchestrator.py'
+      - 'moonraker/components/plugins_ad5x_zcleanup_safety.py'
+      - 'moonraker/components/plugins_ad5x_zevidence.py'
+      - 'plugins_ad5x_zcal.moonraker.conf'
+      - 'installer/z_calibration_backend_lifecycle.sh'
+      - 'tests/test_plugins_ad5x_component.py'
+      - 'tests/test_plugins_ad5x_zcal_component.py'
+      - 'tests/test_z_calibration_backend_lifecycle.py'
+      - 'tests/test_z_calibration_actions.py'
+      - 'tests/test_z_calibration_policy_gate.py'
+      - 'tests/test_z_calibration_orchestrator.py'
+      - 'tests/test_z_calibration_orchestrator_atomicity.py'
+      - 'tests/test_z_calibration_cleanup_safety.py'
+      - 'tests/test_z_calibration_hardware_evidence.py'
+      - 'docs/Z_CALIBRATION_HARDWARE_EVIDENCE_RUN_V1.md'
+      - 'docs/evidence/Z_CALIBRATION_BACKEND_COEXISTENCE_REPAIR_2026-08-18.md'
+      - '.github/workflows/z-calibration-actions.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  semantic-actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile calibration layers
+        run: >-
+          python -m py_compile
+          moonraker/components/plugins_ad5x.py
+          moonraker/components/plugins_ad5x_zcal.py
+          moonraker/components/plugins_ad5x_zcalibration.py
+          moonraker/components/plugins_ad5x_zorchestrator.py
+          moonraker/components/plugins_ad5x_zpolicy.py
+          moonraker/components/plugins_ad5x_zactions.py
+          moonraker/components/plugins_ad5x_zcleanup_safety.py
+          moonraker/components/plugins_ad5x_zevidence.py
+          tests/test_plugins_ad5x_component.py
+          tests/test_plugins_ad5x_zcal_component.py
+          tests/test_z_calibration_backend_lifecycle.py
+          tests/test_z_calibration_orchestrator.py
+          tests/test_z_calibration_orchestrator_atomicity.py
+          tests/test_z_calibration_policy_gate.py
+          tests/test_z_calibration_actions.py
+          tests/test_z_calibration_cleanup_safety.py
+          tests/test_z_calibration_hardware_evidence.py
+      - name: Check standalone backend shell syntax
+        run: sh -n installer/z_calibration_backend_lifecycle.sh
+      - name: Run complete repository suite
+        run: python -m unittest discover -s tests -p 'test_*.py' -v

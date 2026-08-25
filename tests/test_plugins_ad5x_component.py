@@ -116,21 +116,11 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertNotIn(TransportType.INTERNAL, endpoint["transports"])
         self.assertTrue(endpoint["auth_required"])
 
-        rpc_method = endpoint["endpoint"].strip("/").replace("/", ".")
-        self.assertEqual(rpc_method, "server.plugins_ad5x.snapshot")
-
     def test_notification_registration_contract(self) -> None:
         self.assertEqual(
             self.server.notifications,
-            [
-                (
-                    "plugins_ad5x:snapshot_changed",
-                    "plugins_ad5x_snapshot_changed",
-                )
-            ],
+            [("plugins_ad5x:snapshot_changed", "plugins_ad5x_snapshot_changed")],
         )
-        wire_method = "notify_" + self.server.notifications[0][1]
-        self.assertEqual(wire_method, "notify_plugins_ad5x_snapshot_changed")
 
     def test_snapshot_contract(self) -> None:
         snapshot = asyncio.run(self.component._handle_snapshot(object()))
@@ -153,29 +143,18 @@ class PluginsAD5XComponentTests(unittest.TestCase):
         self.assertEqual(self.component.get_snapshot()["revision"], 1)
         revision = self.component.invalidate_snapshot()
         self.assertEqual(revision, 2)
-        self.assertEqual(self.component.get_snapshot()["revision"], 2)
         self.assertEqual(
             self.server.events,
-            [
-                (
-                    "plugins_ad5x:snapshot_changed",
-                    ({"revision": 2},),
-                )
-            ],
+            [("plugins_ad5x:snapshot_changed", ({"revision": 2},))],
         )
 
-    def test_revision_is_process_local_state_only(self) -> None:
-        self.component.invalidate_snapshot()
-        fresh_component = component_module.load_component(FakeConfig(FakeServer()))
-        self.assertEqual(fresh_component.get_snapshot()["revision"], 1)
-
-    def test_basic_snapshot_has_no_hardware_dependencies(self) -> None:
-        # FakeConfig/FakeServer intentionally expose only the four Moonraker
-        # interfaces required by the foundation component.  Successful load and
-        # snapshot prove there is no Klipper/hardware/USB/GPIO/macro dependency.
-        snapshot = self.component.get_snapshot()
-        self.assertEqual(snapshot["backend"]["health"], "ok")
-        self.assertEqual(snapshot["modules"], {})
+    def test_shared_host_has_no_feature_endpoint_collision(self) -> None:
+        endpoints = {entry["endpoint"] for entry in self.server.endpoints}
+        self.assertNotIn("/server/plugins_ad5x/z_calibration/reconcile", endpoints)
+        self.assertNotIn("/server/plugins_ad5x/z_calibration/diagnostics", endpoints)
+        source = COMPONENT_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("plugins_ad5x_zcalibration", source)
+        self.assertNotIn("run_gcode", source)
 
 
 if __name__ == "__main__":

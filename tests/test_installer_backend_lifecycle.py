@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shlex
 from pathlib import Path
 import subprocess
@@ -12,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.sh"
 BACKEND = ROOT / "moonraker" / "components" / "plugins_ad5x.py"
 CONFIG = ROOT / "plugins_ad5x.moonraker.conf"
+RUNTIME_HELPER = ROOT / "installer" / "z_calibration_runtime.sh"
+RC_LIFECYCLE = ROOT / "installer" / "z_calibration_rc_lifecycle.sh"
 
 
 def sha256(path: Path) -> str:
@@ -48,20 +51,38 @@ class BackendInstallerLifecycleTests(unittest.TestCase):
             check=check,
         )
 
-    def run_idle_check(self, tmp: Path, *, payload: str = "", wget_rc: int = 0) -> subprocess.CompletedProcess[str]:
-        if wget_rc:
-            body = f"wget(){{ return {wget_rc}; }}\ncheck_idle"
+    def run_idle_check(self, tmp: Path, *, payload: str = "", curl_rc: int = 0) -> subprocess.CompletedProcess[str]:
+        if curl_rc:
+            body = f"curl(){{ return {curl_rc}; }}\ncheck_idle"
         else:
-            body = f"wget(){{ printf '%s' {shlex.quote(payload)}; }}\ncheck_idle"
+            body = f"curl(){{ printf '%s' {shlex.quote(payload)}; }}\ncheck_idle"
         return self.run_shell(body, tmp, check=False)
 
     @staticmethod
     def print_stats_payload(state: str) -> str:
         return '{"result":{"status":{"print_stats":{"state":"' + state + '"}}}}'
 
+    def test_target_shell_http_contract_is_zmod_curl_not_wget(self) -> None:
+        production_shell = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (INSTALLER, RUNTIME_HELPER, RC_LIFECYCLE)
+        )
+        executable = "\n".join(
+            line
+            for line in production_shell.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+        self.assertIsNone(
+            re.search(r"(?m)(?:^|[\s;&|()])wget(?:\s|$)", executable.lower()),
+            "production shell must not execute wget on the Z-Mod target",
+        )
+        self.assertIn("/usr/bin/curl", production_shell)
+        self.assertIn("/usr/prog/curl-7.55.1-https/bin/curl", production_shell)
+        self.assertIn("ad5x_http_get", production_shell)
+
     def test_idle_http_unavailable_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            result = self.run_idle_check(Path(td), wget_rc=7)
+            result = self.run_idle_check(Path(td), curl_rc=7)
             self.assertNotEqual(result.returncode, 0)
 
     def test_idle_empty_response_fails_closed(self) -> None:

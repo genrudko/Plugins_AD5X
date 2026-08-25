@@ -3,7 +3,7 @@ set -eu
 
 REPO_URL="https://github.com/genrudko/Plugins_AD5X.git"
 PLUGIN_DIR="${AD5X_PLUGIN_DIR:-/opt/config/mod_data/plugins/ad5x_custom}"
-STATE_DIR="${AD5X_STATE_DIR:-/opt/config/mod_data/ad5x_custom}"
+STATE_DIR="${AD5X_STATE_DIR:-/opt/config/mod_data/plugins/ad5x_custom}"
 GENERATED="$STATE_DIR/generated"
 STATE="$STATE_DIR/state"
 BACKUPS="$STATE_DIR/backups"
@@ -16,6 +16,7 @@ BACKEND_SOURCE="$PLUGIN_DIR/moonraker/components/plugins_ad5x.py"
 BACKEND_DEST="${AD5X_BACKEND_DEST:-/opt/config/base/moonraker/components/plugins_ad5x.py}"
 BACKEND_CONFIG="$PLUGIN_DIR/plugins_ad5x.moonraker.conf"
 BACKEND_HASH_STATE="$STATE/backend-runtime.sha256"
+ZCAL_RUNTIME_HELPER="$PLUGIN_DIR/installer/z_calibration_runtime.sh"
 MOONRAKER_COMPONENTS_DIR="${AD5X_MOONRAKER_COMPONENTS_DIR:-${BACKEND_DEST%/*}}"
 MOONRAKER_HTTP_BASE="${AD5X_MOONRAKER_HTTP_BASE:-http://127.0.0.1:7125}"
 MOONRAKER_STOP_TIMEOUT="${AD5X_MOONRAKER_STOP_TIMEOUT:-30}"
@@ -40,6 +41,25 @@ find_root(){
     done
     [ -d /usr/data/.mod/.zmod ] && { echo /usr/data/.mod/.zmod; return 0; }
     return 1
+}
+ad5x_curl_bin(){
+    if [ -n "${AD5X_CURL_BIN:-}" ]; then
+        [ -x "$AD5X_CURL_BIN" ] || return 1
+        printf '%s\n' "$AD5X_CURL_BIN"
+    elif command -v curl >/dev/null 2>&1; then
+        command -v curl
+    elif [ -x /usr/bin/curl ]; then
+        printf '%s\n' /usr/bin/curl
+    elif [ -x /usr/prog/curl-7.55.1-https/bin/curl ]; then
+        printf '%s\n' /usr/prog/curl-7.55.1-https/bin/curl
+    else
+        return 1
+    fi
+}
+ad5x_http_get(){
+    TIMEOUT="$1"; URL="$2"
+    CURL_BIN="$(ad5x_curl_bin)" || return 1
+    "$CURL_BIN" -f -sS -m "$TIMEOUT" "$URL"
 }
 remove_lines(){ F="$1"; P="$2"; [ -f "$F" ] || : >"$F"; grep -Ev "$P" "$F" >"$F.tmp" 2>/dev/null || true; mv "$F.tmp" "$F"; }
 append_line(){ F="$1"; L="$2"; [ -f "$F" ] || : >"$F"; grep -Fqx "$L" "$F" 2>/dev/null || echo "$L" >>"$F"; }
@@ -79,7 +99,7 @@ repo_status(){
     [ -z "$S" ] && printf '%-14s CLEAN\n' "$NAME" || printf '%-14s DIRTY\n' "$NAME"
 }
 check_idle(){
-    if ! STATE_JSON="$(wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null)"; then
+    if ! STATE_JSON="$(ad5x_http_get 3 "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null)"; then
         fail 'не удалось подтвердить idle state: Moonraker print_stats недоступен'
     fi
     [ -n "$STATE_JSON" ] || fail 'не удалось подтвердить idle state: пустой ответ Moonraker print_stats'
@@ -96,17 +116,10 @@ if not isinstance(state, str) or not state:
     raise SystemExit(1)
 sys.stdout.write(state)
 ')" || fail 'не удалось подтвердить idle state: невалидный Moonraker print_stats response'
-    # Klipper print_stats contract: standby, printing, paused, complete, error, cancelled.
     case "$PRINT_STATE" in
-        standby|complete|error|cancelled)
-            return 0
-            ;;
-        printing|paused)
-            fail 'принтер сейчас печатает или стоит на паузе'
-            ;;
-        *)
-            fail "не удалось подтвердить idle state: неизвестное print_stats.state=$PRINT_STATE"
-            ;;
+        standby|complete|error|cancelled) return 0 ;;
+        printing|paused) fail 'принтер сейчас печатает или стоит на паузе' ;;
+        *) fail "не удалось подтвердить idle state: неизвестное print_stats.state=$PRINT_STATE" ;;
     esac
 }
 install_generated(){
@@ -122,15 +135,22 @@ install_generated(){
 python_bin(){
     if [ -n "${AD5X_PYTHON_BIN:-}" ] && [ -x "$AD5X_PYTHON_BIN" ]; then
         echo "$AD5X_PYTHON_BIN"
-    elif [ -x /root/moonraker-env/bin/python3 ]; then
-        echo /root/moonraker-env/bin/python3
     elif command -v python3 >/dev/null 2>&1; then
         command -v python3
+    elif [ -x /root/moonraker-env/bin/python3 ]; then
+        echo /root/moonraker-env/bin/python3
     else
         return 1
     fi
 }
 sha256_file(){ sha256sum "$1" | awk '{print $1}'; }
+load_zcal_runtime_helper(){
+    [ -f "$ZCAL_RUNTIME_HELPER" ] || return 1
+    if ! command -v zcal_core_init_paths >/dev/null 2>&1; then
+        . "$ZCAL_RUNTIME_HELPER"
+    fi
+    zcal_core_init_paths
+}
 backend_constant(){
     NAME="$1"
     sed -n "s/^$NAME = \"\([^\"]*\)\"/\\1/p" "$BACKEND_SOURCE" | head -n 1
@@ -155,6 +175,8 @@ PY
     [ "$API_VERSION_" = "1.0" ] || return 1
     [ -n "$BACKEND_VERSION_" ] || return 1
     [ "$BACKEND_VERSION_" = "$ROOT_VERSION_" ] || return 1
+    load_zcal_runtime_helper || return 1
+    zcal_core_source_valid || return 1
 }
 validate_backend_source(){ backend_source_valid || fail 'backend source/config validation failed'; }
 backend_destination_owned(){
@@ -171,6 +193,8 @@ backend_destination_owned(){
 }
 validate_backend_destination_ownership(){
     backend_destination_owned || fail "неизвестный файл в backend destination: $BACKEND_DEST"
+    load_zcal_runtime_helper || fail 'Z Calibration runtime helper отсутствует'
+    validate_zcal_core_destination_ownership
 }
 remove_backend_bytecode(){
     rm -f "$MOONRAKER_COMPONENTS_DIR/__pycache__/plugins_ad5x"*.pyc 2>/dev/null || true
@@ -190,19 +214,25 @@ deploy_backend_managed_copy(){
     HASH_TMP="$BACKEND_HASH_STATE.tmp.$$"
     printf '%s\n' "$SOURCE_HASH" >"$HASH_TMP"
     mv -f "$HASH_TMP" "$BACKEND_HASH_STATE"
+    zcal_core_deploy_managed_copy || return 1
 }
 backend_runtime_matches_source(){
+    load_zcal_runtime_helper || return 1
     [ -f "$BACKEND_DEST" ] || return 1
     [ ! -L "$BACKEND_DEST" ] || return 1
     [ -f "$BACKEND_HASH_STATE" ] || return 1
     SOURCE_HASH="$(sha256_file "$BACKEND_SOURCE" 2>/dev/null || true)"
     DEST_HASH="$(sha256_file "$BACKEND_DEST" 2>/dev/null || true)"
     RECORDED_HASH="$(cat "$BACKEND_HASH_STATE" 2>/dev/null || true)"
-    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ]
+    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ] || return 1
+    zcal_core_runtime_matches_source
 }
 backend_include_ok(){
     [ -s "$BACKEND_CONFIG" ] || return 1
     [ "$(grep -Fxc '[include plugins/ad5x_custom/plugins_ad5x.moonraker.conf]' "$MOONRAKER_INCLUDES" 2>/dev/null || true)" -eq 1 ]
+}
+zcal_hook_include_ok(){
+    [ "$(grep -Fxc '[include plugins/ad5x_custom/z_calibration.cfg]' "$KLIPPER_INCLUDES" 2>/dev/null || true)" -eq 1 ]
 }
 configure_moonraker_includes(){
     remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
@@ -237,7 +267,7 @@ start_moonraker(){
     [ "$(moonraker_process_count)" -eq 0 ] || return 1
     chroot "$ROOT" /etc/init.d/S65moonraker start
 }
-moonraker_server_info(){ wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/server/info" 2>/dev/null; }
+moonraker_server_info(){ ad5x_http_get 3 "$MOONRAKER_HTTP_BASE/server/info" 2>/dev/null; }
 wait_moonraker_http(){
     LIMIT="${1:-$MOONRAKER_READY_TIMEOUT}"
     COUNT=0
@@ -282,7 +312,7 @@ except Exception:
 '
 }
 backend_snapshot_valid(){
-    SNAPSHOT="$(wget -q -T 3 -O - "$MOONRAKER_HTTP_BASE/server/plugins_ad5x/snapshot" 2>/dev/null || true)"
+    SNAPSHOT="$(ad5x_http_get 3 "$MOONRAKER_HTTP_BASE/server/plugins_ad5x/snapshot" 2>/dev/null || true)"
     [ -n "$SNAPSHOT" ] || return 1
     PY="$(python_bin)" || return 1
     EXPECTED_VERSION="$(tr -d '\r\n' <"$PLUGIN_DIR/VERSION")"
@@ -294,7 +324,8 @@ try:
     ok=(data.get("api_version")=="1.0" and
         data.get("backend_version")==expected and
         (data.get("backend") or {}).get("health")=="ok" and
-        isinstance(data.get("modules"), dict))
+        isinstance(data.get("modules"), dict) and
+        isinstance((data.get("modules") or {}).get("z_calibration"), dict))
 except Exception:
     ok=False
 raise SystemExit(0 if ok else 1)
@@ -302,6 +333,7 @@ raise SystemExit(0 if ok else 1)
 }
 verify_backend_runtime(){
     [ "$(backend_component_state 2>/dev/null || true)" = ok ] || return 1
+    backend_runtime_matches_source || return 1
     backend_snapshot_valid
 }
 verify_backend_absent(){ [ "$(backend_component_state 2>/dev/null || true)" = absent ]; }
@@ -334,6 +366,8 @@ backend_install_transition(){
 backend_uninstall_transition(){
     remove_lines "$MOONRAKER_INCLUDES" 'plugins/ad5x_custom/'
     remove_update_manager_section
+    load_zcal_runtime_helper || return 1
+    zcal_core_uninstall_managed_copy || return 1
     if [ -e "$BACKEND_DEST" ] || [ -L "$BACKEND_DEST" ]; then
         backend_destination_owned || return 1
         rm -f "$BACKEND_DEST"
@@ -370,7 +404,6 @@ restore_moonraker_after_rollback(){
     wait_klippy_ready "$MOONRAKER_READY_TIMEOUT" >/dev/null 2>&1
 }
 
-# Tests source helpers without executing installer main.
 if [ "${AD5X_INSTALLER_FUNCTIONS_ONLY:-0}" = 1 ]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -488,7 +521,6 @@ HOOK
     sh -n "$POWER_ON" || fail 'ошибка синтаксиса power_on.sh'
 }
 
-# Bootstrap clone.
 if [ "$MODE" != --apply-only ] && [ "$MODE" != --refresh-only ] && [ "$MODE" != --status ] && [ "$MODE" != --uninstall ] && [ ! -d "$PLUGIN_DIR/.git" ]; then
     ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
     mkdir -p /opt/config/mod_data/plugins
@@ -496,7 +528,6 @@ if [ "$MODE" != --apply-only ] && [ "$MODE" != --refresh-only ] && [ "$MODE" != 
     exec "$PLUGIN_DIR/install.sh" --apply-only
 fi
 
-# Re-running downloaded installer switches an existing install to REF.
 if [ "$MODE" = "" ] && [ -d "$PLUGIN_DIR/.git" ]; then
     ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
     S="$(chroot "$ROOT" /usr/bin/git -C "$PLUGIN_DIR" status --porcelain)"
@@ -526,8 +557,9 @@ if [ "$MODE" = --status ]; then
     done
     grep -q 'AD5X_CUSTOM_POWER_ON_BEGIN' "$POWER_ON" && echo '[OK] power_on hook' || echo '[FAIL] power_on hook'
     if backend_source_valid; then echo '[OK] backend source'; else echo '[FAIL] backend source'; fi
-    if backend_runtime_matches_source; then echo '[OK] backend runtime file'; else echo '[FAIL] backend runtime file'; fi
+    if backend_runtime_matches_source; then echo '[OK] backend runtime files'; else echo '[FAIL] backend runtime files'; fi
     if backend_include_ok; then echo '[OK] backend config include'; else echo '[FAIL] backend config include'; fi
+    if zcal_hook_include_ok; then echo '[OK] Z Calibration Klipper hook include'; else echo '[FAIL] Z Calibration Klipper hook include'; fi
     INFO="$(moonraker_server_info 2>/dev/null || true)"
     if [ -n "$INFO" ]; then
         case "$(backend_component_state "$INFO" 2>/dev/null || true)" in
@@ -542,9 +574,9 @@ if [ "$MODE" = --status ]; then
         echo '[UNAVAILABLE] backend snapshot (runtime service unavailable)'
         echo '[FAIL] Moonraker'
     fi
-    wget -qO- 'http://127.0.0.1:8080/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 1' || echo '[FAIL] Camera 1'
-    wget -qO- 'http://127.0.0.1:8081/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 2' || echo '[FAIL] Camera 2'
-    wget -qO- http://127.0.0.1:7913/api/health >/dev/null 2>&1 && echo '[OK] IFS' || echo '[FAIL] IFS'
+    ad5x_http_get 3 'http://127.0.0.1:8080/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 1' || echo '[FAIL] Camera 1'
+    ad5x_http_get 3 'http://127.0.0.1:8081/?action=snapshot' >/dev/null 2>&1 && echo '[OK] Camera 2' || echo '[FAIL] Camera 2'
+    ad5x_http_get 3 'http://127.0.0.1:7913/api/health' >/dev/null 2>&1 && echo '[OK] IFS' || echo '[FAIL] IFS'
     echo '=== Git ==='
     repo_status "$ROOT" Z-Mod /opt/config/mod
     repo_status "$ROOT" klippy /opt/config/base/klipper
@@ -565,6 +597,8 @@ if [ "$MODE" = --uninstall ]; then
     snapshot "$POWER_ON" power_on.sh
     snapshot "$BACKEND_DEST" backend-runtime.py
     snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+    snapshot "$ZCAL_CORE_DEST" zcal-runtime.py
+    snapshot "$ZCAL_CORE_HASH_STATE" zcal-runtime.sha256
     UNINSTALL_SUCCESS=0
     rollback_uninstall(){
         set +e
@@ -578,6 +612,8 @@ if [ "$MODE" = --uninstall ]; then
         restore_snapshot "$POWER_ON" power_on.sh
         restore_snapshot "$BACKEND_DEST" backend-runtime.py
         restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+        restore_snapshot "$ZCAL_CORE_DEST" zcal-runtime.py
+        restore_snapshot "$ZCAL_CORE_HASH_STATE" zcal-runtime.sha256
         remove_backend_bytecode
         restore_moonraker_after_rollback || true
         echo "Uninstall rollback завершён. Backup: $B" >&2
@@ -604,7 +640,7 @@ if [ "$MODE" = --uninstall ]; then
     run_moonraker_transition backend_uninstall_transition verify_backend_absent || fail 'backend uninstall lifecycle failed'
     UNINSTALL_SUCCESS=1
     trap - EXIT HUP INT TERM
-    echo 'Интеграция отключена. Backend удалён; исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
+    echo 'Интеграция отключена. Backend и Z Calibration runtime удалены; исходный power_on.sh восстановлен; пользовательские камеры, IFS, таймлапсы, логи и backups сохранены.'
     exit 0
 fi
 
@@ -630,6 +666,8 @@ rollback_install(){
     restore_snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
     restore_snapshot "$BACKEND_DEST" backend-runtime.py
     restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+    restore_snapshot "$ZCAL_CORE_DEST" zcal-runtime.py
+    restore_snapshot "$ZCAL_CORE_HASH_STATE" zcal-runtime.sha256
     remove_backend_bytecode
     [ -f "$B/upstream/notify.cfg" ] && cp -p "$B/upstream/notify.cfg" /opt/config/mod_data/plugins/notify/ru/notify.cfg
     [ -f "$B/upstream/notify.moonraker.cfg" ] && cp -p "$B/upstream/notify.moonraker.cfg" /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg
@@ -657,6 +695,8 @@ snapshot "$GENERATED/notify.cfg" generated-notify.cfg
 snapshot "$GENERATED/timelapse.cfg" generated-timelapse.cfg
 snapshot "$BACKEND_DEST" backend-runtime.py
 snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
+snapshot "$ZCAL_CORE_DEST" zcal-runtime.py
+snapshot "$ZCAL_CORE_HASH_STATE" zcal-runtime.sha256
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.cfg "$B/upstream/notify.cfg"
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg "$B/upstream/notify.moonraker.cfg"
 [ -f /opt/config/mod_data/plugins/timelapse/timelapse.cfg ] && cp -p /opt/config/mod_data/plugins/timelapse/timelapse.cfg "$B/upstream/timelapse.cfg"
@@ -675,7 +715,6 @@ if [ ! -f "$STATE/S99zzcamera2" ]; then
 fi
 chmod +x "$STATE/S99zzcamera2" "$PLUGIN_DIR/install.sh" "$PLUGIN_DIR/runtime.sh"
 
-# Save dirty diffs and restore tracked plugin repositories to HEAD.
 ROOT="$(find_root)" || fail 'chroot Z-Mod не найден'
 for S in notify:/opt/config/mod_data/plugins/notify timelapse:/opt/config/mod_data/plugins/timelapse; do
     NAME="${S%%:*}"; P="${S#*:}"
@@ -689,6 +728,7 @@ generate_configs
 save_lines "$KLIPPER_INCLUDES" 'plugins/notify/.*/notify\.cfg|plugins/timelapse/timelapse\.cfg' "$STATE/original-klipper-includes.lines"
 remove_lines "$KLIPPER_INCLUDES" 'plugins/ad5x_custom/|ad5x_custom/generated/|plugins/notify/.*/notify\.cfg|plugins/timelapse/timelapse\.cfg'
 append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/ad5x_custom.cfg]'
+append_line "$KLIPPER_INCLUDES" '[include plugins/ad5x_custom/z_calibration.cfg]'
 append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/notify.cfg]'
 append_line "$KLIPPER_INCLUDES" '[include ad5x_custom/generated/timelapse.cfg]'
 
@@ -700,5 +740,5 @@ run_moonraker_transition backend_install_transition verify_backend_runtime || fa
 SUCCESS=1
 trap - EXIT HUP INT TERM
 echo "AD5X Custom применён. Backup: $B"
-echo 'Plugins AD5X backend применён через managed copy и controlled Moonraker lifecycle.'
-echo 'Для активации остальных camera/power-on изменений требуется полное выключение и включение принтера.'
+echo 'Plugins AD5X backend + Z Calibration core применены через managed copy и controlled Moonraker lifecycle.'
+echo 'Z Calibration Klipper hook установлен с закрытым write-gate; effective hook загружен через controlled Klipper reload.'

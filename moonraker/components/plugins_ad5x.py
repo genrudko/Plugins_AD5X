@@ -1,8 +1,8 @@
 # Plugins AD5X - optional Moonraker foundation component
 #
-# This file is deployed into Moonraker's components package.  Keep the
-# implementation deliberately small: Platform Foundation has no hardware
-# providers, background jobs, polling loops, database, or blocking I/O.
+# This file is deployed into Moonraker's components package. Keep the shared
+# platform host deliberately small. Feature backends (for example IFS and Z
+# Calibration) must not replace each other through this file.
 
 from __future__ import annotations
 
@@ -11,10 +11,6 @@ from typing import Any, Dict
 from ..common import RequestType, TransportType
 
 API_VERSION = "1.0"
-# Deployment may ultimately use either a symlink or a copy.  A copied component
-# cannot reliably discover the Plugins AD5X repository root at runtime, so the
-# release version is embedded here and guarded against the repository VERSION
-# file by an automated test.
 BACKEND_VERSION = "0.1.2"
 
 SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/snapshot"
@@ -44,9 +40,7 @@ class PluginsAD5X:
             "api_version": API_VERSION,
             "backend_version": BACKEND_VERSION,
             "revision": self._revision,
-            "backend": {
-                "health": "ok",
-            },
+            "backend": {"health": "ok"},
             "modules": {},
         }
 
@@ -54,7 +48,6 @@ class PluginsAD5X:
         return self.get_snapshot()
 
     def invalidate_snapshot(self) -> int:
-        """Mark the current snapshot stale after a semantic state change."""
         self._revision += 1
         self.server.send_event(
             SNAPSHOT_CHANGED_EVENT,

@@ -1,0 +1,112 @@
+name: Z Calibration Core
+
+on:
+  push:
+    branches:
+      - feature/z-calibration-subsystem-v2
+    paths:
+      - 'moonraker/components/plugins_ad5x.py'
+      - 'moonraker/components/plugins_ad5x_zcal.py'
+      - 'moonraker/components/plugins_ad5x_zcalibration.py'
+      - 'moonraker/components/plugins_ad5x_zorchestrator.py'
+      - 'plugins_ad5x.moonraker.conf'
+      - 'plugins_ad5x_zcal.moonraker.conf'
+      - 'ad5x_custom.cfg'
+      - 'z_calibration.cfg'
+      - 'z_calibration_rc_policy.cfg'
+      - 'install.sh'
+      - 'installer/z_calibration_runtime.sh'
+      - 'installer/z_calibration_productization.py'
+      - 'installer/z_calibration_rc_lifecycle.sh'
+      - 'installer/z_calibration_backend_lifecycle.sh'
+      - 'tests/test_plugins_ad5x_component.py'
+      - 'tests/test_plugins_ad5x_zcal_component.py'
+      - 'tests/test_z_calibration_core.py'
+      - 'tests/test_z_calibration_orchestrator.py'
+      - 'tests/test_z_calibration_orchestrator_atomicity.py'
+      - 'tests/test_installer_backend_lifecycle.py'
+      - 'tests/test_z_calibration_lifecycle_assets.py'
+      - 'tests/test_z_calibration_productization.py'
+      - 'tests/test_z_calibration_productization_reload.py'
+      - 'tests/test_z_calibration_lifecycle_reload.py'
+      - 'tests/test_z_calibration_rc_lifecycle.py'
+      - 'tests/test_z_calibration_backend_lifecycle.py'
+      - 'tests/test_z_calibration_production_policy_asset.py'
+      - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
+      - 'docs/evidence/Z_CALIBRATION_BACKEND_COEXISTENCE_REPAIR_2026-08-18.md'
+      - '.github/workflows/z-calibration-core.yml'
+  pull_request:
+    paths:
+      - 'moonraker/components/plugins_ad5x.py'
+      - 'moonraker/components/plugins_ad5x_zcal.py'
+      - 'moonraker/components/plugins_ad5x_zcalibration.py'
+      - 'moonraker/components/plugins_ad5x_zorchestrator.py'
+      - 'plugins_ad5x.moonraker.conf'
+      - 'plugins_ad5x_zcal.moonraker.conf'
+      - 'ad5x_custom.cfg'
+      - 'z_calibration.cfg'
+      - 'z_calibration_rc_policy.cfg'
+      - 'install.sh'
+      - 'installer/z_calibration_runtime.sh'
+      - 'installer/z_calibration_productization.py'
+      - 'installer/z_calibration_rc_lifecycle.sh'
+      - 'installer/z_calibration_backend_lifecycle.sh'
+      - 'tests/test_plugins_ad5x_component.py'
+      - 'tests/test_plugins_ad5x_zcal_component.py'
+      - 'tests/test_z_calibration_core.py'
+      - 'tests/test_z_calibration_orchestrator.py'
+      - 'tests/test_z_calibration_orchestrator_atomicity.py'
+      - 'tests/test_installer_backend_lifecycle.py'
+      - 'tests/test_z_calibration_lifecycle_assets.py'
+      - 'tests/test_z_calibration_productization.py'
+      - 'tests/test_z_calibration_productization_reload.py'
+      - 'tests/test_z_calibration_lifecycle_reload.py'
+      - 'tests/test_z_calibration_rc_lifecycle.py'
+      - 'tests/test_z_calibration_backend_lifecycle.py'
+      - 'tests/test_z_calibration_production_policy_asset.py'
+      - 'docs/Z_CALIBRATION_PRODUCTION_POLICY_V1.md'
+      - 'docs/evidence/Z_CALIBRATION_BACKEND_COEXISTENCE_REPAIR_2026-08-18.md'
+      - '.github/workflows/z-calibration-core.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model-fake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python sources
+        run: >-
+          python -m py_compile
+          moonraker/components/plugins_ad5x.py
+          moonraker/components/plugins_ad5x_zcal.py
+          moonraker/components/plugins_ad5x_zcalibration.py
+          moonraker/components/plugins_ad5x_zorchestrator.py
+          installer/z_calibration_productization.py
+          tests/test_plugins_ad5x_component.py
+          tests/test_plugins_ad5x_zcal_component.py
+          tests/test_z_calibration_core.py
+          tests/test_z_calibration_orchestrator.py
+          tests/test_z_calibration_orchestrator_atomicity.py
+          tests/test_z_calibration_lifecycle_assets.py
+          tests/test_z_calibration_productization.py
+          tests/test_z_calibration_productization_reload.py
+          tests/test_z_calibration_lifecycle_reload.py
+          tests/test_z_calibration_rc_lifecycle.py
+          tests/test_z_calibration_backend_lifecycle.py
+          tests/test_z_calibration_production_policy_asset.py
+      - name: Check shell syntax
+        run: >-
+          sh -n
+          install.sh
+          installer/z_calibration_runtime.sh
+          installer/z_calibration_rc_lifecycle.sh
+          installer/z_calibration_backend_lifecycle.sh
+      - name: Run repository tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
