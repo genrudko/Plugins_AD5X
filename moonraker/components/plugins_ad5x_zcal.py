@@ -20,7 +20,7 @@ else:
     _ZCORE_IMPORT_ERROR = None
 
 API_VERSION = "1.0"
-MODULE_VERSION = "0.1.3"
+MODULE_VERSION = "0.1.4"
 Z_MODULE_SCHEMA_VERSION = "1.1"
 
 Z_SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/z_calibration/snapshot"
@@ -46,6 +46,7 @@ _Z_CAPABILITIES = [
     "runtime_policy_detection",
     "frontend_neutral_snapshot",
     "read_only_reconciliation",
+    "job_thermal_provenance",
 ]
 
 
@@ -98,6 +99,66 @@ def _normalize_slicer_request(value: Any) -> Optional[float]:
     ):
         return None
     return requested
+
+
+def _safe_optional_float(value: Any) -> Optional[float]:
+    try:
+        return _optional_float(value)
+    except ValueError:
+        return None
+
+
+def _thermal_match_status(control: Optional[float], metadata: Optional[float]) -> str:
+    if control is None and metadata is None:
+        return "unavailable"
+    if control is None:
+        return "metadata_only"
+    if metadata is None:
+        return "start_print_only"
+    return (
+        "matched"
+        if math.isclose(control, metadata, rel_tol=0.0, abs_tol=0.5)
+        else "mismatch"
+    )
+
+
+def _derive_job_thermal_context(
+    status: Mapping[str, Any], metadata: Mapping[str, Any]
+) -> Dict[str, Any]:
+    print_stats = status.get("print_stats")
+    start_print = status.get("gcode_macro _START_PRINT")
+    filename = (
+        print_stats.get("filename")
+        if isinstance(print_stats, Mapping) and isinstance(print_stats.get("filename"), str)
+        else None
+    )
+    if filename == "":
+        filename = None
+    bed_target = (
+        _safe_optional_float(start_print.get("zbed_temp"))
+        if isinstance(start_print, Mapping) else None
+    )
+    extruder_target = (
+        _safe_optional_float(start_print.get("zextruder_temp"))
+        if isinstance(start_print, Mapping) else None
+    )
+    meta_bed = _safe_optional_float(metadata.get("first_layer_bed_temp"))
+    meta_extruder = _safe_optional_float(metadata.get("first_layer_extr_temp"))
+    return {
+        "filename": filename,
+        "thermal": {
+            "control_source": "zmod_start_print",
+            "bed_target": bed_target,
+            "extruder_target": extruder_target,
+            "first_layer_bed_temp": meta_bed,
+            "first_layer_extr_temp": meta_extruder,
+            "filament_type": metadata.get("filament_type"),
+            "filament_name": metadata.get("filament_name"),
+            "metadata_available": bool(metadata),
+            "bed_status": _thermal_match_status(bed_target, meta_bed),
+            "extruder_status": _thermal_match_status(extruder_target, meta_extruder),
+        },
+    }
 
 
 def _macro_commands(raw_gcode: Any) -> list[str]:
@@ -568,7 +629,7 @@ class PluginsAD5XZCalibration:
             status = await klippy_apis.query_objects(
                 {
                     "gcode_move": ["homing_origin"],
-                    "print_stats": ["state"],
+                    "print_stats": ["state", "filename"],
                     "toolhead": ["homed_axes"],
                     "save_variables": ["variables"],
                     "gcode_macro _TEST_POINT": ["temp_z_offset"],
@@ -577,6 +638,8 @@ class PluginsAD5XZCalibration:
                         "zzoffset",
                         "zforce_kamp",
                         "zforce_leveling",
+                        "zbed_temp",
+                        "zextruder_temp",
                     ],
                     Z_RC_POLICY_OBJECT: [
                         "policy_id",
@@ -593,6 +656,20 @@ class PluginsAD5XZCalibration:
             if not isinstance(status, Mapping):
                 raise ValueError("Klippy object query did not return a mapping")
             offsets, provenance, runtime, job = _derive_zmod_provenance(status)
+            metadata: Mapping[str, Any] = {}
+            thermal_context = _derive_job_thermal_context(status, metadata)
+            filename = thermal_context.get("filename")
+            if isinstance(filename, str) and filename:
+                try:
+                    file_manager = lookup_component("file_manager")
+                    get_file_metadata = getattr(file_manager, "get_file_metadata", None)
+                    if callable(get_file_metadata):
+                        raw_metadata = get_file_metadata(filename)
+                        if isinstance(raw_metadata, Mapping):
+                            metadata = raw_metadata
+                except Exception:
+                    metadata = {}
+            job.update(_derive_job_thermal_context(status, metadata))
             print_state = runtime.get("print_state")
             homed_axes = runtime.get("homed_axes")
             if not isinstance(print_state, str) or not print_state:
@@ -634,6 +711,13 @@ class PluginsAD5XZCalibration:
                 provenance.get("status"),
                 hook_status,
                 provenance.get("requested_slicer_z_offset"),
+                job.get("filename"),
+                job.get("thermal", {}).get("bed_target"),
+                job.get("thermal", {}).get("extruder_target"),
+                job.get("thermal", {}).get("first_layer_bed_temp"),
+                job.get("thermal", {}).get("first_layer_extr_temp"),
+                job.get("thermal", {}).get("bed_status"),
+                job.get("thermal", {}).get("extruder_status"),
             )
             semantic_change = signature != self._z_runtime_signature
             self._z_runtime_signature = signature
@@ -661,6 +745,7 @@ class PluginsAD5XZCalibration:
                         "requested_slicer_z_offset": provenance.get(
                             "requested_slicer_z_offset"
                         ),
+                        "job_thermal": dict(job.get("thermal", {})),
                     },
                 )
         except Exception as exc:

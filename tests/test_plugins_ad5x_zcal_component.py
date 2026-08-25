@@ -74,13 +74,28 @@ class FakeKlippyAPI:
         return "ok"
 
 
+class FakeFileManager:
+    def __init__(self, metadata: Dict[str, Any] | None = None) -> None:
+        self.metadata = metadata or {}
+        self.requests: List[str] = []
+
+    def get_file_metadata(self, filename: str) -> Dict[str, Any]:
+        self.requests.append(filename)
+        return dict(self.metadata)
+
+
 class FakeServer:
-    def __init__(self, klippy_apis: FakeKlippyAPI | None = None) -> None:
+    def __init__(
+        self,
+        klippy_apis: FakeKlippyAPI | None = None,
+        file_manager: FakeFileManager | None = None,
+    ) -> None:
         self.endpoints: List[Dict[str, Any]] = []
         self.notifications: List[Tuple[str, str]] = []
         self.events: List[Tuple[str, Tuple[Any, ...]]] = []
         self.event_handlers: Dict[str, Any] = {}
         self.klippy_apis = klippy_apis
+        self.file_manager = file_manager
 
     def register_endpoint(
         self,
@@ -113,6 +128,8 @@ class FakeServer:
     def lookup_component(self, name: str) -> Any:
         if name == "klippy_apis" and self.klippy_apis is not None:
             return self.klippy_apis
+        if name == "file_manager" and self.file_manager is not None:
+            return self.file_manager
         raise KeyError(name)
 
 
@@ -133,6 +150,9 @@ def ready_payload(
     print_state: str = "printing",
     homed_axes: str = "xyz",
     hook_commands: list[str] | None = None,
+    filename: str = "test.gcode",
+    bed_temp: float = 70.0,
+    extruder_temp: float = 240.0,
 ) -> Dict[str, Any]:
     if actual is None:
         actual = persistent + auto
@@ -140,7 +160,7 @@ def ready_payload(
         hook_commands = [component_module.Z_CC_APPLY, component_module.Z_RC_GUARD]
     return {
         "gcode_move": {"homing_origin": [0.0, 0.0, actual]},
-        "print_stats": {"state": print_state},
+        "print_stats": {"state": print_state, "filename": filename},
         "toolhead": {"homed_axes": homed_axes},
         "save_variables": {
             "variables": {
@@ -156,6 +176,8 @@ def ready_payload(
             "zzoffset": requested_job,
             "zforce_kamp": False,
             "zforce_leveling": False,
+            "zbed_temp": bed_temp,
+            "zextruder_temp": extruder_temp,
         },
         component_module.Z_RC_POLICY_OBJECT: {
             "policy_id": component_module.Z_RC_POLICY_ID,
@@ -255,6 +277,60 @@ class PluginsAD5XZCalComponentTests(unittest.TestCase):
             "ignored_by_zmod_global_offset_path",
         )
         self.assertAlmostEqual(state["offset"]["slicer_job"], 0.0)
+
+    def test_job_thermal_context_matches_start_print_and_metadata(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(filename="parts/test.gcode"))
+        file_manager = FakeFileManager({
+            "first_layer_bed_temp": 70.0,
+            "first_layer_extr_temp": 240.0,
+            "filament_type": "PLA",
+            "filament_name": "Test PLA",
+        })
+        component = component_module.load_component(
+            FakeConfig(FakeServer(klippy, file_manager))
+        )
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        thermal = state["job"]["thermal"]
+        self.assertEqual(state["job"]["filename"], "parts/test.gcode")
+        self.assertEqual(thermal["control_source"], "zmod_start_print")
+        self.assertAlmostEqual(thermal["bed_target"], 70.0)
+        self.assertAlmostEqual(thermal["extruder_target"], 240.0)
+        self.assertEqual(thermal["filament_type"], "PLA")
+        self.assertEqual(thermal["filament_name"], "Test PLA")
+        self.assertTrue(thermal["metadata_available"])
+        self.assertEqual(thermal["bed_status"], "matched")
+        self.assertEqual(thermal["extruder_status"], "matched")
+        self.assertEqual(file_manager.requests, ["parts/test.gcode"])
+
+    def test_job_thermal_metadata_mismatch_never_overrides_start_print(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(bed_temp=70.0, extruder_temp=240.0))
+        file_manager = FakeFileManager({
+            "first_layer_bed_temp": 60.0,
+            "first_layer_extr_temp": 230.0,
+            "filament_type": "PLA",
+        })
+        component = component_module.load_component(
+            FakeConfig(FakeServer(klippy, file_manager))
+        )
+        thermal = asyncio.run(component._handle_snapshot(object()))["module"]["state"]["job"]["thermal"]
+        self.assertAlmostEqual(thermal["bed_target"], 70.0)
+        self.assertAlmostEqual(thermal["extruder_target"], 240.0)
+        self.assertAlmostEqual(thermal["first_layer_bed_temp"], 60.0)
+        self.assertAlmostEqual(thermal["first_layer_extr_temp"], 230.0)
+        self.assertEqual(thermal["bed_status"], "mismatch")
+        self.assertEqual(thermal["extruder_status"], "mismatch")
+        self.assertEqual(klippy.gcode, [])
+
+    def test_job_thermal_context_falls_back_to_start_print_without_metadata(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(bed_temp=75.0, extruder_temp=235.0))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        thermal = asyncio.run(component._handle_snapshot(object()))["module"]["state"]["job"]["thermal"]
+        self.assertFalse(thermal["metadata_available"])
+        self.assertAlmostEqual(thermal["bed_target"], 75.0)
+        self.assertAlmostEqual(thermal["extruder_target"], 235.0)
+        self.assertEqual(thermal["bed_status"], "start_print_only")
+        self.assertEqual(thermal["extruder_status"], "start_print_only")
+        self.assertEqual(klippy.gcode, [])
 
     def test_reconcile_is_read_only_and_records_diagnostic(self) -> None:
         klippy = FakeKlippyAPI(ready_payload())
