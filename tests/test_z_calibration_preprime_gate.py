@@ -15,7 +15,9 @@ class PrePrimeGateTests(unittest.TestCase):
     def test_end_hook_cannot_run_fresh_autoz_late(self) -> None:
         self.assertIn("fresh_mesh_proven and pre_prime == 1", POLICY)
         self.assertIn("fresh_mesh_proven and fresh_finalized == 1", POLICY)
-        self.assertIn("_ADZ_VALIDATE_NATIVE_RESULT", POLICY)
+        self.assertIn("_ADZ_FINALIZE_MACHINE_ANCHOR", POLICY)
+        self.assertIn("fresh_mesh_proven and fresh_finalized == 1", POLICY)
+        self.assertIn("_ADZ_RC_ABORT_PATH", POLICY)
         self.assertIn("_ADZ_RC_ABORT_PATH", POLICY)
 
     def test_productizer_owns_and_restores_public_clear_seam(self) -> None:

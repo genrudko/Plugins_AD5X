@@ -9,7 +9,7 @@ COMMAND_RESET = "ADZ_MESH_ANCHOR_RESET"
 class AD5XZMeshAnchor:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.max_abs_shift = config.getfloat("max_abs_shift", 0.5, above=0.0)
+        self.max_abs_shift = config.getfloat("max_abs_shift", 0.31, above=0.0)
         self.gcode = self.printer.lookup_object("gcode")
         self.gcode.register_command(COMMAND_APPLY, self.cmd_APPLY)
         self.gcode.register_command(COMMAND_RESET, self.cmd_RESET)
@@ -49,7 +49,7 @@ class AD5XZMeshAnchor:
             raise self.gcode.error("Plugins AD5X Z anchor: SHIFT must be numeric")
         if not math.isfinite(value):
             raise self.gcode.error("Plugins AD5X Z anchor: SHIFT must be finite")
-        if abs(value) > self.max_abs_shift:
+        if abs(value) >= self.max_abs_shift:
             raise self.gcode.error("Plugins AD5X Z anchor: SHIFT %.4f exceeds safety limit %.4f mm" % (value, self.max_abs_shift))
         return value
 
@@ -114,6 +114,7 @@ class AD5XZMeshAnchor:
             "runtime_profile": RUNTIME_PROFILE if active else "",
             "point_count": self.point_count,
             "persistent": False,
+            "max_abs_shift": self.max_abs_shift,
         }
 
 def load_config(config):

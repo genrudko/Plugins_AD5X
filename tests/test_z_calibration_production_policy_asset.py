@@ -26,12 +26,14 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertNotIn("saved_reference", guard)
         self.assertNotIn("reference_tolerance", guard)
 
-    def test_rc_reconciliation_envelope_is_diagnostic_not_compensation(self) -> None:
-        self.assertIn("variable_expected_reconciliation_delta: 0.130000", self.asset)
-        self.assertIn("variable_max_reconciliation_residual: 0.050000", self.asset)
-        self.assertIn("expected_reconciliation_delta = +0.130000 mm", self.policy)
-        self.assertIn("abs(reconciliation_residual) < 0.050000 mm", self.policy)
-        self.assertIn("is not a compensation term", self.policy)
+    def test_v6_anchor_transfer_has_no_magic_expected_delta(self) -> None:
+        self.assertNotIn("variable_expected_reconciliation_delta", self.asset)
+        self.assertNotIn("variable_max_reconciliation_residual", self.asset)
+        self.assertIn('variable_anchor_policy_id: "adz-runtime-mesh-anchor-v6-20260825"', self.asset)
+        self.assertIn("variable_max_machine_anchor: 0.310000", self.asset)
+        self.assertIn("transient runtime mesh", self.policy)
+        self.assertIn("0.310000 mm", self.policy)
+        self.assertIn("not an expected correction", self.policy)
 
     def test_saved_check_requires_abort_style_zmod_mode_three(self) -> None:
         self.assertIn("mesh_test != 3", self.asset)
@@ -47,7 +49,7 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             "_ADZ_RC_ABORT_PATH",
             "_ADZ_RC_ABORT_MODE",
             "_ADZ_RC_ABORT_PROFILE",
-            "_ADZ_RC_ABORT_ALIGNMENT",
+            "_ADZ_RC_ABORT_ANCHOR",
         )
         for macro in guarded_abort_calls:
             call = next(
@@ -61,10 +63,11 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             self.assertNotEqual(restore_pos, -1, macro)
             branch_pos = preceding.rfind("{% ")
             self.assertGreater(restore_pos, branch_pos, macro)
-        self.assertEqual(guard.count("LOAD_GCODE_OFFSET"), 8)
+        self.assertGreaterEqual(guard.count("LOAD_GCODE_OFFSET"), len(guarded_abort_calls))
 
     def test_policy_guard_is_pure_klipper_and_does_not_own_start_hook(self) -> None:
-        self.assertIn('RESPOND PREFIX="info" MSG="Plugins AD5X saved+check PASS:', self.asset)
+        self.assertIn('RESPOND PREFIX="info" MSG="Plugins AD5X Z v6 PASS:', self.asset)
+        self.assertIn("saved-mesh provenance PASS", self.asset)
         self.assertNotIn("action_call_remote_method", self.asset)
         self.assertNotIn("[gcode_macro _USER_START_PRINT]", self.asset)
         self.assertNotIn("[gcode_macro _USER_START_PRINT]", self.wrapper)
@@ -123,7 +126,8 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertNotIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset VALUE=0.0", block)
         self.assertIn("LOAD_GCODE_OFFSET", block)
         self.assertEqual(block.count("_MESH_TEST"), 1)
-        self.assertIn("_ADZ_VALIDATE_NATIVE_RESULT", block)
+        self.assertIn("_ADZ_FINALIZE_MACHINE_ANCHOR", block)
+        self.assertLess(block.index("_ADZ_RECORD_MESH_POLICY"), block.index("_ADZ_FINALIZE_MACHINE_ANCHOR"))
         self.assertNotIn("\n    PROBE", block)
 
     def test_active_policy_does_not_hard_gate_absolute_mesh_center(self) -> None:
@@ -198,15 +202,17 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertLess(restore, guard)
         self.assertNotIn("SAVE_CONFIG", block)
 
-    def test_native_validation_never_rewrites_successful_zmod_offset(self) -> None:
-        start = self.asset.index("[gcode_macro _ADZ_VALIDATE_NATIVE_RESULT]")
-        end = self.asset.index("[gcode_macro _ADZ_RC_ABORT_PRIME]", start)
+    def test_machine_anchor_transfer_restores_user_z_before_mesh_shift(self) -> None:
+        start = self.asset.index("[gcode_macro _ADZ_FINALIZE_MACHINE_ANCHOR]")
+        end = self.asset.index("[gcode_macro _ADZ_REPORT_MACHINE_ANCHOR]", start)
         block = self.asset[start:end]
         self.assertNotIn("_SET_GCODE_OFFSET_FAST", block)
         self.assertNotIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset", block)
-        self.assertIn("LOAD_GCODE_OFFSET", block)  # rejection only
-        self.assertIn("native Auto-Z PASS", block)
-        self.assertIn("effective_z=", block)
+        self.assertIn("LOAD_GCODE_OFFSET", block)
+        self.assertIn("ADZ_MESH_ANCHOR SHIFT={native_delta}", block)
+        self.assertLess(block.index("LOAD_GCODE_OFFSET"), block.index("ADZ_MESH_ANCHOR SHIFT={native_delta}"))
+        self.assertIn("final_probe_completed", block)
+        self.assertIn("machine_anchor_finalized VALUE=1", block)
 
     def test_policy_adds_no_plugins_owned_motion_or_direct_z_write(self) -> None:
         command_lines = [
@@ -230,7 +236,8 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
             self.assertIn(ref, self.policy)
         self.assertIn("universal AD5X numeric default", self.policy)
         self.assertIn("No reboot compensation", self.policy)
-        self.assertIn("hardware/measurement relationship changed", self.policy)
+        self.assertIn("run-dependent", self.policy)
+        self.assertIn("plausibility limit", self.policy)
 
 
 if __name__ == "__main__":

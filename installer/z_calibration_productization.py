@@ -43,6 +43,8 @@ POLICY_MAX_AUTO = _impl.POLICY_MAX_AUTO
 PRIME_GATE = "_ADZ_PRIME_GATE"
 PRIME_DELEGATE_VARIABLE = "adz_prime_delegate"
 MEASUREMENT_POLICY_ID = "adz-metrology-mesh5-median3-final05-median3-anchor-v5-20260825"
+ANCHOR_POLICY_ID = "adz-runtime-mesh-anchor-v6-20260825"
+MAX_MACHINE_ANCHOR = 0.310000
 MESH_POLICY_VARIABLE = "adz_mesh_policy"
 MESH_PROFILE_VARIABLE = "adz_mesh_profile"
 MESH_POINTS_VARIABLE = "adz_mesh_points"
@@ -80,6 +82,7 @@ def build_preflight_plan(printer_config: Path, policy_source: Path, policy_dest:
         plan["original_mesh_profile"] = _variable_spec(v, MESH_PROFILE_VARIABLE)
         plan["original_mesh_points"] = _variable_spec(v, MESH_POINTS_VARIABLE)
     plan["measurement_policy_id"] = MEASUREMENT_POLICY_ID
+    plan["anchor_policy_id"] = ANCHOR_POLICY_ID
     return plan
 
 
@@ -223,6 +226,7 @@ def apply_plan(plan: dict[str, Any], policy_source: Path) -> dict[str, Any]:
                 raise ProductizationError(f"missing ZCAL ownership field: {key}")
             manifest[key] = plan[key]
     manifest["measurement_policy_id"] = MEASUREMENT_POLICY_ID
+    manifest["anchor_policy_id"] = ANCHOR_POLICY_ID
     delegate = _validate_prime_delegate(manifest["original_clear"].get("value", "LINE_PURGE"))
     variables = Path(plan["variables_file"])
     _set_variable(variables, "mesh_test", 3, True)
@@ -282,17 +286,25 @@ def verify_live(live_payload: str, state_dir: Path) -> None:
     if abs(float(measurement.get("final_probe_speed", -1.0)) - 0.5) > 1e-12: raise ProductizationError("ZCAL final probe speed mismatch")
     if int(measurement.get("final_probe_samples", -1)) != 3: raise ProductizationError("ZCAL final probe sample-count mismatch")
     if str(measurement.get("final_probe_result", "")).lower() != "median": raise ProductizationError("ZCAL final probe estimator mismatch")
-    if abs(float(measurement.get("expected_reconciliation_delta", -99.0)) - 0.130000) > 1e-12: raise ProductizationError("ZCAL expected reconciliation delta mismatch")
     if "final_probe_armed" not in measurement: raise ProductizationError("ZCAL precision one-shot state missing")
+    if "final_probe_completed" not in measurement: raise ProductizationError("ZCAL precision completion state missing")
     if "fresh_mesh_built" not in measurement: raise ProductizationError("ZCAL fresh-mesh proof state missing")
     if "fresh_native_check_done" not in measurement: raise ProductizationError("ZCAL native fresh-check proof state missing")
     saved_check = status.get("gcode_macro _ADZ_SAVED_CHECK_POLICY", {})
-    if abs(float(saved_check.get("max_reconciliation_residual", -1.0)) - 0.050000) > 1e-12: raise ProductizationError("ZCAL split-speed residual limit mismatch")
+    if saved_check.get("anchor_policy_id") != ANCHOR_POLICY_ID: raise ProductizationError("ZCAL v6 anchor policy identity missing/mismatched")
+    if abs(float(saved_check.get("max_machine_anchor", -1.0)) - MAX_MACHINE_ANCHOR) > 1e-12: raise ProductizationError("ZCAL machine-anchor safety limit mismatch")
+    if "machine_anchor_finalized" not in saved_check: raise ProductizationError("ZCAL machine-anchor finalization state missing")
+    anchor = status.get("ad5x_z_mesh_anchor", {})
+    if not isinstance(anchor, dict) or anchor.get("persistent") is not False: raise ProductizationError("ZCAL transient mesh-anchor runtime is not loaded")
+    if abs(float(anchor.get("max_abs_shift", -1.0)) - MAX_MACHINE_ANCHOR) > 1e-12: raise ProductizationError("ZCAL mesh-anchor runtime safety limit mismatch")
     mesh_adapter = normalized.get("gcode_macro _bed_mesh_calibrate", {})
     if mesh_adapter.get("rename_existing") != "_ADZ_BED_MESH_CALIBRATE_BASE": raise ProductizationError("ZCAL bed-mesh precision adapter is not loaded")
     probe_adapter = normalized.get("gcode_macro probe", {})
     if probe_adapter.get("rename_existing") != "_ADZ_PROBE_BASE": raise ProductizationError("ZCAL final-probe precision adapter is not loaded")
+    prepare_adapter = normalized.get("gcode_macro _prepare_print", {})
+    if prepare_adapter.get("rename_existing") != "_ADZ_PREPARE_PRINT_BASE": raise ProductizationError("ZCAL print-preparation reset adapter is not loaded")
     if manifest.get("measurement_policy_id") != MEASUREMENT_POLICY_ID: raise ProductizationError("ZCAL productization measurement policy provenance mismatch")
+    if manifest.get("anchor_policy_id") != ANCHOR_POLICY_ID: raise ProductizationError("ZCAL productization anchor policy provenance mismatch")
 
 def verify_uninstalled(live_payload: str, state_dir: Path) -> None:
     _LEGACY_VERIFY_UNINSTALLED(live_payload, state_dir)

@@ -26,9 +26,9 @@ ordinary print request
 → persistent/global user Z baseline is loaded
 → exactly one final native Z-Mod MESH_TEST=3 AutoZOffset reconciliation
 → nozzle clean / tare / contact measurement owned by Z-Mod
-→ Z-Mod temporary standard Klipper Z adjustment
-→ Plugins AD5X validates the native result
-→ accept and continue, or restore persistent global Z-offset and abort
+→ Z-Mod temporarily exposes the measured service delta through its native offset path
+→ Plugins AD5X restores persistent user Z and transfers that delta into transient runtime mesh
+→ verify anchor state and continue, or restore baseline and abort
 ```
 
 This policy is evidence-bound to this printer and saved mesh. It is **not** a universal AD5X numeric default.
@@ -109,43 +109,33 @@ The earlier diagnostic reboot run produced a shifted two-series level around `-1
 
 **No reboot compensation is defined or permitted by this policy.**
 
-## 5. RC Auto-Z reconciliation envelope
+## 5. v6 machine-anchor transfer
 
-The split-speed path uses the fast mesh as **relative shape** and the slow final probe as the **absolute anchor**. Z-Mod already performs the required common-mode translation:
-
-```text
-native_delta = slow_final_probe - fast_mesh_reference
-effective_offset = persistent_offset + native_delta
-
-fast_mesh_reference + effective_offset
-= slow_final_probe + persistent_offset
-```
-
-Therefore the absolute numeric level of the fast mesh is not itself a physical Z correction. Plugins AD5X must never add or subtract the observed split-speed common-mode a second time. This is the same provenance rule recorded in `Z_CALIBRATION_GATE_A_BASELINE_2026-08-16.md`: absolute mesh levels from different probe/reference provenance are not pure bed-shape or Auto-Z deltas.
-
-Three real split-speed reconciliations observed native Z-Mod deltas of `+0.1150`, `+0.1300`, and `+0.1475 mm`. The RC uses `+0.130000 mm` only as the center of an evidence-bound **diagnostic reconciliation envelope**:
+The fast mesh remains **relative shape** and the slow final probe is the **absolute machine anchor**. Z-Mod measures `native_delta = slow_final_probe - fast_mesh_reference`. v6 does not treat any observed delta as an expected correction. It preserves the physical identity explicitly:
 
 ```text
-expected_reconciliation_delta = +0.130000 mm
-reconciliation_residual = native_delta - expected_reconciliation_delta
-abs(reconciliation_residual) < 0.050000 mm
+v5: fast_mesh + (persistent_user_offset + native_delta)
+v6: (fast_mesh + native_delta) + persistent_user_offset
 ```
 
-The `+0.130000 mm` value is not a compensation term, is not written to `gcode_offset`, and is not asserted to be a universal AD5X constant or a proven trigger-latency model. A residual at or beyond `0.050000 mm` means the accepted hardware/measurement relationship changed and the print fails closed.
+Plugins AD5X therefore restores the persistent user offset and moves the same measured `native_delta` into a **transient runtime mesh**. The pristine/saved mesh is never overwritten. After transfer, `homing_origin.z` again represents the real user correction rather than `user + service anchor`.
+
+Observed deltas `+0.1150`, `+0.1300`, and `+0.1475 mm` are evidence that common-mode is run-dependent, not a target. No `expected_reconciliation_delta` exists in v6. The only numeric acceptance boundary is `abs(native_delta) < 0.310000 mm`, mirroring Z-Mod `_TEST_POINT`. `0.310000 mm` is a fail-closed plausibility limit, **not an expected correction**, calibration constant, or compensation term.
 
 ## 6. Offset ownership and rollback behavior
 
-For this RC path:
+For v6:
 
-- Z-Mod loads the owner's persistent global Z-offset;
-- Z-Mod computes `zdelta = slow_probe - active_mesh_reference` and applies that native delta once through its existing `_TEST_POINT` / Klipper `gcode_offset` path;
-- Plugins AD5X performs **no additional production Z-offset write after successful native reconciliation**;
-- Plugins AD5X validates only the observed reconciliation delta, mesh identity and provenance;
-- on policy rejection, the hook calls `LOAD_GCODE_OFFSET` before raising the abort so the persistent global baseline is restored and Z-Mod's temporary Auto-Z value is cleared;
-- on acceptance, Plugins AD5X leaves the already-effective Z-Mod state untouched and records/observes it;
-- terminal print lifecycle still clears Plugins transient provenance state.
+- Z-Mod loads the persistent global user Z-offset and temporarily applies its measured `zdelta`;
+- Plugins AD5X requires `final_probe_completed=1`;
+- `LOAD_GCODE_OFFSET` restores the real user Z-offset;
+- `ADZ_MESH_ANCHOR` applies `zdelta` to an in-memory bed-mesh copy;
+- `machine_anchor_finalized=1` must agree with `ad5x_z_mesh_anchor.active=true`;
+- runtime anchor state is never persisted with `SAVE_CONFIG` or `BED_MESH_PROFILE SAVE`;
+- `_PREPARE_PRINT`, explicit reset/disable actions, rollback and uninstall clear transient anchor state;
+- manual `ADZ_CHECK` restores user Z after its diagnostic `_MESH_TEST`.
 
-A positive displayed effective Klipper Z-offset is not, by itself, evidence that the nozzle moved farther from the bed relative to an earlier mesh. When the mesh common-mode changes, the effective offset changes by the opposite amount. The physically relevant invariant is the anchored sum shown above, not the offset number in isolation.
+The semantic model is therefore **mesh shape + transient machine anchor + user Z-offset**. A user Z such as `-0.0910 mm` may coexist with a service anchor such as `+0.1375 mm` without contaminating the displayed user offset.
 
 ## 7. Fail-closed conditions
 
@@ -153,7 +143,9 @@ Unattended saved+check must abort when any guarded condition is true:
 
 - `MESH_TEST != 3`;
 - active mesh profile is not the accepted `auto` profile;
-- `abs(native_delta - 0.130000) >= 0.050000 mm` for the accepted split-speed policy;
+- the scoped precision final probe did not complete;
+- `abs(native_delta) >= 0.310000 mm`;
+- transient mesh-anchor runtime state and `machine_anchor_finalized` disagree;
 - the existing Plugins lifecycle hook/backend cannot complete its late adoption;
 - Z-Mod itself aborts its preceding nozzle-clean/contact/mesh check.
 
@@ -172,7 +164,7 @@ On 2026-08-17 the owner explicitly requested acceleration from evidence gatherin
 Repository/unit/CI acceptance is necessary but not sufficient for unattended use. Final owner acceptance of this RC requires **one short first-layer print test** through the real normal print path after deployment:
 
 1. Z-Mod AutoZOffset executes automatically;
-2. Plugins AD5X guard reports `saved+check PASS`;
+2. Plugins AD5X guard reports `Z v6 PASS` with separate machine-anchor and user-Z values;
 3. first layer is visually normal without manual Z-offset correction;
 4. no unexpected calibration/kernel/runtime fault appears.
 
@@ -206,11 +198,11 @@ Those remain follow-on work and must not block validation of the narrow owner-us
 
 The release-candidate measurement policy is `adz-metrology-mesh5-median3-final05-median3-anchor-v5-20260825`: bed-mesh acquisition is a fast relative-shape scan at **5 mm/s**, **3** samples and **median**, while the final in-mesh reconciliation probe remains the precision absolute-Z measurement at **0.5 mm/s**, **3** samples and **median**. This split limits exposure of the relative mesh shape to the long slow-scan failure mode seen in first-layer acceptance. Time-domain drift and speed-dependent local mechanics remain hypotheses for that spatial error, not established root causes. The native edge-cleaning probe keeps Z-Mod's own probe defaults; its tare is reused for the immediately following final reconciliation probe during an active print. Plugins AD5X still delegates physical tare/probe/motion to Z-Mod.
 
-Split-speed hardware runs on 2026-08-25 produced native Z-Mod reconciliation deltas of `+0.1150`, `+0.1300`, and `+0.1475 mm`. These are the common-mode translations required to anchor a fast relative mesh to the slow absolute probe; they are **not** separate physical Z corrections to add or subtract after `_TEST_POINT`. The expected `+0.1300 mm` is used only to detect an abnormal change in that reconciliation relationship, with accepted residual `< 0.0500 mm`.
+Split-speed hardware runs on 2026-08-25 produced native Z-Mod reconciliation deltas of `+0.1150`, `+0.1300`, and `+0.1475 mm`. These are run-specific common-mode translations, not an expected center. v6 intentionally removes the old `+0.1300 ± 0.0500 mm` diagnostic envelope and retains only Z-Mod's own `abs(delta) < 0.310000 mm` plausibility boundary.
 
-The two captured production-path examples demonstrate the anchor identity directly. With `mesh=-2.0050`, `probe=-1.8900`, persistent `Z=-0.0560`, Z-Mod computed `delta=+0.1150` and effective offset `+0.0590`; both sides resolve to `-1.9460 mm`: `mesh + effective = probe + persistent`. In the later run, `mesh=-2.0025`, `probe=-1.8550`, persistent `Z=-0.0560`, `delta=+0.1475`, and native effective offset `+0.0915`; both sides resolve to `-1.9110 mm`. Therefore comparing `+0.0590` or `+0.0915` directly with the persistent `-0.0560` without the mesh common-mode is physically invalid.
+The production-path identity is unchanged. For `mesh=-2.0025`, `probe=-1.8650`, persistent user `Z=-0.0910`, the measured delta is `+0.1375`: v5 represented the physical sum as `-2.0025 + (+0.0465) = -1.9560`, while v6 represents it as `(-2.0025 + 0.1375) + (-0.0910) = -1.9560`. v6 is preferred because the displayed/user-owned Z-offset remains the actual `-0.0910 mm`.
 
-The experimental v4 policy incorrectly attempted to subtract a fixed `0.1300 mm` after this already-complete native anchoring. The resulting runtime offset was corrupted and the print was cancelled before first-layer deposition. v5 removes that post-reconciliation write entirely. This also restores the Gate-A provenance rule that absolute mesh levels from different measurement provenance must not be interpreted as independent physical Z corrections.
+The experimental v4 policy incorrectly subtracted a fixed `0.1300 mm` after native anchoring. v5 proved that the measured native anchor can work physically; v6 keeps that metrology but moves the service delta out of `gcode_offset` and into a transient runtime mesh.
 
 First-layer acceptance on 2026-08-25 rejected the all-slow mesh policy: the 80x80 layer was spatially non-uniform, with adjacent lines locally under-squished by roughly 0.02-0.03 mm. The slow 5x5 scan and the prior saved map had almost zero mean shift but local point differences spanning about 0.073 mm. This proves the all-slow policy is unsuitable for mesh shape even though center reconciliation remained repeatable.
 

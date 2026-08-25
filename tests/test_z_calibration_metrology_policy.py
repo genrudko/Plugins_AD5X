@@ -16,7 +16,8 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("PROBE_SPEED={m.mesh_probe_speed} SAMPLES={m.mesh_probe_samples} SAMPLES_RESULT={m.mesh_probe_result}", POLICY)
         self.assertIn("variable_mesh_probe_speed: 5.0", POLICY)
         self.assertIn("variable_final_probe_speed: 0.5", POLICY)
-        self.assertIn("variable_expected_reconciliation_delta: 0.130000", POLICY)
+        self.assertNotIn("variable_expected_reconciliation_delta", POLICY)
+        self.assertIn("variable_final_probe_completed: 0", POLICY)
         self.assertIn("[gcode_macro PROBE]", POLICY)
         self.assertIn("rename_existing: _ADZ_PROBE_BASE", POLICY)
         commands = [line.strip() for line in POLICY.splitlines()]
@@ -68,9 +69,10 @@ class MetrologyPolicyTests(unittest.TestCase):
         end = POLICY.index("[gcode_macro _ADZ_SAVED_CHECK_POLICY]", start)
         block = POLICY[start:end]
         self.assertIn("fresh_native_check_done", block)
-        self.assertIn("already passed native Z-Mod AutoZOffset", block)
-        self.assertIn("requires final native Z-Mod AutoZOffset", block)
-        self.assertLess(block.index("_ADZ_VALIDATE_NATIVE_RESULT"), block.index("_ADZ_RECORD_MESH_POLICY"))
+        self.assertIn("already completed the precision native Auto-Z probe", block)
+        self.assertIn("requires final precision native Auto-Z probe", block)
+        self.assertIn("_ADZ_FINALIZE_MACHINE_ANCHOR", block)
+        self.assertLess(block.index("_ADZ_RECORD_MESH_POLICY"), block.index("_ADZ_FINALIZE_MACHINE_ANCHOR"))
         self.assertIn("profile == saved_profile", block)
 
     def test_saved_guard_binds_id_profile_and_exact_matrix(self):
@@ -80,30 +82,37 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("stored_policy == measurement.policy_id", block)
         self.assertIn("stored_profile == active_profile", block)
         self.assertIn("stored_points == active_points", block)
-        self.assertIn("reconciliation_residual = native_delta - expected_reconciliation", block)
-        self.assertIn("variable_max_reconciliation_residual: 0.050000", POLICY)
-        self.assertLess(block.index("not mesh_policy_match"), block.index("reconciliation_residual|abs"))
+        self.assertIn("anchor_active", block)
+        self.assertIn("anchor_finalized", block)
+        self.assertIn("variable_max_machine_anchor: 0.310000", POLICY)
+        self.assertNotIn("expected_reconciliation", block)
+        self.assertNotIn("reconciliation_residual", block)
+        self.assertLess(block.index("not mesh_policy_match"), block.index("_ADZ_FINALIZE_MACHINE_ANCHOR"))
 
-    def test_native_reconciliation_is_anchor_not_second_offset_correction(self):
-        start = POLICY.index("[gcode_macro _ADZ_VALIDATE_NATIVE_RESULT]")
-        end = POLICY.index("[gcode_macro _ADZ_RC_ABORT_PRIME]", start)
+    def test_native_reconciliation_moves_service_delta_into_transient_mesh(self):
+        start = POLICY.index("[gcode_macro _ADZ_FINALIZE_MACHINE_ANCHOR]")
+        end = POLICY.index("[gcode_macro _ADZ_REPORT_MACHINE_ANCHOR]", start)
         block = POLICY[start:end]
         self.assertNotIn("_SET_GCODE_OFFSET_FAST", block)
         self.assertNotIn("SET_GCODE_VARIABLE MACRO=_TEST_POINT VARIABLE=temp_z_offset", block)
-        self.assertIn("expected_reconciliation_delta", block)
-        self.assertIn("max_reconciliation_residual", block)
+        self.assertIn("final_probe_completed", block)
+        self.assertIn("LOAD_GCODE_OFFSET", block)
+        self.assertIn("ADZ_MESH_ANCHOR SHIFT={native_delta}", block)
+        self.assertLess(block.index("LOAD_GCODE_OFFSET"), block.index("ADZ_MESH_ANCHOR SHIFT={native_delta}"))
+        self.assertIn("machine_anchor_finalized VALUE=1", block)
+        self.assertNotIn("expected_reconciliation_delta", POLICY)
 
-        # Native Z-Mod anchoring cancels the arbitrary common-mode of a fast mesh.
-        for mesh, probe, persistent, delta, effective in (
-            (-2.0025, -1.8550, -0.0560, 0.1475, 0.0915),
-            (-2.0050, -1.8900, -0.0560, 0.1150, 0.0590),
+        # v6 preserves the physical sum while keeping the user offset honest.
+        for mesh, probe, persistent in (
+            (-2.0025, -1.8550, -0.0560),
+            (-2.0050, -1.8900, -0.0560),
+            (-2.0025, -1.8650, -0.0910),
         ):
-            self.assertAlmostEqual(delta, probe - mesh, places=9)
-            self.assertAlmostEqual(effective, persistent + delta, places=9)
-            self.assertAlmostEqual(mesh + effective, probe + persistent, places=9)
-
-        for observed in (0.1150, 0.1300, 0.1475):
-            self.assertLess(abs(observed - 0.1300), 0.0500)
+            delta = probe - mesh
+            v5_effective = persistent + delta
+            v6_mesh = mesh + delta
+            self.assertAlmostEqual(mesh + v5_effective, v6_mesh + persistent, places=9)
+            self.assertAlmostEqual(v6_mesh, probe, places=9)
 
     def test_real_print_time_mesh_build_sets_transient_fresh_proof(self):
         start = POLICY.index("[gcode_macro _BED_MESH_CALIBRATE]")
@@ -128,6 +137,7 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertIn("gcode_macro%20_ADZ_MEASUREMENT_POLICY", RUNTIME)
         self.assertIn("gcode_macro%20_ADZ_SAVED_CHECK_POLICY", RUNTIME)
         self.assertIn("gcode_macro%20LOAD_CELL_TARE", RUNTIME)
+        self.assertIn("gcode_macro%20LOAD_CELL_TARE&ad5x_z_mesh_anchor", RUNTIME)
         self.assertIn('status.get("gcode_macro _ADZ_MEASUREMENT_POLICY", {})', PRODUCT)
         self.assertIn('status.get("gcode_macro LOAD_CELL_TARE", {})', PRODUCT)
 

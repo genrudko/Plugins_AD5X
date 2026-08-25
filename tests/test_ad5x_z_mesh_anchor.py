@@ -45,7 +45,7 @@ class FakePrinter:
     def register_event_handler(self, name, cb): self.handlers[name] = cb
 
 class FakeConfig:
-    def __init__(self, printer, limit=0.5): self.printer, self.limit = printer, limit
+    def __init__(self, printer, limit=0.31): self.printer, self.limit = printer, limit
     def get_printer(self): return self.printer
     def getfloat(self, name, default, above=None): return self.limit
 
@@ -56,7 +56,7 @@ class FakeGcmd:
     def respond_info(self, msg): self.messages.append(str(msg))
 
 class MeshAnchorTests(unittest.TestCase):
-    def make(self, *, fade=True, mesh=True, limit=0.5):
+    def make(self, *, fade=True, mesh=True, limit=0.31):
         base = FakeMesh() if mesh else None
         bed = FakeBedMesh(base, fade=fade)
         printer = FakePrinter(bed)
@@ -112,6 +112,11 @@ class MeshAnchorTests(unittest.TestCase):
         anchor, _, _ = self.make(limit=0.2)
         with self.assertRaisesRegex(RuntimeError, "exceeds safety limit"):
             anchor.cmd_APPLY(FakeGcmd(SHIFT="0.201"))
+
+    def test_shift_safety_boundary_is_exclusive(self):
+        anchor, _, _ = self.make(limit=0.31)
+        with self.assertRaisesRegex(RuntimeError, "exceeds safety limit"):
+            anchor.cmd_APPLY(FakeGcmd(SHIFT="0.3100"))
 
     def test_missing_mesh_is_rejected(self):
         anchor, _, _ = self.make(mesh=False)
