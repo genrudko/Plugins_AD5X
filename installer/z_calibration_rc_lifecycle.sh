@@ -109,6 +109,9 @@ mkdir -p "$GENERATED" "$STATE" "$BACKUPS" "$LOG_DIR"
 [ -s "$SOURCE_DIR/z_calibration_rc_policy.cfg" ] || fail 'canonical RC policy отсутствует в source staging'
 . "$SOURCE_DIR/installer/z_calibration_runtime.sh"
 zcal_core_init_paths
+[ -s "$ZCAL_MESH_ANCHOR_SOURCE" ] || fail 'Z Calibration mesh-anchor source отсутствует в source staging'
+[ -d "$ZCAL_KLIPPER_EXTRAS_DIR" ] || fail 'Klipper extras directory недоступен'
+zcal_mesh_anchor_destination_owned || fail "неизвестный файл в Z Calibration mesh-anchor destination: $ZCAL_MESH_ANCHOR_DEST"
 
 include_count(){ grep -Fxc "$POLICY_INCLUDE" "$KLIPPER_INCLUDES" 2>/dev/null || true; }
 plan_baseline_source(){
@@ -204,6 +207,8 @@ rollback_target(){
     [ -d "$TARGET/zcal-rc-transaction" ] || fail 'rollback transaction snapshot is missing'
     [ -f "$TARGET/zcal-rc-plan.json" ] || fail 'rollback plan is missing'
     [ -f "$TARGET/plugins.cfg" ] || [ -f "$TARGET/.absent-plugins.cfg" ] || fail 'rollback plugins.cfg snapshot is missing'
+    [ -f "$TARGET/zcal-mesh-anchor.py" ] || [ -f "$TARGET/.absent-zcal-mesh-anchor.py" ] || fail 'rollback mesh-anchor runtime snapshot is missing'
+    [ -f "$TARGET/zcal-mesh-anchor.sha256" ] || [ -f "$TARGET/.absent-zcal-mesh-anchor.sha256" ] || fail 'rollback mesh-anchor hash snapshot is missing'
     [ -f "$TARGET/effective-state" ] || fail 'rollback effective-state marker is missing'
     case "$(cat "$TARGET/effective-state")" in active=0|active=1) ;; *) fail 'invalid rollback effective-state marker' ;; esac
     printf '%s\n' "$TARGET"
@@ -220,6 +225,9 @@ restore_version_snapshot(){
     CURRENT_B="$B"
     B="$TARGET"
     restore_snapshot "$KLIPPER_INCLUDES" plugins.cfg || { B="$CURRENT_B"; return 1; }
+    restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py || { B="$CURRENT_B"; return 1; }
+    restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256 || { B="$CURRENT_B"; return 1; }
+    rm -f "$ZCAL_KLIPPER_EXTRAS_DIR/__pycache__/ad5x_z_mesh_anchor"*.pyc 2>/dev/null || true
     B="$CURRENT_B"
 }
 
@@ -262,6 +270,8 @@ operation_prepare(){
     B="$BACKUPS/zcal-productization-$MODE-$STAMP-$$"
     mkdir -p "$B"
     snapshot "$KLIPPER_INCLUDES" plugins.cfg
+    snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py
+    snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256
     if zcal_rc_live_verify >/dev/null 2>&1 || managed_active_preflight; then
         printf 'active=1\n' >"$B/effective-state"
     else
@@ -273,6 +283,9 @@ rollback_operation(){
     set +e
     echo 'ОШИБКА: RC Productization не завершён, восстанавливается transaction snapshot.' >&2
     restore_snapshot "$KLIPPER_INCLUDES" plugins.cfg >/dev/null 2>&1 || true
+    restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py >/dev/null 2>&1 || true
+    restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256 >/dev/null 2>&1 || true
+    rm -f "$ZCAL_KLIPPER_EXTRAS_DIR/__pycache__/ad5x_z_mesh_anchor"*.pyc 2>/dev/null || true
     if ! zcal_rc_firmware_restart >/dev/null 2>&1; then
         echo 'CRITICAL: файлы rollback восстановлены, но effective Klipper state не удалось перезагрузить автоматически.' >&2
     fi
@@ -285,6 +298,7 @@ if [ "$MODE" = status ]; then
         exit 1
     fi
     [ "$(include_count)" -eq 1 ] || fail 'generated RC policy include отсутствует/дублирован'
+    zcal_mesh_anchor_runtime_matches_source || fail 'mesh-anchor runtime не соответствует source staging'
     zcal_rc_live_verify || fail 'effective RC state не соответствует ownership manifest'
     echo '[OK] Z Calibration RC Productization active and verified'
     if [ -f "$ROLLBACK_POINTER" ]; then
@@ -317,6 +331,7 @@ trap finish EXIT HUP INT TERM
 case "$MODE" in
     install|update|repair)
         prepare_parked_policy_refresh
+        zcal_mesh_anchor_deploy_managed_copy || fail 'mesh-anchor runtime deploy failed'
         zcal_rc_apply || fail 'apply/update/repair mutation failed'
         commit_include_provenance || fail 'include provenance commit failed'
         [ "$(include_count)" -eq 1 ] || fail 'generated RC policy include invariant failed'

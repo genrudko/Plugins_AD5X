@@ -79,7 +79,8 @@ zcal_core_source_valid(){
     [ "$(grep -Fxc '[gcode_macro _AD5X_Z_SAVED_CHECK_POLICY]' "$ZCAL_RC_POLICY_SOURCE" 2>/dev/null || true)" -eq 1 ] || return 1
     [ "$(grep -Fxc '[gcode_macro _ADZ_PRIME_GATE]' "$ZCAL_RC_POLICY_SOURCE" 2>/dev/null || true)" -eq 1 ] || return 1
     [ "$(grep -Fxc '[gcode_macro _USER_START_PRINT]' "$PLUGIN_DIR/z_calibration.cfg" 2>/dev/null || true)" -eq 0 ] || return 1
-    [ "$(grep -Fxc '[ad5x_z_mesh_anchor]' "$PLUGIN_DIR/z_calibration.cfg" 2>/dev/null || true)" -eq 1 ] || return 1
+    [ "$(grep -Fxc '[ad5x_z_mesh_anchor]' "$ZCAL_RC_POLICY_SOURCE" 2>/dev/null || true)" -eq 1 ] || return 1
+    [ "$(grep -Fxc '[ad5x_z_mesh_anchor]' "$PLUGIN_DIR/z_calibration.cfg" 2>/dev/null || true)" -eq 0 ] || return 1
     PY="$(python_bin)" || return 1
     "$PY" -B - "$ZCAL_CORE_SOURCE" "$ZCAL_MESH_ANCHOR_SOURCE" "$ZCAL_RC_PRODUCTIZER" <<'PY' >/dev/null 2>&1 || return 1
 import ast

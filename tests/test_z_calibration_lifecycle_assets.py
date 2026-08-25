@@ -227,7 +227,9 @@ zcal_core_uninstall_managed_copy
     def test_mesh_anchor_activation_and_rollback_contract(self) -> None:
         wrapper = WRAPPER.read_text(encoding="utf-8")
         installer = INSTALLER.read_text(encoding="utf-8")
-        self.assertEqual(wrapper.count("[ad5x_z_mesh_anchor]"), 1)
+        policy = POLICY.read_text(encoding="utf-8")
+        self.assertEqual(wrapper.count("[ad5x_z_mesh_anchor]"), 0)
+        self.assertEqual(policy.count("[ad5x_z_mesh_anchor]"), 1)
         lines = [line.strip() for line in installer.splitlines()]
         self.assertEqual(lines.count('snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py'), 2)
         self.assertEqual(lines.count('restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py'), 2)

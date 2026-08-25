@@ -64,6 +64,11 @@ class AD5XZMeshAnchor:
     def _handle_ready(self):
         if self.metrology_hooks_ready:
             return
+        # The extra may remain installed while the v6 policy is intentionally
+        # absent (legacy/rollback/uninstall baseline). In that state it owns no
+        # metrology command hooks and must not prevent Klipper from becoming ready.
+        if self.printer.lookup_object(MEASUREMENT_OBJECT, None) is None:
+            return
         self._measurement_status(config_phase=True)
         mesh_base = self.gcode.register_command(MESH_COMMAND, None)
         if mesh_base is None:

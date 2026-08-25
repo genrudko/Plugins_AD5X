@@ -205,6 +205,17 @@ class MeshAnchorTests(unittest.TestCase):
             anchor.printer.handlers["klippy:ready"]()
         self.assertFalse(anchor.metrology_hooks_ready)
 
+    def test_ready_without_v6_measurement_policy_leaves_commands_untouched(self):
+        anchor, _, _ = self.make()
+        mesh_base = lambda g: None
+        probe_base = lambda g: None
+        anchor.printer.gcode.commands[mod.MESH_COMMAND] = mesh_base
+        anchor.printer.gcode.commands[mod.PROBE_COMMAND] = probe_base
+        anchor.printer.handlers["klippy:ready"]()
+        self.assertFalse(anchor.metrology_hooks_ready)
+        self.assertIs(anchor.printer.gcode.commands[mod.MESH_COMMAND], mesh_base)
+        self.assertIs(anchor.printer.gcode.commands[mod.PROBE_COMMAND], probe_base)
+
     def test_source_has_no_persistence_or_user_offset_write(self):
         source = MODULE.read_text(encoding="utf-8")
         self.assertNotIn("save_profile", source)

@@ -133,6 +133,25 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertIn("rollback_operation", self.text)
         self.assertIn("zcal_rc_firmware_restart", self.text)
 
+    def test_rc_transaction_versions_mesh_anchor_runtime_with_policy(self) -> None:
+        self.assertIn('snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py', self.text)
+        self.assertIn('snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256', self.text)
+        self.assertIn('restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py', self.text)
+        self.assertIn('restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256', self.text)
+        apply = self.text[self.text.index("install|update|repair)"):self.text.index("rollback)", self.text.index("install|update|repair)"))]
+        self.assertLess(apply.index("zcal_mesh_anchor_deploy_managed_copy"), apply.index("zcal_rc_apply"))
+        self.assertLess(apply.index("zcal_rc_apply"), apply.index("zcal_rc_firmware_restart"))
+        status = self.text[self.text.index('if [ "$MODE" = status ]'):self.text.index('ROLLBACK_TARGET=', self.text.index('if [ "$MODE" = status ]'))]
+        self.assertIn("zcal_mesh_anchor_runtime_matches_source", status)
+
+    def test_explicit_rollback_requires_and_restores_mesh_anchor_snapshot(self) -> None:
+        self.assertIn("rollback mesh-anchor runtime snapshot is missing", self.text)
+        self.assertIn("rollback mesh-anchor hash snapshot is missing", self.text)
+        start = self.text.index("restore_version_snapshot(){")
+        block = self.text[start:self.text.index("managed_active_preflight(){", start)]
+        self.assertIn('restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py', block)
+        self.assertIn('restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256', block)
+
     def test_generated_include_has_owned_provenance(self) -> None:
         self.assertIn("include-state.pending", self.text)
         self.assertIn("original_present=0", self.text)
