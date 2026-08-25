@@ -122,18 +122,26 @@ class MetrologyPolicyTests(unittest.TestCase):
             self.assertAlmostEqual(mesh + v5_effective, v6_mesh + persistent, places=9)
             self.assertAlmostEqual(v6_mesh, probe, places=9)
 
-    def test_real_print_time_mesh_build_sets_transient_fresh_proof(self):
+    def test_mesh_hook_is_passthrough_outside_print_and_scoped_in_print(self):
         start = ANCHOR.index("    def _cmd_mesh_calibrate")
         end = ANCHOR.index("    def _cmd_probe", start)
         block = ANCHOR[start:end]
-        self.assertIn('built_for_print = self._print_state() == "printing"', block)
-        self.assertIn('fresh_mesh_built=0', block)
-        self.assertIn('fresh_native_check_done=0', block)
-        self.assertIn('final_probe_completed=0', block)
-        self.assertIn('self._forward(MESH_COMMAND', block)
-        self.assertIn('self._set_measurement(fresh_mesh_built=1)', block)
-        self.assertLess(block.index('fresh_mesh_built=0'), block.index('self._forward(MESH_COMMAND'))
-        self.assertGreater(block.index('fresh_mesh_built=1'), block.index('self._forward(MESH_COMMAND'))
+        self.assertIn('if self._print_state() != "printing"', block)
+        self.assertIn('self._mesh_calibrate_base(gcmd)', block)
+        self.assertIn('self._forced_mesh_calibrate(gcmd, fresh_for_print=True)', block)
+        self.assertIn('def cmd_CALIBRATE', block)
+        self.assertIn('fresh_for_print=False', block)
+        forced_start = ANCHOR.index("    def _forced_mesh_calibrate")
+        forced = ANCHOR[forced_start:start]
+        self.assertIn('fresh_mesh_built=0', forced)
+        self.assertIn('self._forward(MESH_COMMAND', forced)
+        self.assertIn('self._set_measurement(fresh_mesh_built=1)', forced)
+
+    def test_production_rebuild_is_explicit_and_stock_auto_remains_unmodified(self):
+        self.assertIn("[gcode_macro ADZ_REBUILD_AUTO]", POLICY)
+        self.assertIn('ADZ_MESH_CALIBRATE PROFILE="{profile}"', POLICY)
+        self.assertNotIn("AUTO_FULL_BED_LEVEL EXTRUDER_TEMP={extruder_temp} BED_TEMP={bed_temp} PROFILE={runtime_profile}", POLICY)
+        self.assertIn("_ADZ_FULL_BED_LEVEL EXTRUDER_TEMP={extruder_temp} BED_TEMP={bed_temp} PROFILE={runtime_profile}", POLICY)
 
     def test_native_completion_is_recorded_by_existing_probe_adapter(self):
         self.assertNotIn("[gcode_macro _MESH_TEST]\nrename_existing:", POLICY)

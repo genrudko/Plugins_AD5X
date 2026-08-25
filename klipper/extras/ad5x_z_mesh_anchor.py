@@ -5,6 +5,7 @@ import math
 RUNTIME_PROFILE = "adz_runtime_anchor"
 COMMAND_APPLY = "ADZ_MESH_ANCHOR"
 COMMAND_RESET = "ADZ_MESH_ANCHOR_RESET"
+COMMAND_CALIBRATE = "ADZ_MESH_CALIBRATE"
 MESH_COMMAND = "_BED_MESH_CALIBRATE"
 PROBE_COMMAND = "PROBE"
 MEASUREMENT_OBJECT = "gcode_macro _ADZ_MEASUREMENT_POLICY"
@@ -16,6 +17,7 @@ class AD5XZMeshAnchor:
         self.gcode = self.printer.lookup_object("gcode")
         self.gcode.register_command(COMMAND_APPLY, self.cmd_APPLY)
         self.gcode.register_command(COMMAND_RESET, self.cmd_RESET)
+        self.gcode.register_command(COMMAND_CALIBRATE, self.cmd_CALIBRATE)
         self._mesh_calibrate_base = None
         self._probe_base = None
         self.metrology_hooks_ready = False
@@ -111,15 +113,28 @@ class AD5XZMeshAnchor:
         forwarded = self.gcode.create_gcode_command(command, command + ((" " + params) if params else ""), {})
         base(forwarded)
 
-    def _cmd_mesh_calibrate(self, gcmd):
+    def _forced_mesh_calibrate(self, gcmd, *, fresh_for_print):
         if self._mesh_calibrate_base is None:
             raise gcmd.error("Plugins AD5X Z metrology: mesh hook not initialized")
         m = self._measurement_status()
-        built_for_print = self._print_state() == "printing"
         self._set_measurement(fresh_mesh_built=0, fresh_native_check_done=0, final_probe_completed=0)
         self._forward(MESH_COMMAND, self._mesh_calibrate_base, gcmd, (("PROBE_SPEED", m["mesh_probe_speed"]), ("SAMPLES", m["mesh_probe_samples"]), ("SAMPLES_RESULT", m["mesh_probe_result"])))
-        if built_for_print:
+        if fresh_for_print:
             self._set_measurement(fresh_mesh_built=1)
+
+    def _cmd_mesh_calibrate(self, gcmd):
+        if self._mesh_calibrate_base is None:
+            raise gcmd.error("Plugins AD5X Z metrology: mesh hook not initialized")
+        if self._print_state() != "printing":
+            self._mesh_calibrate_base(gcmd)
+            return
+        self._forced_mesh_calibrate(gcmd, fresh_for_print=True)
+
+    def cmd_CALIBRATE(self, gcmd):
+        state = self._print_state()
+        if state in ("printing", "paused"):
+            raise gcmd.error("Plugins AD5X Z metrology: explicit mesh rebuild requires an idle printer")
+        self._forced_mesh_calibrate(gcmd, fresh_for_print=False)
 
     def _cmd_probe(self, gcmd):
         if self._probe_base is None:

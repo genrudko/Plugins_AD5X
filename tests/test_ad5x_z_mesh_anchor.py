@@ -163,12 +163,12 @@ class MeshAnchorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no active mesh"):
             anchor.cmd_APPLY(FakeGcmd(SHIFT="0.1"))
 
-    def prepare_metrology_runtime(self):
+    def prepare_metrology_runtime(self, state="printing"):
         anchor, _, _ = self.make()
         printer = anchor.printer
         measurement = FakeMeasurement()
         printer.objects[mod.MEASUREMENT_OBJECT] = measurement
-        printer.objects["print_stats"] = FakeStatus(state="printing")
+        printer.objects["print_stats"] = FakeStatus(state=state)
         printer.objects["gcode_move"] = FakeStatus(gcode_position=[100.0, 100.0, 5.0, 0.0])
         seen = {"mesh": [], "probe": []}
         printer.gcode.commands[mod.MESH_COMMAND] = lambda g: seen["mesh"].append(g.get_raw_command_parameters())
@@ -185,6 +185,23 @@ class MeshAnchorTests(unittest.TestCase):
         anchor.printer.gcode.commands[mod.MESH_COMMAND](FakeForwardGcmd("_BED_MESH_CALIBRATE ADAPTIVE=1 PROBE_SPEED=9"))
         self.assertEqual(seen["mesh"], ["ADAPTIVE=1 PROBE_SPEED=9 PROBE_SPEED=5.0 SAMPLES=3 SAMPLES_RESULT=median"])
         self.assertEqual(measurement.variables["fresh_mesh_built"], 1)
+
+    def test_idle_zmod_mesh_is_exact_passthrough(self):
+        anchor, measurement, seen = self.prepare_metrology_runtime(state="standby")
+        anchor.printer.gcode.commands[mod.MESH_COMMAND](FakeForwardGcmd("_BED_MESH_CALIBRATE PROFILE=auto PROBE_SPEED=9"))
+        self.assertEqual(seen["mesh"], ["PROFILE=auto PROBE_SPEED=9"])
+        self.assertEqual(measurement.variables["fresh_mesh_built"], 0)
+
+    def test_explicit_adz_mesh_calibrate_forces_policy_while_idle(self):
+        anchor, measurement, seen = self.prepare_metrology_runtime(state="standby")
+        anchor.printer.gcode.commands[mod.COMMAND_CALIBRATE](FakeForwardGcmd("ADZ_MESH_CALIBRATE PROFILE=auto PROBE_SPEED=9"))
+        self.assertEqual(seen["mesh"], ["PROFILE=auto PROBE_SPEED=9 PROBE_SPEED=5.0 SAMPLES=3 SAMPLES_RESULT=median"])
+        self.assertEqual(measurement.variables["fresh_mesh_built"], 0)
+
+    def test_explicit_adz_mesh_calibrate_is_rejected_while_printing(self):
+        anchor, _, _ = self.prepare_metrology_runtime(state="printing")
+        with self.assertRaisesRegex(RuntimeError, "requires an idle printer"):
+            anchor.printer.gcode.commands[mod.COMMAND_CALIBRATE](FakeForwardGcmd("ADZ_MESH_CALIBRATE PROFILE=auto"))
 
     def test_final_probe_precision_is_one_shot_and_fresh_completion_is_recorded(self):
         anchor, measurement, seen = self.prepare_metrology_runtime()

@@ -136,7 +136,7 @@ For v6:
 - `ADZ_MESH_ANCHOR` applies `zdelta` to an in-memory bed-mesh copy;
 - `machine_anchor_finalized=1` must agree with `ad5x_z_mesh_anchor.active=true`;
 - runtime anchor state is never persisted with `SAVE_CONFIG` or `BED_MESH_PROFILE SAVE`;
-- `_PREPARE_PRINT`, explicit reset/disable actions, rollback and uninstall clear transient anchor state;
+- the `virtual_sdcard:reset_file` job boundary, explicit reset/disable actions, rollback and uninstall clear transient anchor state;
 - manual `ADZ_CHECK` restores user Z after its diagnostic `_MESH_TEST`.
 
 The semantic model is therefore **mesh shape + transient machine anchor + user Z-offset**. A user Z such as `-0.0910 mm` may coexist with a service anchor such as `+0.1375 mm` without contaminating the displayed user offset.
@@ -201,6 +201,10 @@ Those remain follow-on work and must not block validation of the narrow owner-us
 ## AD5X measurement policy validated 2026-08-25
 
 The release-candidate measurement policy is `adz-metrology-mesh5-median3-final05-median3-anchor-v5-20260825`: bed-mesh acquisition is a fast relative-shape scan at **5 mm/s**, **3** samples and **median**, while the final in-mesh reconciliation probe remains the precision absolute-Z measurement at **0.5 mm/s**, **3** samples and **median**. This split limits exposure of the relative mesh shape to the long slow-scan failure mode seen in first-layer acceptance. Time-domain drift and speed-dependent local mechanics remain hypotheses for that spatial error, not established root causes. The native edge-cleaning probe keeps Z-Mod's own probe defaults; its tare is reused for the immediately following final reconciliation probe during an active print. Plugins AD5X still delegates physical tare/probe/motion to Z-Mod.
+
+The measurement policy is deliberately **scoped, not global**. Idle/manual Z-Mod paths (`BED_MESH_CALIBRATE`, `AUTO_FULL_BED_LEVEL`, and manual `KAMP`) pass through with upstream parameters and semantics. Plugins AD5X applies `5 mm/s / median3` only to a fresh mesh acquired during an active print and to explicit Plugins AD5X production actions such as `ADZ_REBUILD_AUTO` / `ADZ_BUILD_RUNTIME_MESH`. There is no global `[probe]` override. `ADZ_REBUILD_AUTO` mirrors Z-Mod's current clean -> full mesh -> park -> stop sequence but invokes the Plugins-owned scoped mesh command, then records the accepted `auto` fingerprint.
+
+A rebuilt `auto` profile follows normal Klipper profile persistence semantics: the new profile is live and fingerprinted immediately, but `SAVE_CONFIG` is still required if the owner wants that profile to survive a Klipper restart. Plugins AD5X does **not** call `SAVE_CONFIG` automatically because that command would also commit unrelated pending configuration changes. Therefore profile persistence and fingerprint persistence must be kept intentionally in sync before a restart. Temporary `ad5x_runtime` profiles are explicitly removed after restoring `auto`, preventing an unrelated later `SAVE_CONFIG` from persisting them.
 
 Split-speed hardware runs on 2026-08-25 produced native Z-Mod reconciliation deltas of `+0.1150`, `+0.1300`, and `+0.1475 mm`. These are run-specific common-mode translations, not an expected center. v6 intentionally removes the old `+0.1300 ± 0.0500 mm` diagnostic envelope and retains only Z-Mod's own `abs(delta) < 0.310000 mm` plausibility boundary.
 

@@ -156,7 +156,9 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         self.assertIn("[gcode_macro ADZ_BUILD_RUNTIME_MESH]", self.asset)
         self.assertIn("[gcode_macro ADZ_RESTORE_AUTO]", self.asset)
         self.assertIn("_MESH_TEST", self.asset)
-        self.assertIn("AUTO_FULL_BED_LEVEL", self.asset)
+        self.assertIn("[gcode_macro ADZ_REBUILD_AUTO]", self.asset)
+        self.assertIn("ADZ_MESH_CALIBRATE", self.asset)
+        self.assertNotIn("AUTO_FULL_BED_LEVEL", self.asset)
         self.assertIn("PROFILE={runtime_profile}", self.asset)
         self.assertIn("BED_MESH_PROFILE LOAD=auto FROM=ADZ_BUILD_RUNTIME_MESH", self.asset)
         self.assertNotIn("[gcode_macro ADZ_FULL_CALIBRATION]", self.asset)
@@ -195,11 +197,13 @@ class ZCalibrationProductionPolicyAssetTests(unittest.TestCase):
         start = self.asset.index("[gcode_macro ADZ_BUILD_RUNTIME_MESH]")
         end = self.asset.index("[gcode_macro ADZ_RESTORE_AUTO]")
         block = self.asset[start:end]
-        build = block.index("AUTO_FULL_BED_LEVEL")
+        build = block.index("_ADZ_FULL_BED_LEVEL")
         restore = block.index("BED_MESH_PROFILE LOAD=auto FROM=ADZ_BUILD_RUNTIME_MESH")
+        remove = block.index("BED_MESH_PROFILE REMOVE={runtime_profile} FROM=ADZ_BUILD_RUNTIME_MESH")
         guard = block.index("_ADZ_SAVED_CHECK_POLICY", build)
         self.assertLess(build, restore)
-        self.assertLess(restore, guard)
+        self.assertLess(restore, remove)
+        self.assertLess(remove, guard)
         self.assertNotIn("SAVE_CONFIG", block)
 
     def test_machine_anchor_transfer_restores_user_z_before_mesh_shift(self) -> None:
