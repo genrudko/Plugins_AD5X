@@ -5,6 +5,8 @@
 **Base:** `genrudko/Plugins_AD5X:dev`  
 **Supersedes:** product architecture of issue #5 / closed Draft PR #6
 
+> **2026-08-25 v6 refinement.** Production metrology proved that the measured Auto-Z common-mode must not remain inside the user-visible Klipper `gcode_offset`. The production representation is now **pristine mesh shape + transient machine-anchor mesh shift + real user Z-offset**. The earlier `auto_alignment + user trim = effective gcode_offset` model below is retained only as historical/legacy-core context where explicitly noted.
+
 ## 1. Product goal
 
 Build an explainable, safe, frontend-neutral Z calibration subsystem for Flashforge AD5X + Z-Mod/Klipper/Moonraker.
@@ -17,7 +19,8 @@ I changed a nozzle / hotend / plate
 → printer establishes the current nozzle↔bed reference
 → printer validates the result
 → printer aligns the selected bed mesh policy
-→ standard Klipper Z-offset is composed and applied
+→ machine anchor is applied to the transient runtime mesh
+→ standard Klipper Z-offset remains the real user correction
 → print starts
 ```
 
@@ -52,22 +55,24 @@ No Z-Mod fork is introduced.
 
 The user-visible concept remains the normal Klipper **Z-offset**.
 
-Internally the subsystem tracks provenance of the components that compose it:
+For the v6 production path the subsystem tracks two different coordinate responsibilities instead of summing everything into one offset:
 
 ```text
-Auto-Z alignment
-+ persistent user Z trim
-+ slicer/job Z offset
+pristine bed-mesh shape
++ transient machine-anchor common-mode shift
+= runtime anchored mesh
+
+persistent user Z trim
++ slicer/job Z offset (when that path is explicitly supported)
 + live babystepping
-────────────────────────
-= effective Klipper gcode_offset
+= user-visible Klipper gcode_offset
 ```
 
-### 3.1 Auto-Z alignment
+### 3.1 Machine anchor / legacy Auto-Z alignment
 
-Runtime correction derived from the difference between the trustworthy reference associated with the selected saved mesh and the current validated nozzle↔bed reference.
+The measured difference between the active mesh reference and the validated nozzle↔bed reference is a **machine anchor**. On v6 it is applied only to a transient in-memory bed-mesh copy and is never persisted into the saved mesh or the user's Z-offset.
 
-Scope: current calibration/print context. It is recalculated when required and is not silently persisted as the user's manual trim.
+The legacy observer/core name `auto_alignment` remains for backwards compatibility, but when the v6 anchor policy is loaded it is `0` as a `gcode_offset` component. The measured value is exposed separately as `machine_anchor.shift` together with `active`, `finalized`, `persistent`, profile and provenance state.
 
 ### 3.2 Persistent user Z trim
 
@@ -95,11 +100,11 @@ The current effective Klipper offset changes immediately. If the adjustment was 
 
 An explicit `Save Z correction` operation may fold the accepted live delta into persistent user trim. Without explicit save it must not become persistent.
 
-### 3.5 Effective offset is standard Klipper state
+### 3.5 User Z-offset remains standard Klipper state
 
-After composition, the actual runtime state must be represented through normal Klipper offset semantics so `GET_POSITION`, Fluidd, Mainsail and console tooling observe the effective value.
+The user-owned Z correction must remain visible through normal Klipper offset semantics so `GET_POSITION`, Fluidd, Mainsail and console tooling observe the same user value. v6 intentionally does **not** force the service machine anchor into `homing_origin.z`; that anchor is represented by the active transient bed mesh and exposed separately through Plugins AD5X provenance.
 
-Plugins AD5X must not create a second hidden product-level coordinate system that disagrees with Klipper.
+Plugins AD5X must not create a second hidden **user offset** that disagrees with Klipper. Service mesh-anchor state is allowed only because it changes the bed-mesh coordinate frame itself and is explicitly observable as `machine_anchor`, not masquerading as user Z.
 
 ## 4. No normal Z profiles per hotend/nozzle
 
@@ -381,12 +386,23 @@ z_calibration:
     reference
     status
   offset:
-    auto_alignment
+    auto_alignment        # legacy compatibility; zero on v6 anchor path
     persistent_user
     slicer_job
     live_adjustment
     external_unknown
-    effective
+    effective             # user-visible Klipper Z
+  machine_anchor:
+    model
+    policy_id
+    active
+    finalized
+    shift
+    measured_delta
+    persistent
+    base_profile
+    runtime_profile
+    status
   first_layer:
     status
     timestamp
@@ -419,8 +435,8 @@ Normal users should see a concise state:
 ```text
 Z calibration        Ready
 Bed mesh             Saved + checked
-Current Z-offset     +0.006 mm
-Auto correction      +0.036 mm
+Current Z-offset     -0.030 mm
+Machine anchor       +0.036 mm
 User trim            -0.030 mm
 Job offset            0.000 mm
 

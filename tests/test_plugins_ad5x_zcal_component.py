@@ -153,12 +153,22 @@ def ready_payload(
     filename: str = "test.gcode",
     bed_temp: float = 70.0,
     extruder_temp: float = 240.0,
+    v6: bool = False,
+    anchor_active: bool = False,
+    anchor_shift: float | None = None,
+    anchor_finalized: int = 0,
+    anchor_persistent: bool = False,
+    include_anchor_runtime: bool = True,
 ) -> Dict[str, Any]:
     if actual is None:
-        actual = persistent + auto
+        actual = (
+            persistent
+            if v6 and anchor_active and anchor_finalized == 1
+            else persistent + auto
+        )
     if hook_commands is None:
         hook_commands = [component_module.Z_CC_APPLY, component_module.Z_RC_GUARD]
-    return {
+    payload = {
         "gcode_move": {"homing_origin": [0.0, 0.0, actual]},
         "print_stats": {"state": print_state, "filename": filename},
         "toolhead": {"homed_axes": homed_axes},
@@ -195,6 +205,24 @@ def ready_payload(
             }
         },
     }
+    if v6:
+        payload[component_module.Z_V6_POLICY_OBJECT] = {
+            "policy_id": component_module.Z_RC_POLICY_ID,
+            "anchor_policy_id": component_module.Z_V6_ANCHOR_POLICY_ID,
+            "max_machine_anchor": 0.31,
+            "machine_anchor_finalized": anchor_finalized,
+        }
+        if include_anchor_runtime:
+            payload[component_module.Z_MESH_ANCHOR_OBJECT] = {
+                "active": anchor_active,
+                "shift": auto if anchor_shift is None else anchor_shift,
+                "base_profile": "auto",
+                "runtime_profile": "adz_runtime_anchor" if anchor_active else "",
+                "point_count": 25,
+                "persistent": anchor_persistent,
+                "max_abs_shift": 0.31,
+            }
+    return payload
 
 
 class PluginsAD5XZCalComponentTests(unittest.TestCase):
@@ -255,6 +283,85 @@ class PluginsAD5XZCalComponentTests(unittest.TestCase):
         )
         self.assertTrue(state["runtime"]["effective_valid"])
         self.assertEqual(klippy.gcode, [])
+
+    def test_v6_machine_anchor_is_not_composed_into_user_offset(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.1375, actual=-0.091, v6=True, anchor_active=True, anchor_shift=0.1375, anchor_finalized=1))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        offset, anchor = state["offset"], state["machine_anchor"]
+        self.assertAlmostEqual(offset["persistent_user"], -0.091)
+        self.assertAlmostEqual(offset["auto_alignment"], 0.0)
+        self.assertAlmostEqual(offset["external_unknown"], 0.0)
+        self.assertAlmostEqual(offset["effective"], -0.091)
+        self.assertEqual(offset["provenance_status"], "reconciled")
+        self.assertTrue(anchor["active"] and anchor["finalized"])
+        self.assertAlmostEqual(anchor["shift"], 0.1375)
+        self.assertAlmostEqual(anchor["measured_delta"], 0.1375)
+        self.assertFalse(anchor["persistent"] or anchor["offset_component"])
+        self.assertEqual(anchor["status"], "active")
+        self.assertEqual(state["provenance"]["sources"]["auto_alignment"], "not_in_gcode_offset:v6_transient_mesh_anchor")
+
+    def test_v6_pending_transfer_does_not_fabricate_external_unknown(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.1375, actual=0.0465, v6=True, anchor_active=False, anchor_shift=0.0, anchor_finalized=0))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        self.assertEqual(state["offset"]["provenance_status"], "machine_anchor_pending")
+        self.assertAlmostEqual(state["offset"]["external_unknown"], 0.0)
+        self.assertAlmostEqual(state["offset"]["effective"], -0.091)
+        self.assertAlmostEqual(state["provenance"]["reported_homing_origin_z"], 0.0465)
+        self.assertEqual(state["machine_anchor"]["status"], "pending_transfer")
+
+    def test_v6_anchor_state_mismatch_is_explicit(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.1375, actual=-0.091, v6=True, anchor_active=True, anchor_shift=0.1375, anchor_finalized=0))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        self.assertEqual(state["offset"]["provenance_status"], "machine_anchor_state_mismatch")
+        self.assertAlmostEqual(state["offset"]["external_unknown"], 0.0)
+        self.assertEqual(state["machine_anchor"]["status"], "state_mismatch")
+
+    def test_v6_anchor_shift_mismatch_is_explicit(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.1375, actual=-0.091, v6=True, anchor_active=True, anchor_shift=0.1300, anchor_finalized=1))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        self.assertEqual(state["offset"]["provenance_status"], "machine_anchor_shift_mismatch")
+        self.assertEqual(state["machine_anchor"]["status"], "shift_mismatch")
+        self.assertAlmostEqual(state["offset"]["external_unknown"], 0.0)
+
+    def test_v6_policy_without_anchor_runtime_is_explicit(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.0, actual=-0.091, v6=True, include_anchor_runtime=False))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        self.assertEqual(state["offset"]["provenance_status"], "machine_anchor_runtime_unavailable")
+        self.assertEqual(state["machine_anchor"]["status"], "runtime_unavailable")
+        self.assertFalse(state["machine_anchor"]["runtime_available"])
+
+    def test_v6_anchor_persistence_violation_is_explicit(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.1375, actual=-0.091, v6=True, anchor_active=True, anchor_shift=0.1375, anchor_finalized=1, anchor_persistent=True))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
+        self.assertEqual(state["offset"]["provenance_status"], "machine_anchor_persistence_violation")
+        self.assertEqual(state["machine_anchor"]["status"], "persistence_violation")
+        self.assertAlmostEqual(state["offset"]["external_unknown"], 0.0)
+
+    def test_v6_malformed_anchor_runtime_degrades_provenance_not_component(self) -> None:
+        payload = ready_payload(persistent=-0.091, auto=0.0, actual=-0.091, v6=True)
+        payload[component_module.Z_MESH_ANCHOR_OBJECT]["point_count"] = "bad"
+        klippy = FakeKlippyAPI(payload)
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        snapshot = asyncio.run(component._handle_snapshot(object()))["module"]
+        state = snapshot["state"]
+        self.assertTrue(snapshot["available"])
+        self.assertEqual(snapshot["health"], "ok")
+        self.assertEqual(state["offset"]["provenance_status"], "machine_anchor_runtime_malformed")
+        self.assertEqual(state["machine_anchor"]["status"], "runtime_malformed")
+        self.assertIsNone(state["safety"]["last_error"])
+
+    def test_v6_runtime_objects_are_requested_from_klippy(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(v6=True, auto=0.0, actual=-0.03))
+        component = component_module.load_component(FakeConfig(FakeServer(klippy)))
+        asyncio.run(component._handle_snapshot(object()))
+        self.assertIn(component_module.Z_V6_POLICY_OBJECT, klippy.queries[-1])
+        self.assertIn(component_module.Z_MESH_ANCHOR_OBJECT, klippy.queries[-1])
 
     def test_zmod_99_sentinel_is_not_exposed_as_slicer_offset(self) -> None:
         klippy = FakeKlippyAPI(ready_payload(requested_job=99.0))

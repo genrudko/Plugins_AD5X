@@ -20,8 +20,8 @@ else:
     _ZCORE_IMPORT_ERROR = None
 
 API_VERSION = "1.0"
-MODULE_VERSION = "0.1.4"
-Z_MODULE_SCHEMA_VERSION = "1.1"
+MODULE_VERSION = "0.1.5"
+Z_MODULE_SCHEMA_VERSION = "1.2"
 
 Z_SNAPSHOT_ENDPOINT = "/server/plugins_ad5x/z_calibration/snapshot"
 Z_RECONCILE_ENDPOINT = "/server/plugins_ad5x/z_calibration/reconcile"
@@ -34,6 +34,9 @@ Z_EFFECTIVE_OFFSET_TOLERANCE = 1e-6
 ZMOD_SLICER_OFFSET_SENTINEL = 99.0
 Z_RC_POLICY_OBJECT = "gcode_macro _AD5X_Z_SAVED_CHECK_POLICY"
 Z_RC_POLICY_ID = "zcal-saved-check-v1-20260817"
+Z_V6_POLICY_OBJECT = "gcode_macro _ADZ_SAVED_CHECK_POLICY"
+Z_V6_ANCHOR_POLICY_ID = "adz-runtime-mesh-anchor-v6-20260825"
+Z_MESH_ANCHOR_OBJECT = "ad5x_z_mesh_anchor"
 Z_USER_START_CONFIG_KEY = "gcode_macro _user_start_print"
 Z_RC_GUARD = "_ADZ_SAVED_CHECK_POLICY"
 Z_CC_APPLY = "CC_APPLY_PROFILE"
@@ -47,6 +50,7 @@ _Z_CAPABILITIES = [
     "frontend_neutral_snapshot",
     "read_only_reconciliation",
     "job_thermal_provenance",
+    "transient_machine_anchor_provenance",
 ]
 
 
@@ -159,6 +163,96 @@ def _derive_job_thermal_context(
             "extruder_status": _thermal_match_status(extruder_target, meta_extruder),
         },
     }
+
+
+def _derive_machine_anchor_context(
+    status: Mapping[str, Any],
+    measured_delta: Optional[float],
+    *,
+    tolerance: float = Z_EFFECTIVE_OFFSET_TOLERANCE,
+) -> Dict[str, Any]:
+    policy_obj = status.get(Z_V6_POLICY_OBJECT)
+    policy_id = (
+        policy_obj.get("anchor_policy_id") if isinstance(policy_obj, Mapping) else None
+    )
+    policy_loaded = policy_id == Z_V6_ANCHOR_POLICY_ID
+    finalized_valid = True
+    try:
+        finalized = (
+            int(policy_obj.get("machine_anchor_finalized", 0))
+            if isinstance(policy_obj, Mapping)
+            else 0
+        )
+    except (TypeError, ValueError):
+        finalized = 0
+        finalized_valid = False
+    if finalized not in (0, 1):
+        finalized_valid = False
+    anchor_obj = status.get(Z_MESH_ANCHOR_OBJECT)
+    context: Dict[str, Any] = {
+        "model": (
+            "transient_mesh_anchor_v6" if policy_loaded else "legacy_gcode_offset"
+        ),
+        "policy_id": policy_id,
+        "policy_loaded": policy_loaded,
+        "runtime_available": isinstance(anchor_obj, Mapping),
+        "active": False,
+        "finalized": finalized == 1,
+        "shift": 0.0,
+        "measured_delta": measured_delta,
+        "persistent": None,
+        "base_profile": None,
+        "runtime_profile": None,
+        "point_count": 0,
+        "status": "legacy_gcode_offset",
+        "offset_component": not policy_loaded,
+    }
+    if not policy_loaded:
+        return context
+    if not isinstance(anchor_obj, Mapping):
+        context["status"] = "runtime_unavailable"
+        context["offset_component"] = False
+        return context
+
+    active = _boolish(anchor_obj.get("active", False))
+    shift = _safe_optional_float(anchor_obj.get("shift"))
+    persistent = anchor_obj.get("persistent")
+    point_count_valid = True
+    try:
+        point_count = int(anchor_obj.get("point_count", 0) or 0)
+    except (TypeError, ValueError):
+        point_count = 0
+        point_count_valid = False
+    context.update(
+        {
+            "active": active,
+            "shift": 0.0 if shift is None else shift,
+            "persistent": persistent,
+            "base_profile": anchor_obj.get("base_profile"),
+            "runtime_profile": anchor_obj.get("runtime_profile"),
+            "point_count": point_count,
+            "offset_component": False,
+        }
+    )
+    if not finalized_valid or not point_count_valid or shift is None:
+        context["status"] = "runtime_malformed"
+    elif persistent is not False:
+        context["status"] = "persistence_violation"
+    elif active != (finalized == 1):
+        context["status"] = "state_mismatch"
+    elif (
+        active
+        and measured_delta is not None
+        and abs(shift - measured_delta) > tolerance
+    ):
+        context["status"] = "shift_mismatch"
+    elif active:
+        context["status"] = "active"
+    elif measured_delta is not None and abs(measured_delta) > tolerance:
+        context["status"] = "pending_transfer"
+    else:
+        context["status"] = "idle"
+    return context
 
 
 def _macro_commands(raw_gcode: Any) -> list[str]:
@@ -294,11 +388,16 @@ def _derive_zmod_provenance(
     )
 
     auto_known = isinstance(test_point, Mapping) and "temp_z_offset" in test_point
-    auto_alignment = (
+    native_delta = (
         _finite(test_point.get("temp_z_offset"), "temp_z_offset")
         if auto_known
         else 0.0
     )
+    machine_anchor = _derive_machine_anchor_context(
+        status, native_delta if auto_known else None, tolerance=tolerance
+    )
+    v6_anchor_model = bool(machine_anchor["policy_loaded"])
+    auto_alignment = 0.0 if v6_anchor_model else native_delta
 
     global_path = screen is False and load_zoffset == 1
     persistent_known = False
@@ -327,17 +426,32 @@ def _derive_zmod_provenance(
         slicer_job=0.0,
         live_adjustment=0.0,
     )
-    if actual_effective is not None:
+    anchor_status = str(machine_anchor["status"])
+    reconcile_actual = (
+        actual_effective is not None
+        and (not v6_anchor_model or anchor_status in {"active", "idle"})
+    )
+    if reconcile_actual:
         composition = composition.reconcile_actual(actual_effective, tolerance=tolerance)
 
     missing_known = []
-    if not auto_known:
+    if not v6_anchor_model and not auto_known:
         missing_known.append("auto_alignment")
     if not persistent_known:
         missing_known.append("persistent_user")
 
+    anchor_fault_status = {
+        "runtime_unavailable": "machine_anchor_runtime_unavailable",
+        "runtime_malformed": "machine_anchor_runtime_malformed",
+        "persistence_violation": "machine_anchor_persistence_violation",
+        "state_mismatch": "machine_anchor_state_mismatch",
+        "shift_mismatch": "machine_anchor_shift_mismatch",
+        "pending_transfer": "machine_anchor_pending",
+    }
     if not global_path:
         provenance_status = "unsupported_zmod_offset_path"
+    elif v6_anchor_model and anchor_status in anchor_fault_status:
+        provenance_status = anchor_fault_status[anchor_status]
     elif missing_known:
         provenance_status = "partial"
     elif not z_homed:
@@ -365,6 +479,9 @@ def _derive_zmod_provenance(
         "policy_id": policy_id,
         "policy_identity_ok": policy_id == Z_RC_POLICY_ID,
         "active_mesh_profile": active_profile,
+        "machine_anchor_model": machine_anchor["model"],
+        "machine_anchor_status": machine_anchor["status"],
+        "machine_anchor_base_profile": machine_anchor["base_profile"],
         "accepted_saved_check_flags": (
             global_path
             and mesh_test == 3
@@ -380,7 +497,20 @@ def _derive_zmod_provenance(
         ),
         "persistent_user": persistent_source,
         "auto_alignment": (
-            "gcode_macro _TEST_POINT.temp_z_offset" if auto_known else "unavailable"
+            "not_in_gcode_offset:v6_transient_mesh_anchor"
+            if v6_anchor_model
+            else (
+                "gcode_macro _TEST_POINT.temp_z_offset"
+                if auto_known else "unavailable"
+            )
+        ),
+        "machine_anchor": (
+            "ad5x_z_mesh_anchor.shift"
+            if v6_anchor_model and machine_anchor["runtime_available"]
+            else (
+                "unavailable:v6_runtime" if v6_anchor_model
+                else "not_separate:legacy_gcode_offset"
+            )
         ),
         "slicer_job": slicer_source,
         "live_adjustment": (
@@ -406,6 +536,7 @@ def _derive_zmod_provenance(
         "requested_slicer_z_offset": requested_job,
         "slicer_z_offset_effect": slicer_effect,
         "rc_path": rc_path,
+        "machine_anchor": dict(machine_anchor),
     }
     runtime = {
         "actual_effective": actual_effective,
@@ -462,6 +593,16 @@ class PluginsAD5XZCalibration:
             "requested_slicer_z_offset": None,
             "slicer_z_offset_effect": "unknown",
             "rc_path": {},
+            "machine_anchor": {
+                "model": "unknown",
+                "policy_loaded": False,
+                "runtime_available": False,
+                "active": False,
+                "finalized": False,
+                "shift": 0.0,
+                "status": "unavailable",
+                "offset_component": False,
+            },
         }
 
         transports = TransportType.HTTP | TransportType.WEBSOCKET
@@ -567,6 +708,9 @@ class PluginsAD5XZCalibration:
                     "integration": dict(self._z_integration),
                 },
                 "offset": offset_state,
+                "machine_anchor": dict(
+                    self._z_provenance.get("machine_anchor", {})
+                ),
                 "provenance": dict(self._z_provenance),
                 "job": dict(self._z_job),
                 "runtime": dict(self._z_runtime),
@@ -648,6 +792,20 @@ class PluginsAD5XZCalibration:
                         "saved_reference",
                         "reference_tolerance",
                     ],
+                    Z_V6_POLICY_OBJECT: [
+                        "anchor_policy_id",
+                        "max_machine_anchor",
+                        "machine_anchor_finalized",
+                    ],
+                    Z_MESH_ANCHOR_OBJECT: [
+                        "active",
+                        "shift",
+                        "base_profile",
+                        "runtime_profile",
+                        "point_count",
+                        "persistent",
+                        "max_abs_shift",
+                    ],
                     "bed_mesh": ["profile_name"],
                     "configfile": ["settings"],
                 },
@@ -711,6 +869,11 @@ class PluginsAD5XZCalibration:
                 provenance.get("status"),
                 hook_status,
                 provenance.get("requested_slicer_z_offset"),
+                provenance.get("machine_anchor", {}).get("status"),
+                provenance.get("machine_anchor", {}).get("active"),
+                provenance.get("machine_anchor", {}).get("finalized"),
+                provenance.get("machine_anchor", {}).get("shift"),
+                provenance.get("machine_anchor", {}).get("measured_delta"),
                 job.get("filename"),
                 job.get("thermal", {}).get("bed_target"),
                 job.get("thermal", {}).get("extruder_target"),
@@ -746,6 +909,9 @@ class PluginsAD5XZCalibration:
                             "requested_slicer_z_offset"
                         ),
                         "job_thermal": dict(job.get("thermal", {})),
+                        "machine_anchor": dict(
+                            provenance.get("machine_anchor", {})
+                        ),
                     },
                 )
         except Exception as exc:
@@ -785,6 +951,16 @@ class PluginsAD5XZCalibration:
             "requested_slicer_z_offset": None,
             "slicer_z_offset_effect": "unknown",
             "rc_path": {},
+            "machine_anchor": {
+                "model": "unknown",
+                "policy_loaded": False,
+                "runtime_available": False,
+                "active": False,
+                "finalized": False,
+                "shift": 0.0,
+                "status": "unavailable",
+                "offset_component": False,
+            },
         }
         self._z_runtime = {
             "klippy": "unavailable",
