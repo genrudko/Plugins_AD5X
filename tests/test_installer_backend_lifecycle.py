@@ -36,11 +36,14 @@ class BackendInstallerLifecycleTests(unittest.TestCase):
                 "AD5X_MOONRAKER_INCLUDES": str(tmp / "plugins.moonraker.conf"),
                 "AD5X_USER_MOONRAKER": str(tmp / "user.moonraker.conf"),
                 "AD5X_KLIPPER_INCLUDES": str(tmp / "plugins.cfg"),
+                "AD5X_ZCAL_MESH_ANCHOR_DEST": str(tmp / "klipper" / "klippy" / "extras" / "ad5x_z_mesh_anchor.py"),
+                "AD5X_ZCAL_KLIPPER_EXTRAS_DIR": str(tmp / "klipper" / "klippy" / "extras"),
                 "AD5X_POWER_ON": str(tmp / "power_on.sh"),
                 "AD5X_PYTHON_BIN": os.sys.executable,
             }
         )
         (tmp / "moonraker" / "components").mkdir(parents=True, exist_ok=True)
+        (tmp / "klipper" / "klippy" / "extras").mkdir(parents=True, exist_ok=True)
         (tmp / "state-root" / "state").mkdir(parents=True, exist_ok=True)
         command = f'. "{INSTALLER}"\n{body}\n'
         return subprocess.run(

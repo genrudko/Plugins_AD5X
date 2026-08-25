@@ -96,10 +96,13 @@ class ZCalibrationLifecycleAssetTests(unittest.TestCase):
             generated = root / "generated"
             plugin.mkdir()
             components.mkdir()
+            extras = root / "klipper" / "klippy" / "extras"
+            extras.mkdir(parents=True)
             state.mkdir()
             generated.mkdir()
             shutil.copytree(ROOT / "installer", plugin / "installer")
             shutil.copytree(ROOT / "moonraker", plugin / "moonraker")
+            shutil.copytree(ROOT / "klipper", plugin / "klipper")
             shutil.copy2(POLICY, plugin / "z_calibration_rc_policy.cfg")
             shutil.copy2(WRAPPER, plugin / "z_calibration.cfg")
 
@@ -110,6 +113,8 @@ PLUGIN_DIR='{plugin}'
 STATE='{state}'
 GENERATED='{generated}'
 MOONRAKER_COMPONENTS_DIR='{components}'
+AD5X_ZCAL_MESH_ANCHOR_DEST='{extras / 'ad5x_z_mesh_anchor.py'}'
+AD5X_ZCAL_KLIPPER_EXTRAS_DIR='{extras}'
 AD5X_INSTALLER_FUNCTIONS_ONLY=1
 python_bin() {{ command -v python3; }}
 sha256_file() {{ sha256sum "$1" | awk '{{print $1}}'; }}
@@ -130,6 +135,8 @@ zcal_core_runtime_matches_source
                 hashlib.sha256(CORE_SOURCE.read_bytes()).hexdigest(),
             )
             self.assertTrue((state / "zcalibration-runtime.sha256").is_file())
+            self.assertEqual((extras / "ad5x_z_mesh_anchor.py").read_bytes(), (ROOT / "klipper" / "extras" / "ad5x_z_mesh_anchor.py").read_bytes())
+            self.assertTrue((state / "zcal-mesh-anchor-runtime.sha256").is_file())
 
     def test_unknown_core_destination_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -140,10 +147,13 @@ zcal_core_runtime_matches_source
             generated = root / "generated"
             plugin.mkdir()
             components.mkdir()
+            extras = root / "klipper" / "klippy" / "extras"
+            extras.mkdir(parents=True)
             state.mkdir()
             generated.mkdir()
             shutil.copytree(ROOT / "installer", plugin / "installer")
             shutil.copytree(ROOT / "moonraker", plugin / "moonraker")
+            shutil.copytree(ROOT / "klipper", plugin / "klipper")
             shutil.copy2(POLICY, plugin / "z_calibration_rc_policy.cfg")
             shutil.copy2(WRAPPER, plugin / "z_calibration.cfg")
             (components / "plugins_ad5x_zcalibration.py").write_text("FOREIGN\n", encoding="utf-8")
@@ -154,6 +164,8 @@ PLUGIN_DIR='{plugin}'
 STATE='{state}'
 GENERATED='{generated}'
 MOONRAKER_COMPONENTS_DIR='{components}'
+AD5X_ZCAL_MESH_ANCHOR_DEST='{extras / 'ad5x_z_mesh_anchor.py'}'
+AD5X_ZCAL_KLIPPER_EXTRAS_DIR='{extras}'
 AD5X_INSTALLER_FUNCTIONS_ONLY=1
 python_bin() {{ command -v python3; }}
 sha256_file() {{ sha256sum "$1" | awk '{{print $1}}'; }}
@@ -178,10 +190,13 @@ zcal_core_destination_owned
             generated = root / "generated"
             plugin.mkdir()
             components.mkdir()
+            extras = root / "klipper" / "klippy" / "extras"
+            extras.mkdir(parents=True)
             state.mkdir()
             generated.mkdir()
             shutil.copytree(ROOT / "installer", plugin / "installer")
             shutil.copytree(ROOT / "moonraker", plugin / "moonraker")
+            shutil.copytree(ROOT / "klipper", plugin / "klipper")
             shutil.copy2(POLICY, plugin / "z_calibration_rc_policy.cfg")
             shutil.copy2(WRAPPER, plugin / "z_calibration.cfg")
 
@@ -191,6 +206,8 @@ PLUGIN_DIR='{plugin}'
 STATE='{state}'
 GENERATED='{generated}'
 MOONRAKER_COMPONENTS_DIR='{components}'
+AD5X_ZCAL_MESH_ANCHOR_DEST='{extras / 'ad5x_z_mesh_anchor.py'}'
+AD5X_ZCAL_KLIPPER_EXTRAS_DIR='{extras}'
 AD5X_INSTALLER_FUNCTIONS_ONLY=1
 python_bin() {{ command -v python3; }}
 sha256_file() {{ sha256sum "$1" | awk '{{print $1}}'; }}
@@ -201,9 +218,56 @@ zcal_core_deploy_managed_copy
 zcal_core_uninstall_managed_copy
 [ ! -e "$ZCAL_CORE_DEST" ]
 [ ! -e "$ZCAL_CORE_HASH_STATE" ]
+[ ! -e "$ZCAL_MESH_ANCHOR_DEST" ]
+[ ! -e "$ZCAL_MESH_ANCHOR_HASH_STATE" ]
 """
             result = self.run_shell(script)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mesh_anchor_activation_and_rollback_contract(self) -> None:
+        wrapper = WRAPPER.read_text(encoding="utf-8")
+        installer = INSTALLER.read_text(encoding="utf-8")
+        self.assertEqual(wrapper.count("[ad5x_z_mesh_anchor]"), 1)
+        lines = [line.strip() for line in installer.splitlines()]
+        self.assertEqual(lines.count('snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py'), 2)
+        self.assertEqual(lines.count('restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py'), 2)
+        self.assertEqual(lines.count('snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256'), 2)
+        self.assertEqual(lines.count('restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256'), 2)
+
+    def test_unknown_mesh_anchor_destination_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            plugin = root / "plugin"
+            components = root / "components"
+            extras = root / "klipper" / "klippy" / "extras"
+            state = root / "state"
+            generated = root / "generated"
+            plugin.mkdir(); components.mkdir(); extras.mkdir(parents=True); state.mkdir(); generated.mkdir()
+            shutil.copytree(ROOT / "installer", plugin / "installer")
+            shutil.copytree(ROOT / "moonraker", plugin / "moonraker")
+            shutil.copytree(ROOT / "klipper", plugin / "klipper")
+            shutil.copy2(POLICY, plugin / "z_calibration_rc_policy.cfg")
+            shutil.copy2(WRAPPER, plugin / "z_calibration.cfg")
+            foreign = extras / "ad5x_z_mesh_anchor.py"
+            foreign.write_text("FOREIGN\n", encoding="utf-8")
+            script = f"""
+PLUGIN_DIR='{plugin}'
+STATE='{state}'
+GENERATED='{generated}'
+MOONRAKER_COMPONENTS_DIR='{components}'
+AD5X_ZCAL_MESH_ANCHOR_DEST='{foreign}'
+AD5X_ZCAL_KLIPPER_EXTRAS_DIR='{extras}'
+AD5X_INSTALLER_FUNCTIONS_ONLY=1
+python_bin() {{ command -v python3; }}
+sha256_file() {{ sha256sum "$1" | awk '{{print $1}}'; }}
+fail() {{ echo "$*" >&2; return 1; }}
+. '{plugin / "installer" / "z_calibration_runtime.sh"}'
+zcal_core_init_paths
+zcal_mesh_anchor_destination_owned
+"""
+            result = self.run_shell(script)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(foreign.read_text(encoding="utf-8"), "FOREIGN\n")
 
     def test_productization_helpers_do_not_mutate_git_worktree(self) -> None:
         text = RUNTIME_HELPER.read_text(encoding="utf-8") + PRODUCTIZER.read_text(encoding="utf-8")

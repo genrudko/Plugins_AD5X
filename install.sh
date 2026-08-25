@@ -599,6 +599,8 @@ if [ "$MODE" = --uninstall ]; then
     snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
     snapshot "$ZCAL_CORE_DEST" zcal-runtime.py
     snapshot "$ZCAL_CORE_HASH_STATE" zcal-runtime.sha256
+    snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py
+    snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256
     UNINSTALL_SUCCESS=0
     rollback_uninstall(){
         set +e
@@ -614,6 +616,8 @@ if [ "$MODE" = --uninstall ]; then
         restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
         restore_snapshot "$ZCAL_CORE_DEST" zcal-runtime.py
         restore_snapshot "$ZCAL_CORE_HASH_STATE" zcal-runtime.sha256
+        restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py
+        restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256
         remove_backend_bytecode
         restore_moonraker_after_rollback || true
         echo "Uninstall rollback завершён. Backup: $B" >&2
@@ -668,6 +672,8 @@ rollback_install(){
     restore_snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
     restore_snapshot "$ZCAL_CORE_DEST" zcal-runtime.py
     restore_snapshot "$ZCAL_CORE_HASH_STATE" zcal-runtime.sha256
+    restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py
+    restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256
     remove_backend_bytecode
     [ -f "$B/upstream/notify.cfg" ] && cp -p "$B/upstream/notify.cfg" /opt/config/mod_data/plugins/notify/ru/notify.cfg
     [ -f "$B/upstream/notify.moonraker.cfg" ] && cp -p "$B/upstream/notify.moonraker.cfg" /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg
@@ -697,6 +703,8 @@ snapshot "$BACKEND_DEST" backend-runtime.py
 snapshot "$BACKEND_HASH_STATE" backend-runtime.sha256
 snapshot "$ZCAL_CORE_DEST" zcal-runtime.py
 snapshot "$ZCAL_CORE_HASH_STATE" zcal-runtime.sha256
+snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py
+snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.cfg "$B/upstream/notify.cfg"
 [ -f /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg ] && cp -p /opt/config/mod_data/plugins/notify/ru/notify.moonraker.cfg "$B/upstream/notify.moonraker.cfg"
 [ -f /opt/config/mod_data/plugins/timelapse/timelapse.cfg ] && cp -p /opt/config/mod_data/plugins/timelapse/timelapse.cfg "$B/upstream/timelapse.cfg"

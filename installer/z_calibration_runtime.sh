@@ -45,6 +45,10 @@ zcal_core_init_paths(){
     ZCAL_CORE_SOURCE="${ZCAL_CORE_SOURCE:-$PLUGIN_DIR/moonraker/components/plugins_ad5x_zcalibration.py}"
     ZCAL_CORE_DEST="${AD5X_ZCAL_CORE_DEST:-$MOONRAKER_COMPONENTS_DIR/plugins_ad5x_zcalibration.py}"
     ZCAL_CORE_HASH_STATE="${ZCAL_CORE_HASH_STATE:-$STATE/zcalibration-runtime.sha256}"
+    ZCAL_MESH_ANCHOR_SOURCE="${AD5X_ZCAL_MESH_ANCHOR_SOURCE:-$PLUGIN_DIR/klipper/extras/ad5x_z_mesh_anchor.py}"
+    ZCAL_MESH_ANCHOR_DEST="${AD5X_ZCAL_MESH_ANCHOR_DEST:-/opt/config/base/klipper/klippy/extras/ad5x_z_mesh_anchor.py}"
+    ZCAL_KLIPPER_EXTRAS_DIR="${AD5X_ZCAL_KLIPPER_EXTRAS_DIR:-${ZCAL_MESH_ANCHOR_DEST%/*}}"
+    ZCAL_MESH_ANCHOR_HASH_STATE="${AD5X_ZCAL_MESH_ANCHOR_HASH_STATE:-$STATE/zcal-mesh-anchor-runtime.sha256}"
 
     ZCAL_RC_PRODUCTIZER="${AD5X_ZCAL_PRODUCTIZER:-$PLUGIN_DIR/installer/z_calibration_productization.py}"
     ZCAL_RC_POLICY_SOURCE="${AD5X_ZCAL_POLICY_SOURCE:-$PLUGIN_DIR/z_calibration_rc_policy.cfg}"
@@ -67,14 +71,17 @@ zcal_rc_functions_only(){
 zcal_core_source_valid(){
     zcal_core_init_paths
     [ -s "$ZCAL_CORE_SOURCE" ] || return 1
+    [ -s "$ZCAL_MESH_ANCHOR_SOURCE" ] || return 1
     [ -s "$ZCAL_RC_PRODUCTIZER" ] || return 1
     [ -s "$ZCAL_RC_POLICY_SOURCE" ] || return 1
     [ -d "$MOONRAKER_COMPONENTS_DIR" ] || return 1
+    [ -d "$ZCAL_KLIPPER_EXTRAS_DIR" ] || return 1
     [ "$(grep -Fxc '[gcode_macro _AD5X_Z_SAVED_CHECK_POLICY]' "$ZCAL_RC_POLICY_SOURCE" 2>/dev/null || true)" -eq 1 ] || return 1
     [ "$(grep -Fxc '[gcode_macro _ADZ_PRIME_GATE]' "$ZCAL_RC_POLICY_SOURCE" 2>/dev/null || true)" -eq 1 ] || return 1
     [ "$(grep -Fxc '[gcode_macro _USER_START_PRINT]' "$PLUGIN_DIR/z_calibration.cfg" 2>/dev/null || true)" -eq 0 ] || return 1
+    [ "$(grep -Fxc '[ad5x_z_mesh_anchor]' "$PLUGIN_DIR/z_calibration.cfg" 2>/dev/null || true)" -eq 1 ] || return 1
     PY="$(python_bin)" || return 1
-    "$PY" -B - "$ZCAL_CORE_SOURCE" "$ZCAL_RC_PRODUCTIZER" <<'PY' >/dev/null 2>&1 || return 1
+    "$PY" -B - "$ZCAL_CORE_SOURCE" "$ZCAL_MESH_ANCHOR_SOURCE" "$ZCAL_RC_PRODUCTIZER" <<'PY' >/dev/null 2>&1 || return 1
 import ast
 import pathlib
 import sys
@@ -93,6 +100,20 @@ zcal_core_destination_owned(){
     [ -n "$DEST_HASH" ] || return 1
     SOURCE_HASH="$(sha256_file "$ZCAL_CORE_SOURCE" 2>/dev/null || true)"
     if [ -f "$ZCAL_CORE_HASH_STATE" ] && [ "$(cat "$ZCAL_CORE_HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
+        return 0
+    fi
+    [ -n "$SOURCE_HASH" ] && [ "$DEST_HASH" = "$SOURCE_HASH" ]
+}
+
+zcal_mesh_anchor_destination_owned(){
+    zcal_core_init_paths
+    [ -e "$ZCAL_MESH_ANCHOR_DEST" ] || [ -L "$ZCAL_MESH_ANCHOR_DEST" ] || return 0
+    [ -f "$ZCAL_MESH_ANCHOR_DEST" ] || return 1
+    [ ! -L "$ZCAL_MESH_ANCHOR_DEST" ] || return 1
+    DEST_HASH="$(sha256_file "$ZCAL_MESH_ANCHOR_DEST" 2>/dev/null || true)"
+    [ -n "$DEST_HASH" ] || return 1
+    SOURCE_HASH="$(sha256_file "$ZCAL_MESH_ANCHOR_SOURCE" 2>/dev/null || true)"
+    if [ -f "$ZCAL_MESH_ANCHOR_HASH_STATE" ] && [ "$(cat "$ZCAL_MESH_ANCHOR_HASH_STATE" 2>/dev/null || true)" = "$DEST_HASH" ]; then
         return 0
     fi
     [ -n "$SOURCE_HASH" ] && [ "$DEST_HASH" = "$SOURCE_HASH" ]
@@ -126,6 +147,7 @@ zcal_rc_preflight(){
 
 validate_zcal_core_destination_ownership(){
     zcal_core_destination_owned || fail "неизвестный файл в Z Calibration runtime destination: $ZCAL_CORE_DEST"
+    zcal_mesh_anchor_destination_owned || fail "неизвестный файл в Z Calibration mesh-anchor destination: $ZCAL_MESH_ANCHOR_DEST"
     zcal_rc_preflight || fail 'Z Calibration RC productization preflight failed closed'
 }
 
@@ -360,10 +382,49 @@ verify_backend_absent(){
     zcal_rc_finalize_uninstall
 }
 
+zcal_mesh_anchor_deploy_managed_copy(){
+    zcal_core_init_paths
+    zcal_mesh_anchor_destination_owned || return 1
+    SOURCE_HASH="$(sha256_file "$ZCAL_MESH_ANCHOR_SOURCE")"
+    TMP="$ZCAL_KLIPPER_EXTRAS_DIR/.ad5x_z_mesh_anchor.py.tmp.$$"
+    rm -f "$TMP"
+    cp "$ZCAL_MESH_ANCHOR_SOURCE" "$TMP" || { rm -f "$TMP"; return 1; }
+    chmod 0644 "$TMP" || { rm -f "$TMP"; return 1; }
+    [ "$(sha256_file "$TMP")" = "$SOURCE_HASH" ] || { rm -f "$TMP"; return 1; }
+    mv -f "$TMP" "$ZCAL_MESH_ANCHOR_DEST" || { rm -f "$TMP"; return 1; }
+    [ "$(sha256_file "$ZCAL_MESH_ANCHOR_DEST")" = "$SOURCE_HASH" ] || return 1
+    rm -f "$ZCAL_KLIPPER_EXTRAS_DIR/__pycache__/ad5x_z_mesh_anchor"*.pyc 2>/dev/null || true
+    HASH_TMP="$ZCAL_MESH_ANCHOR_HASH_STATE.tmp.$$"
+    printf '%s\n' "$SOURCE_HASH" >"$HASH_TMP"
+    mv -f "$HASH_TMP" "$ZCAL_MESH_ANCHOR_HASH_STATE"
+}
+
+zcal_mesh_anchor_runtime_matches_source(){
+    zcal_core_init_paths
+    [ -f "$ZCAL_MESH_ANCHOR_DEST" ] || return 1
+    [ ! -L "$ZCAL_MESH_ANCHOR_DEST" ] || return 1
+    [ -f "$ZCAL_MESH_ANCHOR_HASH_STATE" ] || return 1
+    SOURCE_HASH="$(sha256_file "$ZCAL_MESH_ANCHOR_SOURCE" 2>/dev/null || true)"
+    DEST_HASH="$(sha256_file "$ZCAL_MESH_ANCHOR_DEST" 2>/dev/null || true)"
+    RECORDED_HASH="$(cat "$ZCAL_MESH_ANCHOR_HASH_STATE" 2>/dev/null || true)"
+    [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ]
+}
+
+zcal_mesh_anchor_uninstall_managed_copy(){
+    zcal_core_init_paths
+    if [ -e "$ZCAL_MESH_ANCHOR_DEST" ] || [ -L "$ZCAL_MESH_ANCHOR_DEST" ]; then
+        zcal_mesh_anchor_destination_owned || return 1
+        rm -f "$ZCAL_MESH_ANCHOR_DEST"
+    fi
+    rm -f "$ZCAL_KLIPPER_EXTRAS_DIR/__pycache__/ad5x_z_mesh_anchor"*.pyc 2>/dev/null || true
+    rm -f "$ZCAL_MESH_ANCHOR_HASH_STATE"
+}
+
 zcal_core_deploy_managed_copy(){
     zcal_core_init_paths
     zcal_core_source_valid || return 1
     zcal_core_destination_owned || return 1
+    zcal_mesh_anchor_destination_owned || return 1
     SOURCE_HASH="$(sha256_file "$ZCAL_CORE_SOURCE")"
     TMP="$MOONRAKER_COMPONENTS_DIR/.plugins_ad5x_zcalibration.py.tmp.$$"
     rm -f "$TMP"
@@ -375,6 +436,7 @@ zcal_core_deploy_managed_copy(){
     HASH_TMP="$ZCAL_CORE_HASH_STATE.tmp.$$"
     printf '%s\n' "$SOURCE_HASH" >"$HASH_TMP"
     mv -f "$HASH_TMP" "$ZCAL_CORE_HASH_STATE"
+    zcal_mesh_anchor_deploy_managed_copy || return 1
     zcal_rc_apply
 }
 
@@ -387,12 +449,14 @@ zcal_core_runtime_matches_source(){
     DEST_HASH="$(sha256_file "$ZCAL_CORE_DEST" 2>/dev/null || true)"
     RECORDED_HASH="$(cat "$ZCAL_CORE_HASH_STATE" 2>/dev/null || true)"
     [ -n "$SOURCE_HASH" ] && [ "$SOURCE_HASH" = "$DEST_HASH" ] && [ "$DEST_HASH" = "$RECORDED_HASH" ] || return 1
+    zcal_mesh_anchor_runtime_matches_source || return 1
     zcal_rc_live_verify
 }
 
 zcal_core_uninstall_managed_copy(){
     zcal_core_init_paths
     zcal_rc_uninstall || return 1
+    zcal_mesh_anchor_uninstall_managed_copy || return 1
     if [ -e "$ZCAL_CORE_DEST" ] || [ -L "$ZCAL_CORE_DEST" ]; then
         zcal_core_destination_owned || return 1
         rm -f "$ZCAL_CORE_DEST"
