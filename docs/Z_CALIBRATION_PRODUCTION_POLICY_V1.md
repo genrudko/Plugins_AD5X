@@ -8,7 +8,9 @@
 
 > **2026-08-23 runtime correction.** Real-AD5X testing proved that Z-Mod skips `MESH_TEST=3` when a fresh mesh is built by `PRINT_LEVELING=1`, leaving the old persistent/global Z value applied to the new mesh. The corrected invariant is: **final mesh selected → load persistent baseline → exactly one native Z-Mod `_MESH_TEST` / AutoZOffset reconciliation → print**. Fresh mesh is no longer treated as `Auto-Z=0`. The absolute historical mesh center `-1.925833` is evidence only and is no longer a production hard gate; load-cell recalibration and rebuilt meshes can legitimately move absolute contact coordinates. Z-Mod remains the sole physical contact/Auto-Z owner.
 
-> **2026-08-23 pre-prime ordering correction.** Hardware logging proved `_USER_START_PRINT` is too late for fresh-mesh finalization: Z-Mod performs configured `CLEAR` line priming before the end hook. ZCAL therefore uses Z-Mod's documented custom `CLEAR` extension point as `_ADZ_PRIME_GATE`. Productization preserves prior `CLEAR`/`DISABLE_PRIMING`, routes `CLEAR` through the gate, keeps priming enabled so the gate runs, performs final native `_MESH_TEST` before delegated priming, and leaves the end hook as verification only for fresh mesh. Rollback/uninstall restore the prior priming settings. KAMP/forced `LINE_PURGE` bypass remains gated until proven on hardware.
+> **2026-08-23 pre-prime ordering correction.** Hardware logging proved `_USER_START_PRINT` is too late for fresh-mesh finalization: Z-Mod performs configured `CLEAR` line priming before the end hook. ZCAL therefore uses Z-Mod's documented custom `CLEAR` extension point as `_ADZ_PRIME_GATE`. Productization preserves prior `CLEAR`/`DISABLE_PRIMING`, routes `CLEAR` through the gate, keeps priming enabled so the gate runs, performs final native `_MESH_TEST` before delegated priming, and leaves the end hook as verification only for fresh mesh. Rollback/uninstall restore the prior priming settings.
+
+> **2026-08-25 KAMP software-compatibility correction.** Interposing `_ADZ_PRIME_GATE` would otherwise hide the original `CLEAR` value from Z-Mod's purge router. The gate now preserves Z-Mod semantics after v6 anchor finalization: missing configured purge macros fall back to `LINE_PURGE`, and KAMP with `_CLEAR1..4` forces `LINE_PURGE`. The Auto-Z/machine-anchor step always completes before either route. This closes the software seam but does **not** by itself constitute owner hardware acceptance of unattended KAMP.
 
 Observed control case after load-cell calibration: `Probe=-1.7850`, `Mesh=-1.8125`, `Delta=+0.0275`, persistent `Z=-0.1010`, effective native result `Z=-0.0735`.
 
@@ -47,7 +49,7 @@ For a saved-mesh job the accepted profile remains `auto`. For a fresh-mesh job (
 
 `MESH_TEST=3` is intentional. Z-Mod mode 3 performs its existing AutoZOffset contact path but raises an error on its own large-delta condition instead of automatically falling back to KAMP. For this unattended policy, a large/mismatched condition must stop the job and require explicit review/full calibration rather than silently changing calibration strategy.
 
-Fresh KAMP/full-leveling compatibility remains gated separately; no path may silently skip the final native Auto-Z reconciliation.
+Fresh KAMP/full-leveling software paths are routed through the same pre-prime native Auto-Z and v6 machine-anchor finalization. Unattended KAMP remains hardware-acceptance gated; no path may silently skip final reconciliation.
 
 ## 3. Accepted saved-mesh identity
 
