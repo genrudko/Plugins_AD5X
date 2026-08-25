@@ -303,10 +303,9 @@ def verify_live(live_payload: str, state_dir: Path) -> None:
     anchor = status.get("ad5x_z_mesh_anchor", {})
     if not isinstance(anchor, dict) or anchor.get("persistent") is not False: raise ProductizationError("ZCAL transient mesh-anchor runtime is not loaded")
     if abs(float(anchor.get("max_abs_shift", -1.0)) - MAX_MACHINE_ANCHOR) > 1e-12: raise ProductizationError("ZCAL mesh-anchor runtime safety limit mismatch")
-    mesh_adapter = normalized.get("gcode_macro _bed_mesh_calibrate", {})
-    if mesh_adapter.get("rename_existing") != "_ADZ_BED_MESH_CALIBRATE_BASE": raise ProductizationError("ZCAL bed-mesh precision adapter is not loaded")
-    probe_adapter = normalized.get("gcode_macro probe", {})
-    if probe_adapter.get("rename_existing") != "_ADZ_PROBE_BASE": raise ProductizationError("ZCAL final-probe precision adapter is not loaded")
+    if anchor.get("metrology_hooks_ready") is not True: raise ProductizationError("ZCAL runtime metrology hooks are not ready")
+    if anchor.get("mesh_calibrate_hook") != "_BED_MESH_CALIBRATE": raise ProductizationError("ZCAL bed-mesh precision runtime hook is not loaded")
+    if anchor.get("probe_hook") != "PROBE": raise ProductizationError("ZCAL final-probe precision runtime hook is not loaded")
     if manifest.get("measurement_policy_id") != MEASUREMENT_POLICY_ID: raise ProductizationError("ZCAL productization measurement policy provenance mismatch")
     if manifest.get("anchor_policy_id") != ANCHOR_POLICY_ID: raise ProductizationError("ZCAL productization anchor policy provenance mismatch")
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import ast
 import importlib.util
 from pathlib import Path
 import unittest
@@ -11,9 +12,30 @@ assert spec and spec.loader
 spec.loader.exec_module(mod)
 
 class FakeGcode:
-    def __init__(self): self.commands = {}
-    def register_command(self, name, cb): self.commands[name] = cb
+    def __init__(self, printer=None): self.commands, self.printer = {}, printer
+    def register_command(self, name, cb):
+        if cb is None: return self.commands.pop(name, None)
+        self.commands[name] = cb
     def error(self, msg): return RuntimeError(msg)
+    def create_gcode_command(self, command, commandline, params): return FakeForwardGcmd(commandline)
+    def run_script_from_command(self, script):
+        target = self.printer.objects[mod.MEASUREMENT_OBJECT].variables
+        for line in script.splitlines():
+            fields = dict(token.split('=', 1) for token in line.split()[1:])
+            target[fields['VARIABLE']] = ast.literal_eval(fields['VALUE'])
+
+class FakeForwardGcmd:
+    def __init__(self, line): self.line = line
+    def get_raw_command_parameters(self): return self.line.split(' ', 1)[1] if ' ' in self.line else ''
+    def error(self, msg): return RuntimeError(msg)
+
+class FakeMeasurement:
+    def __init__(self):
+        self.variables = {'mesh_probe_speed':5.0,'mesh_probe_samples':3,'mesh_probe_result':'median','final_probe_speed':0.5,'final_probe_samples':3,'final_probe_result':'median','final_probe_armed':0,'final_probe_completed':0,'final_probe_x':0.0,'final_probe_y':0.0,'fresh_mesh_built':0,'fresh_native_check_done':0}
+
+class FakeStatus:
+    def __init__(self, **status): self.status = status
+    def get_status(self, eventtime): return self.status
 
 class FakeMesh:
     def __init__(self, params=None, name="auto"):
@@ -38,11 +60,12 @@ class FakeBedMesh:
 
 class FakePrinter:
     def __init__(self, bed_mesh):
-        self.gcode = FakeGcode()
+        self.gcode = FakeGcode(self)
         self.objects = {"gcode": self.gcode, "bed_mesh": bed_mesh}
         self.handlers = {}
     def lookup_object(self, name, default=None): return self.objects.get(name, default)
     def register_event_handler(self, name, cb): self.handlers[name] = cb
+    def config_error(self, msg): return RuntimeError(msg)
 
 class FakeConfig:
     def __init__(self, printer, limit=0.31): self.printer, self.limit = printer, limit
@@ -139,6 +162,48 @@ class MeshAnchorTests(unittest.TestCase):
         anchor, _, _ = self.make(mesh=False)
         with self.assertRaisesRegex(RuntimeError, "no active mesh"):
             anchor.cmd_APPLY(FakeGcmd(SHIFT="0.1"))
+
+    def prepare_metrology_runtime(self):
+        anchor, _, _ = self.make()
+        printer = anchor.printer
+        measurement = FakeMeasurement()
+        printer.objects[mod.MEASUREMENT_OBJECT] = measurement
+        printer.objects["print_stats"] = FakeStatus(state="printing")
+        printer.objects["gcode_move"] = FakeStatus(gcode_position=[100.0, 100.0, 5.0, 0.0])
+        seen = {"mesh": [], "probe": []}
+        printer.gcode.commands[mod.MESH_COMMAND] = lambda g: seen["mesh"].append(g.get_raw_command_parameters())
+        printer.gcode.commands[mod.PROBE_COMMAND] = lambda g: seen["probe"].append(g.get_raw_command_parameters())
+        printer.handlers["klippy:ready"]()
+        return anchor, measurement, seen
+
+    def test_ready_interposes_only_after_base_commands_exist(self):
+        anchor, measurement, seen = self.prepare_metrology_runtime()
+        state = anchor.get_status(None)
+        self.assertTrue(state["metrology_hooks_ready"])
+        self.assertEqual(state["mesh_calibrate_hook"], "_BED_MESH_CALIBRATE")
+        self.assertEqual(state["probe_hook"], "PROBE")
+        anchor.printer.gcode.commands[mod.MESH_COMMAND](FakeForwardGcmd("_BED_MESH_CALIBRATE ADAPTIVE=1 PROBE_SPEED=9"))
+        self.assertEqual(seen["mesh"], ["ADAPTIVE=1 PROBE_SPEED=9 PROBE_SPEED=5.0 SAMPLES=3 SAMPLES_RESULT=median"])
+        self.assertEqual(measurement.variables["fresh_mesh_built"], 1)
+
+    def test_final_probe_precision_is_one_shot_and_fresh_completion_is_recorded(self):
+        anchor, measurement, seen = self.prepare_metrology_runtime()
+        measurement.variables.update(final_probe_armed=1, final_probe_x=100.0, final_probe_y=100.0, fresh_mesh_built=1)
+        anchor.printer.gcode.commands[mod.PROBE_COMMAND](FakeForwardGcmd("PROBE SAMPLES=1"))
+        self.assertEqual(seen["probe"], ["SAMPLES=1 PROBE_SPEED=0.5 SAMPLES=3 SAMPLES_RESULT=median"])
+        self.assertEqual(measurement.variables["final_probe_armed"], 0)
+        self.assertEqual(measurement.variables["final_probe_completed"], 1)
+        self.assertEqual(measurement.variables["fresh_native_check_done"], 1)
+        anchor.printer.gcode.commands[mod.PROBE_COMMAND](FakeForwardGcmd("PROBE PROBE_SPEED=7"))
+        self.assertEqual(seen["probe"][-1], "PROBE_SPEED=7")
+
+    def test_ready_fails_closed_without_zmod_mesh_delegate(self):
+        anchor, _, _ = self.make()
+        anchor.printer.objects[mod.MEASUREMENT_OBJECT] = FakeMeasurement()
+        anchor.printer.gcode.commands[mod.PROBE_COMMAND] = lambda g: None
+        with self.assertRaisesRegex(RuntimeError, "_BED_MESH_CALIBRATE unavailable"):
+            anchor.printer.handlers["klippy:ready"]()
+        self.assertFalse(anchor.metrology_hooks_ready)
 
     def test_source_has_no_persistence_or_user_offset_write(self):
         source = MODULE.read_text(encoding="utf-8")

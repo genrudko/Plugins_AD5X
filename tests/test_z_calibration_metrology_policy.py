@@ -4,6 +4,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = (ROOT / "z_calibration_rc_policy.cfg").read_text(encoding="utf-8")
 PRODUCT = (ROOT / "installer" / "z_calibration_productization.py").read_text(encoding="utf-8")
+ANCHOR = (ROOT / "klipper" / "extras" / "ad5x_z_mesh_anchor.py").read_text(encoding="utf-8")
 RUNTIME = (ROOT / "installer" / "z_calibration_runtime.sh").read_text(encoding="utf-8")
 MEASUREMENT_ID = "adz-metrology-mesh5-median3-final05-median3-anchor-v5-20260825"
 
@@ -12,30 +13,35 @@ class MetrologyPolicyTests(unittest.TestCase):
         self.assertNotIn("\n[probe]\n", POLICY)
         self.assertNotIn("[gcode_macro _PREPARE_PRINT]", POLICY)
         self.assertNotIn("_ADZ_PREPARE_PRINT_BASE", POLICY)
+        self.assertNotIn("[gcode_macro _BED_MESH_CALIBRATE]", POLICY)
+        self.assertNotIn("[gcode_macro PROBE]", POLICY)
+        self.assertNotIn("rename_existing:", POLICY)
         self.assertIn(f'variable_policy_id: "{MEASUREMENT_ID}"', POLICY)
-        self.assertIn("[gcode_macro _BED_MESH_CALIBRATE]", POLICY)
-        self.assertIn("rename_existing: _ADZ_BED_MESH_CALIBRATE_BASE", POLICY)
-        self.assertIn("PROBE_SPEED={m.mesh_probe_speed} SAMPLES={m.mesh_probe_samples} SAMPLES_RESULT={m.mesh_probe_result}", POLICY)
         self.assertIn("variable_mesh_probe_speed: 5.0", POLICY)
         self.assertIn("variable_final_probe_speed: 0.5", POLICY)
         self.assertNotIn("variable_expected_reconciliation_delta", POLICY)
         self.assertIn("variable_final_probe_completed: 0", POLICY)
-        self.assertIn("[gcode_macro PROBE]", POLICY)
-        self.assertIn("rename_existing: _ADZ_PROBE_BASE", POLICY)
+        self.assertIn('MESH_COMMAND = "_BED_MESH_CALIBRATE"', ANCHOR)
+        self.assertIn('PROBE_COMMAND = "PROBE"', ANCHOR)
+        self.assertIn('register_event_handler("klippy:ready", self._handle_ready)', ANCHOR)
+        self.assertIn("def _cmd_mesh_calibrate", ANCHOR)
+        self.assertIn("def _cmd_probe", ANCHOR)
         commands = [line.strip() for line in POLICY.splitlines()]
         self.assertNotIn("G0", commands)
         self.assertNotIn("G1", commands)
         self.assertIn("_LOAD_CELL_TARE", commands)
 
     def test_final_precision_probe_is_one_shot_and_position_bound(self):
-        start = POLICY.index("[gcode_macro PROBE]")
-        end = POLICY.index("[gcode_macro _ADZ_RC_ABORT_MESH_POLICY]", start)
-        block = POLICY[start:end]
-        self.assertIn("final_probe_armed", block)
-        self.assertIn("final_probe_x", block)
-        self.assertIn("final_probe_y", block)
-        self.assertIn("final_probe_armed VALUE=0", block)
-        self.assertIn("_ADZ_PROBE_BASE {rawparams} PROBE_SPEED={m.final_probe_speed} SAMPLES={m.final_probe_samples} SAMPLES_RESULT={m.final_probe_result}", block)
+        start = ANCHOR.index("    def _cmd_probe")
+        end = ANCHOR.index("    def _bed_mesh", start)
+        block = ANCHOR[start:end]
+        self.assertIn('final_probe_armed', block)
+        self.assertIn('final_probe_x', block)
+        self.assertIn('final_probe_y', block)
+        self.assertIn('self._set_measurement(final_probe_armed=0)', block)
+        self.assertIn('("PROBE_SPEED", m["final_probe_speed"])', block)
+        self.assertIn('("SAMPLES", m["final_probe_samples"])', block)
+        self.assertIn('("SAMPLES_RESULT", m["final_probe_result"])', block)
 
     def test_tare_reuse_is_print_scoped_and_fail_closed(self):
         start = POLICY.index("[gcode_macro LOAD_CELL_TARE]")
@@ -117,23 +123,27 @@ class MetrologyPolicyTests(unittest.TestCase):
             self.assertAlmostEqual(v6_mesh, probe, places=9)
 
     def test_real_print_time_mesh_build_sets_transient_fresh_proof(self):
-        start = POLICY.index("[gcode_macro _BED_MESH_CALIBRATE]")
-        end = POLICY.index("[gcode_macro PROBE]", start)
-        block = POLICY[start:end]
-        self.assertIn('printer.print_stats.state|default("unknown")|string == "printing"', block)
-        self.assertLess(block.index("fresh_mesh_built VALUE=0"), block.index("_ADZ_BED_MESH_CALIBRATE_BASE {rawparams}"))
-        self.assertIn("fresh_native_check_done VALUE=0", block)
-        self.assertGreater(block.index("fresh_mesh_built VALUE=1"), block.index("_ADZ_BED_MESH_CALIBRATE_BASE {rawparams}"))
+        start = ANCHOR.index("    def _cmd_mesh_calibrate")
+        end = ANCHOR.index("    def _cmd_probe", start)
+        block = ANCHOR[start:end]
+        self.assertIn('built_for_print = self._print_state() == "printing"', block)
+        self.assertIn('fresh_mesh_built=0', block)
+        self.assertIn('fresh_native_check_done=0', block)
+        self.assertIn('final_probe_completed=0', block)
+        self.assertIn('self._forward(MESH_COMMAND', block)
+        self.assertIn('self._set_measurement(fresh_mesh_built=1)', block)
+        self.assertLess(block.index('fresh_mesh_built=0'), block.index('self._forward(MESH_COMMAND'))
+        self.assertGreater(block.index('fresh_mesh_built=1'), block.index('self._forward(MESH_COMMAND'))
 
     def test_native_completion_is_recorded_by_existing_probe_adapter(self):
         self.assertNotIn("[gcode_macro _MESH_TEST]\nrename_existing:", POLICY)
-        start = POLICY.index("[gcode_macro PROBE]")
-        end = POLICY.index("[gcode_macro _ADZ_RC_ABORT_MESH_POLICY]", start)
-        block = POLICY[start:end]
-        self.assertIn("final_match", block)
-        self.assertIn("fresh_mesh_built", block)
-        self.assertIn("fresh_native_check_done VALUE=1", block)
-        self.assertLess(block.index("_ADZ_PROBE_BASE {rawparams} PROBE_SPEED"), block.index("fresh_native_check_done VALUE=1"))
+        start = ANCHOR.index("    def _cmd_probe")
+        end = ANCHOR.index("    def _bed_mesh", start)
+        block = ANCHOR[start:end]
+        self.assertIn('final_match', block)
+        self.assertIn('fresh_mesh_built', block)
+        self.assertIn('updates["fresh_native_check_done"] = 1', block)
+        self.assertLess(block.index('self._forward(PROBE_COMMAND'), block.index('updates = {"final_probe_completed": 1}'))
 
     def test_live_verifier_queries_runtime_macro_variables(self):
         self.assertIn("gcode_macro%20_ADZ_MEASUREMENT_POLICY", RUNTIME)
