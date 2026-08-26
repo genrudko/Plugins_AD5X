@@ -34,8 +34,19 @@ class FakeMeasurement:
         self.variables = {'mesh_probe_speed':5.0,'mesh_probe_samples':3,'mesh_probe_result':'median','final_probe_speed':0.5,'final_probe_samples':3,'final_probe_result':'median','final_probe_armed':0,'final_probe_completed':0,'final_probe_x':0.0,'final_probe_y':0.0,'fresh_mesh_built':0,'fresh_native_check_done':0}
 
 class FakeStatus:
-    def __init__(self, **status): self.status = status
-    def get_status(self, eventtime): return self.status
+    def __init__(self, require_eventtime=False, **status):
+        self.status = status
+        self.require_eventtime = require_eventtime
+        self.eventtimes = []
+    def get_status(self, eventtime):
+        self.eventtimes.append(eventtime)
+        if self.require_eventtime and eventtime is None:
+            raise TypeError("status provider requires reactor eventtime")
+        return self.status
+
+class FakeReactor:
+    def __init__(self): self.now = 123.456
+    def monotonic(self): return self.now
 
 class FakeMesh:
     def __init__(self, params=None, name="auto"):
@@ -61,9 +72,11 @@ class FakeBedMesh:
 class FakePrinter:
     def __init__(self, bed_mesh):
         self.gcode = FakeGcode(self)
+        self.reactor = FakeReactor()
         self.objects = {"gcode": self.gcode, "bed_mesh": bed_mesh}
         self.handlers = {}
     def lookup_object(self, name, default=None): return self.objects.get(name, default)
+    def get_reactor(self): return self.reactor
     def register_event_handler(self, name, cb): self.handlers[name] = cb
     def config_error(self, msg): return RuntimeError(msg)
 
@@ -168,13 +181,24 @@ class MeshAnchorTests(unittest.TestCase):
         printer = anchor.printer
         measurement = FakeMeasurement()
         printer.objects[mod.MEASUREMENT_OBJECT] = measurement
-        printer.objects["print_stats"] = FakeStatus(state=state)
-        printer.objects["gcode_move"] = FakeStatus(gcode_position=[100.0, 100.0, 5.0, 0.0])
+        printer.objects["print_stats"] = FakeStatus(require_eventtime=True, state=state)
+        printer.objects["gcode_move"] = FakeStatus(require_eventtime=True, gcode_position=[100.0, 100.0, 5.0, 0.0])
         seen = {"mesh": [], "probe": []}
         printer.gcode.commands[mod.MESH_COMMAND] = lambda g: seen["mesh"].append(g.get_raw_command_parameters())
         printer.gcode.commands[mod.PROBE_COMMAND] = lambda g: seen["probe"].append(g.get_raw_command_parameters())
         printer.handlers["klippy:ready"]()
         return anchor, measurement, seen
+
+    def test_runtime_status_queries_use_reactor_eventtime(self):
+        anchor, _, _ = self.prepare_metrology_runtime()
+        print_stats = anchor.printer.objects["print_stats"]
+        gcode_move = anchor.printer.objects["gcode_move"]
+        self.assertEqual(anchor._print_state(), "printing")
+        self.assertEqual(anchor._gcode_xy(), (100.0, 100.0))
+        self.assertEqual(print_stats.eventtimes[-1], anchor.printer.reactor.now)
+        self.assertEqual(gcode_move.eventtimes[-1], anchor.printer.reactor.now)
+        self.assertNotIn(None, print_stats.eventtimes)
+        self.assertNotIn(None, gcode_move.eventtimes)
 
     def test_ready_interposes_only_after_base_commands_exist(self):
         anchor, measurement, seen = self.prepare_metrology_runtime()

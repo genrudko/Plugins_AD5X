@@ -49,11 +49,14 @@ class AD5XZMeshAnchor:
             bed_mesh.set_mesh(self.base_mesh)
         self._clear_state()
 
+    def _eventtime(self):
+        return self.printer.get_reactor().monotonic()
+
     def _measurement_status(self, config_phase=False):
         obj = self.printer.lookup_object(MEASUREMENT_OBJECT, None)
         values = getattr(obj, "variables", None) if obj is not None else None
         if values is None and obj is not None and hasattr(obj, "get_status"):
-            values = obj.get_status(None)
+            values = obj.get_status(self._eventtime())
         error = getattr(self.printer, "config_error", self.gcode.error) if config_phase else self.gcode.error
         if not isinstance(values, dict):
             raise error("Plugins AD5X Z metrology: measurement policy runtime is unavailable")
@@ -96,11 +99,11 @@ class AD5XZMeshAnchor:
 
     def _print_state(self):
         obj = self.printer.lookup_object("print_stats", None)
-        return str(obj.get_status(None).get("state", "unknown")) if obj is not None and hasattr(obj, "get_status") else "unknown"
+        return str(obj.get_status(self._eventtime()).get("state", "unknown")) if obj is not None and hasattr(obj, "get_status") else "unknown"
 
     def _gcode_xy(self):
         obj = self.printer.lookup_object("gcode_move", None)
-        status = obj.get_status(None) if obj is not None and hasattr(obj, "get_status") else {}
+        status = obj.get_status(self._eventtime()) if obj is not None and hasattr(obj, "get_status") else {}
         pos = status.get("gcode_position")
         if pos is None or len(pos) < 2:
             raise self.gcode.error("Plugins AD5X Z metrology: gcode position unavailable")
