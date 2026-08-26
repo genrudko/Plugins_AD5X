@@ -81,6 +81,18 @@ wait_klippy_ready(){
     done
     return 1
 }
+recover_shutdown_klippy(){
+    INFO="$(moonraker_server_info 2>/dev/null || true)"
+    [ -n "$INFO" ] || fail 'не удалось прочитать Moonraker server/info перед idle preflight'
+    COMPACT="$(printf '%s' "$INFO" | tr -d '[:space:]')"
+    case "$COMPACT" in
+        *'"klippy_connected":true'*'"klippy_state":"shutdown"'*)
+            echo '[INFO] Klippy shutdown detected; restarting host process before idle preflight'
+            zcal_rc_klippy_host_restart || fail 'не удалось восстановить Klippy из shutdown перед idle preflight'
+            ;;
+    esac
+}
+
 check_idle(){
     STATE_JSON="$(ad5x_http_get 3 "$MOONRAKER_HTTP_BASE/printer/objects/query?print_stats" 2>/dev/null)" \
         || fail 'не удалось подтвердить idle state: Moonraker print_stats недоступен'
@@ -264,6 +276,7 @@ verify_restored_managed_active(){
 }
 
 operation_prepare(){
+    recover_shutdown_klippy
     check_idle
     zcal_rc_preflight || fail 'RC productization preflight failed closed'
     STAMP="$(date +%Y%m%d-%H%M%S)"
