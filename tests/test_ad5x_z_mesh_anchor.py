@@ -44,6 +44,14 @@ class FakeStatus:
             raise TypeError("status provider requires reactor eventtime")
         return self.status
 
+class FakePrintStats:
+    def __init__(self, state):
+        self.state = state
+        self.get_status_calls = 0
+    def get_status(self, eventtime):
+        self.get_status_calls += 1
+        raise AssertionError("_print_state must not query PrintStats.get_status")
+
 class FakeReactor:
     def __init__(self): self.now = 123.456
     def monotonic(self): return self.now
@@ -181,7 +189,7 @@ class MeshAnchorTests(unittest.TestCase):
         printer = anchor.printer
         measurement = FakeMeasurement()
         printer.objects[mod.MEASUREMENT_OBJECT] = measurement
-        printer.objects["print_stats"] = FakeStatus(require_eventtime=True, state=state)
+        printer.objects["print_stats"] = FakePrintStats(state)
         printer.objects["gcode_move"] = FakeStatus(require_eventtime=True, gcode_position=[100.0, 100.0, 5.0, 0.0])
         seen = {"mesh": [], "probe": []}
         printer.gcode.commands[mod.MESH_COMMAND] = lambda g: seen["mesh"].append(g.get_raw_command_parameters())
@@ -189,15 +197,17 @@ class MeshAnchorTests(unittest.TestCase):
         printer.handlers["klippy:ready"]()
         return anchor, measurement, seen
 
-    def test_runtime_status_queries_use_reactor_eventtime(self):
+    def test_print_state_uses_direct_runtime_state_without_status_side_effects(self):
         anchor, _, _ = self.prepare_metrology_runtime()
         print_stats = anchor.printer.objects["print_stats"]
-        gcode_move = anchor.printer.objects["gcode_move"]
         self.assertEqual(anchor._print_state(), "printing")
+        self.assertEqual(print_stats.get_status_calls, 0)
+
+    def test_gcode_position_query_uses_reactor_eventtime(self):
+        anchor, _, _ = self.prepare_metrology_runtime()
+        gcode_move = anchor.printer.objects["gcode_move"]
         self.assertEqual(anchor._gcode_xy(), (100.0, 100.0))
-        self.assertEqual(print_stats.eventtimes[-1], anchor.printer.reactor.now)
         self.assertEqual(gcode_move.eventtimes[-1], anchor.printer.reactor.now)
-        self.assertNotIn(None, print_stats.eventtimes)
         self.assertNotIn(None, gcode_move.eventtimes)
 
     def test_ready_interposes_only_after_base_commands_exist(self):

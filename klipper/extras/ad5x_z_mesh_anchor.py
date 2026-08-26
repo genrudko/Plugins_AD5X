@@ -99,7 +99,15 @@ class AD5XZMeshAnchor:
 
     def _print_state(self):
         obj = self.printer.lookup_object("print_stats", None)
-        return str(obj.get_status(self._eventtime()).get("state", "unknown")) if obj is not None and hasattr(obj, "get_status") else "unknown"
+        if obj is None:
+            return "unknown"
+        # Exact Z-Mod/Klipper PrintStats keeps the authoritative state on the
+        # object itself. Reading it directly avoids get_status(), which mutates
+        # duration/filament accounting and requires a valid reactor eventtime.
+        state = getattr(obj, "state", None)
+        if state is None:
+            raise self.gcode.error("Plugins AD5X Z metrology: print state unavailable")
+        return str(state)
 
     def _gcode_xy(self):
         obj = self.printer.lookup_object("gcode_move", None)
