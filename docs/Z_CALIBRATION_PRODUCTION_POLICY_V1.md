@@ -16,6 +16,8 @@
 
 > **2026-08-26 post-purge user-Z correction.** Owner field testing proved Z-Mod saves `clear_state` after native `_MESH_TEST` has temporarily applied `user Z + native_delta`, then restores that state after the delegated purge. The pre-prime gate still finalizes the machine anchor before purge; the late `_USER_START_PRINT` hook is now used only to reload the persistent user Z after Z-Mod's outer `RESTORE_GCODE_STATE` and to verify the live `homing_origin.z` matches the persisted value within 0.0005 mm. It never reruns probe/metrology or moves the machine anchor.
 
+> **2026-08-26 observer correction.** After a v6 transfer is finalized, `ad5x_z_mesh_anchor.shift` is the committed machine-anchor measurement. Z-Mod `_TEST_POINT.temp_z_offset` is only the pre-transfer scratch hand-off and may be reset or reused later in `START_PRINT`; the observer therefore does not compare an active finalized anchor against that mutable scratch value. It retains the scratch value as diagnostic `zmod_temp_delta`, while `measured_delta` and health provenance use the runtime anchor itself.
+
 Observed control case after load-cell calibration: `Probe=-1.7850`, `Mesh=-1.8125`, `Delta=+0.0275`, persistent `Z=-0.1010`, effective native result `Z=-0.0735`.
 
 ## 1. Purpose

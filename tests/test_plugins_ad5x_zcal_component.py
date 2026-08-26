@@ -347,6 +347,8 @@ class PluginsAD5XZCalComponentTests(unittest.TestCase):
         self.assertTrue(anchor["active"] and anchor["finalized"])
         self.assertAlmostEqual(anchor["shift"], 0.1375)
         self.assertAlmostEqual(anchor["measured_delta"], 0.1375)
+        self.assertAlmostEqual(anchor["zmod_temp_delta"], 0.1375)
+        self.assertEqual(anchor["measurement_source"], "ad5x_z_mesh_anchor.shift")
         self.assertFalse(anchor["persistent"] or anchor["offset_component"])
         self.assertEqual(anchor["status"], "active")
         self.assertEqual(state["provenance"]["sources"]["auto_alignment"], "not_in_gcode_offset:v6_transient_mesh_anchor")
@@ -369,12 +371,17 @@ class PluginsAD5XZCalComponentTests(unittest.TestCase):
         self.assertAlmostEqual(state["offset"]["external_unknown"], 0.0)
         self.assertEqual(state["machine_anchor"]["status"], "state_mismatch")
 
-    def test_v6_anchor_shift_mismatch_is_explicit(self) -> None:
-        klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.1375, actual=-0.091, v6=True, anchor_active=True, anchor_shift=0.1300, anchor_finalized=1))
+    def test_v6_active_anchor_ignores_reset_zmod_scratch_delta(self) -> None:
+        klippy = FakeKlippyAPI(ready_payload(persistent=-0.091, auto=0.0, actual=-0.091, v6=True, anchor_active=True, anchor_shift=0.1475, anchor_finalized=1))
         component = component_module.load_component(FakeConfig(FakeServer(klippy)))
         state = asyncio.run(component._handle_snapshot(object()))["module"]["state"]
-        self.assertEqual(state["offset"]["provenance_status"], "machine_anchor_shift_mismatch")
-        self.assertEqual(state["machine_anchor"]["status"], "shift_mismatch")
+        anchor = state["machine_anchor"]
+        self.assertEqual(state["offset"]["provenance_status"], "reconciled")
+        self.assertEqual(anchor["status"], "active")
+        self.assertAlmostEqual(anchor["shift"], 0.1475)
+        self.assertAlmostEqual(anchor["measured_delta"], 0.1475)
+        self.assertAlmostEqual(anchor["zmod_temp_delta"], 0.0)
+        self.assertEqual(anchor["measurement_source"], "ad5x_z_mesh_anchor.shift")
         self.assertAlmostEqual(state["offset"]["external_unknown"], 0.0)
 
     def test_v6_policy_without_anchor_runtime_is_explicit(self) -> None:

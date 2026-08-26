@@ -254,6 +254,8 @@ def _derive_machine_anchor_context(
         "finalized": finalized == 1,
         "shift": 0.0,
         "measured_delta": measured_delta,
+        "zmod_temp_delta": measured_delta,
+        "measurement_source": "gcode_macro _TEST_POINT.temp_z_offset",
         "persistent": None,
         "base_profile": None,
         "runtime_profile": None,
@@ -294,13 +296,12 @@ def _derive_machine_anchor_context(
         context["status"] = "persistence_violation"
     elif active != (finalized == 1):
         context["status"] = "state_mismatch"
-    elif (
-        active
-        and measured_delta is not None
-        and abs(shift - measured_delta) > tolerance
-    ):
-        context["status"] = "shift_mismatch"
     elif active:
+        # Once v6 transfer is finalized, the transient runtime anchor is the
+        # committed measurement. Z-Mod's _TEST_POINT.temp_z_offset is only a
+        # scratch hand-off value and may be reset/reused after START_PRINT.
+        context["measured_delta"] = shift
+        context["measurement_source"] = "ad5x_z_mesh_anchor.shift"
         context["status"] = "active"
     elif measured_delta is not None and abs(measured_delta) > tolerance:
         context["status"] = "pending_transfer"
@@ -499,7 +500,6 @@ def _derive_zmod_provenance(
         "runtime_malformed": "machine_anchor_runtime_malformed",
         "persistence_violation": "machine_anchor_persistence_violation",
         "state_mismatch": "machine_anchor_state_mismatch",
-        "shift_mismatch": "machine_anchor_shift_mismatch",
         "pending_transfer": "machine_anchor_pending",
     }
     if not global_path:
