@@ -272,7 +272,16 @@ zcal_rc_live_verify(){
         LIVE="$(zcal_rc_query_live_policy 2>/dev/null || true)"
         if [ -n "$LIVE" ] && printf '%s' "$LIVE" | "$PY" -B "$ZCAL_RC_PRODUCTIZER" verify-live \
             --state-dir "$ZCAL_RC_STATE_DIR" >/dev/null 2>&1; then
-            return 0
+            EXPECTED_ANCHOR_HASH="$(sha256_file "$ZCAL_MESH_ANCHOR_SOURCE" 2>/dev/null || true)"
+            if [ -n "$EXPECTED_ANCHOR_HASH" ] && printf '%s' "$LIVE" | "$PY" -B -c '
+import json, sys
+expected = sys.argv[1]
+data = json.load(sys.stdin)
+loaded = data.get("result", {}).get("status", {}).get("ad5x_z_mesh_anchor", {}).get("loaded_source_sha256")
+raise SystemExit(0 if isinstance(loaded, str) and loaded == expected else 1)
+' "$EXPECTED_ANCHOR_HASH"; then
+                return 0
+            fi
         fi
         COUNT=$((COUNT + 1))
         sleep 1
@@ -337,10 +346,41 @@ zcal_rc_firmware_restart(){
     [ -n "$INFO" ] && klippy_ready_from_json "$INFO"
 }
 
+zcal_rc_klippy_host_restart(){
+    zcal_rc_functions_only && return 0
+    zcal_rc_wait_klippy_connected || return 1
+    ZREMOTE="${AD5X_ZREMOTE_BIN:-/opt/config/mod/.shell/zremote.sh}"
+    [ -x "$ZREMOTE" ] || return 1
+    "$ZREMOTE" /bin/sh -c '
+set -eu
+PID_FILE=/run/klipper.pid
+START=/usr/data/config/mod/.shell/klipper13.sh
+[ -x "$START" ] || exit 71
+[ -r "$PID_FILE" ] || exit 72
+PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+[ -n "$PID" ] || exit 73
+kill "$PID" 2>/dev/null || exit 74
+COUNT=0
+while kill -0 "$PID" 2>/dev/null; do
+    COUNT=$((COUNT + 1))
+    [ "$COUNT" -lt 15 ] || exit 75
+    sleep 1
+done
+rm -f "$PID_FILE"
+"$START"
+' >/dev/null 2>&1 || return 1
+    # A new OS process must reconnect to Moonraker.  Only that boundary clears
+    # importlib/sys.modules and proves a changed Klipper extra is executable.
+    wait_klippy_ready || return 1
+    sleep 1
+    INFO="$(moonraker_server_info 2>/dev/null || true)"
+    [ -n "$INFO" ] && klippy_ready_from_json "$INFO"
+}
+
 # Override the generic transition only after this helper is sourced. A
 # Moonraker restart alone does not reload Klipper config. Every productization
-# mutation therefore crosses a bounded FIRMWARE_RESTART boundary before the
-# transition's live verifier may succeed.
+# mutation therefore crosses a bounded Klippy host-process restart boundary
+# before the transition's live verifier may succeed.
 run_moonraker_transition(){
     TRANSITION_FN="$1"
     VERIFY_FN="$2"
@@ -355,7 +395,7 @@ run_moonraker_transition(){
     "$TRANSITION_FN" || return 1
     start_moonraker || return 1
     wait_moonraker_http || return 1
-    zcal_rc_firmware_restart || return 1
+    zcal_rc_klippy_host_restart || return 1
     "$VERIFY_FN"
 }
 
@@ -370,7 +410,7 @@ restore_moonraker_after_rollback(){
     [ "$MOONRAKER_WAS_RUNNING" -eq 1 ] || return 0
     start_moonraker >/dev/null 2>&1 || return 1
     wait_moonraker_http "$MOONRAKER_READY_TIMEOUT" >/dev/null 2>&1 || return 1
-    zcal_rc_firmware_restart >/dev/null 2>&1 || return 1
+    zcal_rc_klippy_host_restart >/dev/null 2>&1 || return 1
     wait_klippy_ready "$MOONRAKER_READY_TIMEOUT" >/dev/null 2>&1
 }
 

@@ -1,6 +1,21 @@
 # Plugins AD5X - transient common-mode Z anchor for the active bed mesh.
 # Never persists the shifted copy and never writes the user gcode Z offset.
+import hashlib
 import math
+
+
+def _loaded_source_sha256():
+    path = __file__
+    if path.endswith((".pyc", ".pyo")):
+        path = path[:-1]
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return ""
+
+
+LOADED_SOURCE_SHA256 = _loaded_source_sha256()
 
 RUNTIME_PROFILE = "adz_runtime_anchor"
 COMMAND_APPLY = "ADZ_MESH_ANCHOR"
@@ -254,6 +269,7 @@ class AD5XZMeshAnchor:
             "metrology_hooks_ready": self.metrology_hooks_ready,
             "mesh_calibrate_hook": MESH_COMMAND if self.metrology_hooks_ready else "",
             "probe_hook": PROBE_COMMAND if self.metrology_hooks_ready else "",
+            "loaded_source_sha256": LOADED_SOURCE_SHA256,
         }
 
 def load_config(config):

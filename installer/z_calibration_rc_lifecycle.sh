@@ -286,7 +286,7 @@ rollback_operation(){
     restore_snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py >/dev/null 2>&1 || true
     restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256 >/dev/null 2>&1 || true
     rm -f "$ZCAL_KLIPPER_EXTRAS_DIR/__pycache__/ad5x_z_mesh_anchor"*.pyc 2>/dev/null || true
-    if ! zcal_rc_firmware_restart >/dev/null 2>&1; then
+    if ! zcal_rc_klippy_host_restart >/dev/null 2>&1; then
         echo 'CRITICAL: файлы rollback восстановлены, но effective Klipper state не удалось перезагрузить автоматически.' >&2
     fi
     echo "Rollback backup: $B" >&2
@@ -335,7 +335,7 @@ case "$MODE" in
         zcal_rc_apply || fail 'apply/update/repair mutation failed'
         commit_include_provenance || fail 'include provenance commit failed'
         [ "$(include_count)" -eq 1 ] || fail 'generated RC policy include invariant failed'
-        zcal_rc_firmware_restart || fail 'Klipper reload after RC apply failed'
+        zcal_rc_klippy_host_restart || fail 'Klipper reload after RC apply failed'
         zcal_rc_live_verify || fail 'effective RC state verification failed'
         if [ "$MODE" = update ]; then
             record_rollback_target "$B" || fail 'failed to record previous successful version'
@@ -343,7 +343,7 @@ case "$MODE" in
         ;;
     rollback)
         restore_version_snapshot "$ROLLBACK_TARGET" || fail 'previous successful version restore failed'
-        zcal_rc_firmware_restart || fail 'Klipper reload after version rollback failed'
+        zcal_rc_klippy_host_restart || fail 'Klipper reload after version rollback failed'
         case "$(cat "$ROLLBACK_TARGET/effective-state")" in
             active=1) verify_restored_managed_active || fail 'rolled-back active state compatibility verification failed' ;;
             active=0) wait_klippy_ready || fail 'rolled-back inactive/parked state did not become Klipper-ready' ;;
@@ -354,7 +354,7 @@ case "$MODE" in
         zcal_rc_uninstall || fail 'uninstall mutation failed'
         commit_include_provenance || fail 'include provenance adoption failed'
         restore_owned_include_state || fail 'generated include baseline restore failed'
-        zcal_rc_firmware_restart || fail 'Klipper reload after RC uninstall failed'
+        zcal_rc_klippy_host_restart || fail 'Klipper reload after RC uninstall failed'
         zcal_rc_live_verify_uninstalled || fail 'effective uninstall baseline verification failed'
         zcal_rc_finalize_uninstall || fail 'ownership finalize failed'
         rm -rf "$ROLLBACK_STATE_DIR" || fail 'rollback state cleanup failed'

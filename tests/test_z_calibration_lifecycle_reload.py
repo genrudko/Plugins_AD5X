@@ -14,9 +14,10 @@ class ZCalibrationReloadShellContractTests(unittest.TestCase):
         self.helper = HELPER.read_text(encoding="utf-8")
         self.installer = INSTALLER.read_text(encoding="utf-8")
 
-    def test_product_lifecycle_uses_supported_firmware_restart_endpoint(self) -> None:
-        self.assertIn("/printer/firmware_restart", self.helper)
-        self.assertIn("zcal_rc_firmware_restart || return 1", self.helper)
+    def test_product_lifecycle_uses_full_klippy_host_restart_for_python_extras(self) -> None:
+        self.assertIn("zcal_rc_klippy_host_restart || return 1", self.helper)
+        self.assertIn("/opt/config/mod/.shell/zremote.sh", self.helper)
+        self.assertIn("/usr/data/config/mod/.shell/klipper13.sh", self.helper)
         self.assertIn("wait_klippy_ready", self.helper)
         self.assertNotIn("S65moonraker restart", self.helper)
 
@@ -40,7 +41,7 @@ class ZCalibrationReloadShellContractTests(unittest.TestCase):
             body.index('"$TRANSITION_FN"'),
             body.index("start_moonraker"),
             body.index("wait_moonraker_http"),
-            body.index("zcal_rc_firmware_restart"),
+            body.index("zcal_rc_klippy_host_restart"),
             body.index('"$VERIFY_FN"'),
         ]
         self.assertEqual(order, sorted(order))
@@ -50,7 +51,7 @@ class ZCalibrationReloadShellContractTests(unittest.TestCase):
         end = self.helper.index("verify_backend_absent(){", start)
         body = self.helper[start:end]
         self.assertIn("start_moonraker", body)
-        self.assertIn("zcal_rc_firmware_restart", body)
+        self.assertIn("zcal_rc_klippy_host_restart", body)
         self.assertIn("wait_klippy_ready", body)
 
     def test_uninstall_verifies_effective_baseline_before_dropping_manifest(self) -> None:
@@ -64,6 +65,16 @@ class ZCalibrationReloadShellContractTests(unittest.TestCase):
         self.assertIn("--keep-state", self.helper)
         self.assertIn("verify-uninstalled", self.helper)
         self.assertIn("finalize-uninstall", self.helper)
+
+    def test_host_restart_clears_python_module_cache_and_live_verify_checks_loaded_source(self) -> None:
+        start = self.helper.index("zcal_rc_klippy_host_restart(){")
+        end = self.helper.index("run_moonraker_transition(){", start)
+        body = self.helper[start:end]
+        self.assertIn("/run/klipper.pid", body)
+        self.assertIn("kill \"$PID\"", body)
+        self.assertIn("/usr/data/config/mod/.shell/klipper13.sh", body)
+        self.assertIn("loaded_source_sha256", self.helper)
+        self.assertIn("EXPECTED_ANCHOR_HASH", self.helper)
 
     def test_no_fixed_sleep_restart_primitive_is_reintroduced(self) -> None:
         self.assertNotIn("/etc/init.d/S65moonraker restart", self.helper)

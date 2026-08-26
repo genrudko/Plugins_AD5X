@@ -39,8 +39,8 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
 
     def test_apply_crosses_reload_and_live_verification_boundary(self) -> None:
         block = self.text[self.text.index("install|update|repair)") : self.text.index("uninstall)")]
-        self.assertLess(block.index("zcal_rc_apply"), block.index("zcal_rc_firmware_restart"))
-        self.assertLess(block.index("zcal_rc_firmware_restart"), block.index("zcal_rc_live_verify"))
+        self.assertLess(block.index("zcal_rc_apply"), block.index("zcal_rc_klippy_host_restart"))
+        self.assertLess(block.index("zcal_rc_klippy_host_restart"), block.index("zcal_rc_live_verify"))
 
     def test_successful_update_records_previous_version_only_after_live_verify(self) -> None:
         block = self.text[self.text.index("install|update|repair)") : self.text.index("rollback)")]
@@ -53,7 +53,7 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         block = self.text[start:end]
         order = [
             block.index("restore_version_snapshot"),
-            block.index("zcal_rc_firmware_restart"),
+            block.index("zcal_rc_klippy_host_restart"),
             block.index("verify_restored_managed_active"),
             block.index('record_rollback_target "$B"'),
         ]
@@ -120,7 +120,7 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         order = [
             block.index("zcal_rc_uninstall"),
             block.index("restore_owned_include_state"),
-            block.index("zcal_rc_firmware_restart"),
+            block.index("zcal_rc_klippy_host_restart"),
             block.index("zcal_rc_live_verify_uninstalled"),
             block.index("zcal_rc_finalize_uninstall"),
             block.index('rm -rf "$ROLLBACK_STATE_DIR"'),
@@ -131,7 +131,7 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertIn('snapshot "$KLIPPER_INCLUDES" plugins.cfg', self.text)
         self.assertIn('restore_snapshot "$KLIPPER_INCLUDES" plugins.cfg', self.text)
         self.assertIn("rollback_operation", self.text)
-        self.assertIn("zcal_rc_firmware_restart", self.text)
+        self.assertIn("zcal_rc_klippy_host_restart", self.text)
 
     def test_rc_transaction_versions_mesh_anchor_runtime_with_policy(self) -> None:
         self.assertIn('snapshot "$ZCAL_MESH_ANCHOR_DEST" zcal-mesh-anchor.py', self.text)
@@ -140,7 +140,7 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertIn('restore_snapshot "$ZCAL_MESH_ANCHOR_HASH_STATE" zcal-mesh-anchor.sha256', self.text)
         apply = self.text[self.text.index("install|update|repair)"):self.text.index("rollback)", self.text.index("install|update|repair)"))]
         self.assertLess(apply.index("zcal_mesh_anchor_deploy_managed_copy"), apply.index("zcal_rc_apply"))
-        self.assertLess(apply.index("zcal_rc_apply"), apply.index("zcal_rc_firmware_restart"))
+        self.assertLess(apply.index("zcal_rc_apply"), apply.index("zcal_rc_klippy_host_restart"))
         status = self.text[self.text.index('if [ "$MODE" = status ]'):self.text.index('ROLLBACK_TARGET=', self.text.index('if [ "$MODE" = status ]'))]
         self.assertIn("zcal_mesh_anchor_runtime_matches_source", status)
 

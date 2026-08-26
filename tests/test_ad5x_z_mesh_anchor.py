@@ -274,5 +274,11 @@ class MeshAnchorTests(unittest.TestCase):
         self.assertNotIn("SAVE_CONFIG", source)
         self.assertNotIn("SET_GCODE_OFFSET", source)
 
+    def test_runtime_status_exposes_loaded_python_source_identity(self):
+        anchor, _, _ = self.make()
+        loaded = anchor.get_status(None)["loaded_source_sha256"]
+        self.assertEqual(len(loaded), 64)
+        self.assertTrue(all(c in "0123456789abcdef" for c in loaded))
+
 if __name__ == "__main__":
     unittest.main()
