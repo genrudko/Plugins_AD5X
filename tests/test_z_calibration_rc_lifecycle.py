@@ -75,13 +75,15 @@ class ZCalibrationCanonicalLifecycleTests(unittest.TestCase):
         self.assertIn('["CC_APPLY_PROFILE", "_AD5X_Z_SAVED_CHECK_POLICY"]', self.text)
         self.assertIn("zcal_rc_live_verify >/dev/null 2>&1 || managed_active_preflight", self.text)
 
-    def test_shutdown_recovery_precedes_idle_check_but_does_not_bypass_pause_guard(self) -> None:
+    def test_failed_klippy_recovery_uses_firmware_restart_before_idle_guard(self) -> None:
         self.assertIn("recover_shutdown_klippy(){", self.text)
         start = self.text.index("recover_shutdown_klippy(){")
         end = self.text.index("check_idle(){", start)
         recovery = self.text[start:end]
         self.assertIn('"klippy_state":"shutdown"', recovery)
-        self.assertIn("zcal_rc_klippy_host_restart", recovery)
+        self.assertIn('"klippy_state":"error"', recovery)
+        self.assertIn("zcal_rc_firmware_restart", recovery)
+        self.assertNotIn("zcal_rc_klippy_host_restart", recovery)
         self.assertNotIn("print_stats", recovery)
         prepare = self.text[self.text.index("operation_prepare(){"):self.text.index("rollback_operation(){")]
         self.assertLess(prepare.index("recover_shutdown_klippy"), prepare.index("check_idle"))
