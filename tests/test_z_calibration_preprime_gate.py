@@ -63,6 +63,23 @@ class PrePrimeGateTests(unittest.TestCase):
         self.assertIn("_ADZ_FINALIZE_MACHINE_ANCHOR", POLICY)
         self.assertIn("_ADZ_RC_ABORT_PATH", POLICY)
 
+    def test_end_hook_restores_and_verifies_user_z_after_zmod_purge_restore(self) -> None:
+        start = POLICY.index("[gcode_macro _ADZ_SAVED_CHECK_POLICY]")
+        end = POLICY.index("[gcode_macro _ADZ_ACTION_CONTRACT]", start)
+        guard = POLICY[start:end]
+        branch = guard[guard.index("anchor_active and anchor_finalized == 1"):guard.index("fresh_mesh_proven and pre_prime == 1")]
+        self.assertIn("LOAD_GCODE_OFFSET", branch)
+        self.assertIn("_ADZ_VERIFY_FINAL_USER_Z", branch)
+        self.assertNotIn("_ADZ_FINALIZE_MACHINE_ANCHOR", branch)
+
+        verify_start = POLICY.index("[gcode_macro _ADZ_VERIFY_FINAL_USER_Z]")
+        verify_end = POLICY.index("[gcode_macro _ADZ_PREPRINT_DISABLED]", verify_start)
+        verify = POLICY[verify_start:verify_end]
+        self.assertIn("v['gcode_offsets']", verify)
+        self.assertIn("printer.gcode_move.homing_origin.z", verify)
+        self.assertIn("_ADZ_RC_ABORT_USER_Z", verify)
+        self.assertIn("Plugins AD5X Z v6 PASS", verify)
+
     def test_productizer_owns_and_restores_public_clear_seam(self) -> None:
         for token in ("original_clear", "original_disable_priming", "original_prime_delegate", '"clear", PRIME_GATE', '"disable_priming", 0', "PRIME_DELEGATE_VARIABLE"):
             self.assertIn(token, PRODUCTIZER)

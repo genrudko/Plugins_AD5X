@@ -14,6 +14,8 @@
 
 > **2026-08-25 purge selector contract.** Plugins AD5X exposes only Z-Mod purge algorithms whose callable macro exists in the audited AD5X configuration: `ORCA -> _CLEAR1`, `FF -> _CLEAR2`, `FF2 -> _CLEAR3`, `SCHREIDER -> _CLEAR4`, and `LINE -> LINE_PURGE`. `ADZ_SET_PURGE` changes only the persisted `adz_prime_delegate`; `clear` remains owned by `_ADZ_PRIME_GATE`, so machine-anchor finalization still precedes every purge. Update/repair preserve the current delegate and uninstall restores the pre-plugin `CLEAR`/delegate state. KAMP may temporarily execute `LINE_PURGE` for `_CLEAR1..4` without rewriting the user's selection. Z-Mod's UI/source also references `CLEAR_TRAP`, but the audited AD5X config defines `_CLEAR_TRAP` rather than callable `CLEAR_TRAP`; it is therefore not exposed until upstream semantics are unambiguous.
 
+> **2026-08-26 post-purge user-Z correction.** Owner field testing proved Z-Mod saves `clear_state` after native `_MESH_TEST` has temporarily applied `user Z + native_delta`, then restores that state after the delegated purge. The pre-prime gate still finalizes the machine anchor before purge; the late `_USER_START_PRINT` hook is now used only to reload the persistent user Z after Z-Mod's outer `RESTORE_GCODE_STATE` and to verify the live `homing_origin.z` matches the persisted value within 0.0005 mm. It never reruns probe/metrology or moves the machine anchor.
+
 Observed control case after load-cell calibration: `Probe=-1.7850`, `Mesh=-1.8125`, `Delta=+0.0275`, persistent `Z=-0.1010`, effective native result `Z=-0.0735`.
 
 ## 1. Purpose
