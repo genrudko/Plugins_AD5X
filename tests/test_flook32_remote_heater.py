@@ -114,6 +114,14 @@ class RemoteHeaterTests(unittest.TestCase):
         self.assertIs(printer.objects['heater_generic chamber'], heater)
         self.assertEqual(printer.heaters.registered_sensors, [])
 
+    def test_hidden_sensor_gets_clean_native_heater_name(self):
+        self.assertEqual(
+            flook32._native_heater_default_name('_flook32_chamber'),
+            'chamber')
+        self.assertEqual(
+            flook32._native_heater_default_name('chamber'),
+            'chamber')
+
     def test_native_heater_can_be_disabled(self):
         printer = FakePrinter(); config = FakeConfig(printer); sensor = FakeSensor()
         sensor.native_heater_enabled = False

@@ -87,6 +87,18 @@ cp -p "$SRC_ENSURE" "$TARGET/ensure.sh"
 chmod 0644 "$TARGET/flook32.py" "$TARGET/flook32.cfg"
 chmod 0755 "$TARGET/ensure.sh"
 
+MIGRATE_CFG="$HERE/scripts/migrate_cfg.py"
+HOST_PYTHON="${AD5X_HOST_PYTHON:-/bin/python3}"
+[ -f "$MIGRATE_CFG" ] || { echo "ERROR: missing $MIGRATE_CFG" >&2; exit 1; }
+[ -x "$HOST_PYTHON" ] || { echo "ERROR: host python not found: $HOST_PYTHON" >&2; exit 1; }
+MIGRATE_RESULT="$($HOST_PYTHON "$MIGRATE_CFG" "$TARGET/flook32.cfg")"
+case "$MIGRATE_RESULT" in
+    migrated) echo 'CONFIG: legacy Chamber sensor hidden as _flook32_chamber' ;;
+    already-hidden) echo 'CONFIG: hidden FLOOK32 chamber sensor already OK' ;;
+    not-applicable) echo 'CONFIG: no legacy FLOOK32 Chamber sensor migration needed' ;;
+    *) echo "ERROR: unexpected config migration result: $MIGRATE_RESULT" >&2; exit 1 ;;
+esac
+
 [ -f "$POWER_ON" ] || printf '#!/bin/sh\n# Enter Poweron code here\n' > "$POWER_ON"
 BEGIN_COUNT="$(grep -Fxc '# >>> FLOOK32_BOOT_ENSURE >>>' "$POWER_ON" 2>/dev/null || true)"
 END_COUNT="$(grep -Fxc '# <<< FLOOK32_BOOT_ENSURE <<<' "$POWER_ON" 2>/dev/null || true)"

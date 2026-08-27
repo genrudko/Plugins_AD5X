@@ -43,7 +43,10 @@ class FlookInstallerTests(unittest.TestCase):
                                check=True, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True)
             self.assertEqual(user.read_text(encoding='utf-8'), include + '\n')
-            self.assertEqual((target / 'flook32.cfg').read_text(encoding='utf-8'), original_cfg)
+            migrated_cfg = (target / 'flook32.cfg').read_text(encoding='utf-8')
+            self.assertIn('[temperature_sensor _flook32_chamber]\n', migrated_cfg)
+            self.assertNotIn('[temperature_sensor chamber]\n', migrated_cfg)
+            self.assertIn('custom_marker: keep-me\n', migrated_cfg)
             self.assertNotIn(include, plugins.read_text(encoding='utf-8'))
             self.assertEqual(plugins.read_text(encoding='utf-8').count(include), 0)
             self.assertEqual(power.read_text(encoding='utf-8').count('FLOOK32_BOOT_ENSURE >>>'), 1)

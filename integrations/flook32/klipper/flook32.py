@@ -372,6 +372,15 @@ compact_mapping = {
 # ОСНОВНОЙ КЛАСС СЕНСОРА
 # ============================================================================
 
+def _native_heater_default_name(sensor_name):
+    prefix = '_flook32_'
+    if sensor_name.startswith(prefix):
+        stripped = sensor_name[len(prefix):]
+        if stripped:
+            return stripped
+    return sensor_name
+
+
 class FLOOK32Sensor:
     """
     Сенсор температуры камеры 3D-принтера, интегрированный с контроллером FLOOK32.
@@ -635,7 +644,9 @@ class FLOOK32Sensor:
         # и будут отправлены на FLOOK32 при первом подключении.
         # Klipper/Fluidd-only options. These must never be pushed to ESP32.
         self.native_heater_enabled = config.getboolean('native_heater', True)
-        self.native_heater_name = config.get('native_heater_name', self.name)
+        default_native_heater_name = _native_heater_default_name(self.name)
+        self.native_heater_name = config.get(
+            'native_heater_name', default_native_heater_name)
         self.native_heater_max_temp = config.getfloat(
             'native_heater_max_temp', 65.0, minval=1.0, maxval=70.0)
         self.native_heater_wait_delta = config.getfloat(
