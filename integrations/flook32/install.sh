@@ -17,6 +17,13 @@ SRC_ENSURE="$HERE/scripts/ensure.sh"
 [ -f "$SRC_CFG" ] || { echo "ERROR: missing $SRC_CFG" >&2; exit 1; }
 [ -f "$SRC_ENSURE" ] || { echo "ERROR: missing $SRC_ENSURE" >&2; exit 1; }
 
+RUNTIME_PY="${AD5X_KLIPPER_PYTHON:-/usr/prog/Python-3.8.2/bin/python3}"
+if [ ! -x "$RUNTIME_PY" ]; then
+    echo "ERROR: Klipper runtime Python not visible: $RUNTIME_PY" >&2
+    echo "Run this installer from the AD5X host shell, not from inside the Z-Mod chroot." >&2
+    exit 1
+fi
+
 mkdir -p "$TARGET" "$BACKUP"
 
 snapshot()
