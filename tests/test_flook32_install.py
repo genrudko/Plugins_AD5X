@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,13 @@ ROOT = Path(__file__).parents[1]
 INSTALL = ROOT / 'integrations/flook32/install.sh'
 
 class FlookInstallerTests(unittest.TestCase):
+    def test_installer_has_no_second_host_python_dependency(self):
+        text = INSTALL.read_text(encoding='utf-8')
+        self.assertNotIn('HOST_PYTHON=', text)
+        self.assertNotIn('AD5X_HOST_PYTHON', text)
+        self.assertIn('RUNTIME_PY', text)
+        self.assertIn('MIGRATE_CFG', text)
+
     def test_install_preserves_existing_user_include_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as td:
             t = Path(td)
@@ -36,7 +44,7 @@ class FlookInstallerTests(unittest.TestCase):
                 'AD5X_FLOOK_KLIPPER_DEST': str(extras / 'flook32.py'),
                 'AD5X_KLIPPER_INCLUDES': str(plugins),
                 'AD5X_USER_CFG': str(user),
-                'AD5X_KLIPPER_PYTHON': '/bin/true',
+                'AD5X_KLIPPER_PYTHON': sys.executable,
             })
             for _ in range(2):
                 subprocess.run([str(INSTALL)], cwd=ROOT, env=env,
