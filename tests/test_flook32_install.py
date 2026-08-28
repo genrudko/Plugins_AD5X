@@ -15,6 +15,9 @@ class FlookInstallerTests(unittest.TestCase):
         self.assertNotIn('AD5X_HOST_PYTHON', text)
         self.assertIn('RUNTIME_PY', text)
         self.assertIn('MIGRATE_CFG', text)
+        self.assertIn('/usr/prog/Python-3.8.2/lib', text)
+        self.assertIn('/usr/prog/openssl-1.0.2d/lib', text)
+        self.assertIn('/usr/prog/libffi-3.4.4/lib', text)
 
     def test_install_preserves_existing_user_include_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as td:
