@@ -91,6 +91,9 @@ class RemoteHeaterTests(unittest.TestCase):
 
     def test_orca_m141_and_m191_use_native_heater(self):
         printer, sensor, heater = make_heater()
+        self.assertNotIn('M141', printer.gcode.commands)
+        self.assertNotIn('M191', printer.gcode.commands)
+        printer.send_event('klippy:ready')
         self.assertIn('M141', printer.gcode.commands)
         self.assertIn('M191', printer.gcode.commands)
 
@@ -105,10 +108,12 @@ class RemoteHeaterTests(unittest.TestCase):
 
     def test_orca_commands_do_not_replace_existing_handlers(self):
         printer = FakePrinter()
-        sentinel = object()
-        printer.gcode.commands['M141'] = sentinel
         sensor = FakeSensor()
         flook32.FLOOK32RemoteHeater(FakeConfig(printer), sensor, 'chamber')
+        # Simulate a macro loaded later in config, but before klippy:ready.
+        sentinel = object()
+        printer.gcode.commands['M141'] = sentinel
+        printer.send_event('klippy:ready')
         self.assertIs(printer.gcode.commands['M141'], sentinel)
         self.assertIn('M191', printer.gcode.commands)
 

@@ -2154,7 +2154,11 @@ class FLOOK32RemoteHeater:
             'SET_HEATER_TEMPERATURE', 'HEATER', self.name,
             self.cmd_SET_HEATER_TEMPERATURE,
             desc='Set FLOOK32 chamber target temperature')
-        self._register_orca_commands(gcode)
+        self.printer.register_event_handler(
+            'klippy:ready', self._handle_ready_register_orca_commands)
+
+    def _handle_ready_register_orca_commands(self, eventtime=None):
+        self._register_orca_commands(self.printer.lookup_object('gcode'))
 
     def _register_orca_commands(self, gcode):
         commands = (
