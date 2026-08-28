@@ -22,7 +22,7 @@ class FakeHeaters:
 
 class FakePrinter:
     def __init__(self):
-        self.gcode = FakeGcode(); self.heaters = FakeHeaters(); self.objects = {}
+        self.gcode = FakeGcode(); self.heaters = FakeHeaters(); self.objects = {}; self.handlers = {}
     def lookup_object(self, name):
         if name == 'gcode': return self.gcode
         if name == 'heaters': return self.heaters
@@ -33,6 +33,10 @@ class FakePrinter:
     def add_object(self, name, obj):
         if name in self.objects: raise RuntimeError('duplicate object ' + name)
         self.objects[name] = obj
+    def register_event_handler(self, event, callback):
+        self.handlers.setdefault(event, []).append(callback)
+    def send_event(self, event):
+        for callback in self.handlers.get(event, []): callback(0.0)
     def command_error(self, message): return RuntimeError(message)
 
 class FakeConfig:
@@ -113,6 +117,30 @@ class RemoteHeaterTests(unittest.TestCase):
         self.assertEqual(printer.heaters.available_heaters, ['heater_generic chamber'])
         self.assertIs(printer.objects['heater_generic chamber'], heater)
         self.assertEqual(printer.heaters.registered_sensors, [])
+
+    def test_native_heater_is_reordered_after_bed_on_ready(self):
+        printer = FakePrinter(); config = FakeConfig(printer); sensor = FakeSensor()
+        printer.heaters.available_heaters[:] = ['extruder', 'heater_bed']
+        flook32._register_remote_heater(config, sensor)
+        self.assertEqual(
+            printer.heaters.available_heaters,
+            ['extruder', 'heater_bed', 'heater_generic chamber'])
+        # Simulate later config sections being loaded after FLOOK32.
+        printer.heaters.available_heaters[:] = [
+            'heater_generic chamber', 'extruder', 'heater_bed']
+        printer.send_event('klippy:ready')
+        self.assertEqual(
+            printer.heaters.available_heaters,
+            ['extruder', 'heater_bed', 'heater_generic chamber'])
+
+    def test_native_heater_falls_back_to_end_without_bed(self):
+        printer = FakePrinter(); config = FakeConfig(printer); sensor = FakeSensor()
+        flook32._register_remote_heater(config, sensor)
+        printer.heaters.available_heaters[:] = ['heater_generic chamber', 'extruder']
+        printer.send_event('klippy:ready')
+        self.assertEqual(
+            printer.heaters.available_heaters,
+            ['extruder', 'heater_generic chamber'])
 
     def test_hidden_sensor_gets_clean_native_heater_name(self):
         self.assertEqual(

@@ -2177,6 +2177,21 @@ def _register_remote_heater(config, sensor):
     printer.add_object(full_name, heater)
     pheaters.heaters[heater_name] = heater
     pheaters.available_heaters.append(full_name)
+
+    def place_after_bed(eventtime=None):
+        available = pheaters.available_heaters
+        if full_name in available:
+            available.remove(full_name)
+        try:
+            bed_index = available.index('heater_bed')
+        except ValueError:
+            available.append(full_name)
+        else:
+            available.insert(bed_index + 1, full_name)
+
+    # All config sections are loaded before klippy:ready. Reorder the UI-facing
+    # heater list then, so Fluidd shows Extruder -> Heater Bed -> Chamber.
+    printer.register_event_handler('klippy:ready', place_after_bed)
     logging.info("FLOOK32 native heater proxy registered: %s", full_name)
     return heater
 
