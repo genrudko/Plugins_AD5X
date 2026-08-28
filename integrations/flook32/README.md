@@ -29,4 +29,18 @@ Klipper restart without patching Z-Mod-owned startup files.
 The AD5X native heater proxy defaults to a 65C maximum. Existing upstream config
 needs no migration; optional `native_heater`, `native_heater_name`,
 `native_heater_max_temp`, and `native_heater_wait_delta` keys may be added to the
-`[temperature_sensor chamber]` section if customization is required.
+FLOOK32 temperature-sensor section if customization is required.
+
+The adapter also exposes FLOOK32's separate heater-body/MAX6675 reading as the
+read-only `temperature_sensor chamber_heater`, displayed by stock Fluidd as
+**Chamber Heater**. This can be disabled or renamed with
+`native_heater_temperature_sensor` and `native_heater_temperature_sensor_name`.
+The controlling **Chamber** heater continues to use air temperature.
+
+For slicers, the proxy registers standard `M141 S<temp>` (set target) and
+`M191 S<temp>` (set target and wait for heat-up) when those commands are not
+already supplied by the printer config. OrcaSlicer can therefore use its native
+chamber-temperature support: enable **Support control chamber temperature** in
+the printer profile and **Activate temperature control** in the filament profile.
+Orca will emit `M191` before machine start G-code and `M141 S0` at print end.
+Targets above the native-heater maximum are rejected by Klipper.

@@ -9,16 +9,25 @@ flook32 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(flook32)
 
 class FakeGcode:
-    def __init__(self): self.mux = []
+    def __init__(self):
+        self.mux = []
+        self.commands = {}
+        self.ready_gcode_handlers = self.commands
     def register_mux_command(self, command, key, value, callback, desc=None):
         self.mux.append((command, key, value, callback, desc))
+    def register_command(self, command, callback, when_not_ready=False, desc=None):
+        if command in self.commands:
+            raise RuntimeError('duplicate command ' + command)
+        self.commands[command] = callback
 
 class FakeHeaters:
+    cmd_TEMPERATURE_WAIT_help = 'Wait for temperature'
     def __init__(self):
-        self.heaters = {}; self.available_heaters = []; self.registered_sensors = []; self.set_calls = []
+        self.heaters = {}; self.available_heaters = []; self.available_sensors = []; self.registered_sensors = []; self.set_calls = []
     def register_sensor(self, config, obj, gcode_id=None): self.registered_sensors.append((config.get_name(), obj))
     def set_temperature(self, heater, temp, wait=False):
         self.set_calls.append((heater, temp, wait)); heater.set_temp(temp)
+    def cmd_TEMPERATURE_WAIT(self, gcmd): pass
 
 class FakePrinter:
     def __init__(self):
@@ -46,6 +55,10 @@ class FakeConfig:
     def getfloat(self, key, default=None, **kwargs): return float(self.values.get(key, default))
     def error(self, message): return RuntimeError(message)
 
+class FakeGcmd:
+    def __init__(self, **params): self.params = params
+    def get_float(self, name, default=None): return float(self.params.get(name, default))
+
 class FakeSensor:
     def __init__(self):
         self.temp_lock = threading.Lock(); self.air_temp = 24.5; self.heater_temp = 25.5
@@ -53,6 +66,8 @@ class FakeSensor:
         self.system_locked = False; self.flook_ip = '192.168.1.230'; self.ws_connected = True
         self.native_heater_enabled = True; self.native_heater_name = 'chamber'
         self.native_heater_max_temp = 65.0; self.native_heater_wait_delta = 2.0
+        self.native_heater_temperature_sensor = True
+        self.native_heater_temperature_sensor_name = 'chamber_heater'
         self.targets = []; self.closed = False
     def set_target_temperature(self, temp):
         self.targets.append(float(temp)); self.target_temp = float(temp); self.heater_state = temp > 0
@@ -73,6 +88,49 @@ class RemoteHeaterTests(unittest.TestCase):
         heater.set_temp(45)
         self.assertEqual(sensor.targets, [45.0])
         self.assertEqual(heater.get_temp(0), (24.5, 45.0))
+
+    def test_orca_m141_and_m191_use_native_heater(self):
+        printer, sensor, heater = make_heater()
+        self.assertIn('M141', printer.gcode.commands)
+        self.assertIn('M191', printer.gcode.commands)
+
+        printer.gcode.commands['M141'](FakeGcmd(S=42))
+        self.assertEqual(printer.heaters.set_calls[-1], (heater, 42.0, False))
+
+        printer.gcode.commands['M191'](FakeGcmd(S=45))
+        self.assertEqual(printer.heaters.set_calls[-1], (heater, 45.0, True))
+
+        printer.gcode.commands['M191'](FakeGcmd(S=0))
+        self.assertEqual(printer.heaters.set_calls[-1], (heater, 0.0, False))
+
+    def test_orca_commands_do_not_replace_existing_handlers(self):
+        printer = FakePrinter()
+        sentinel = object()
+        printer.gcode.commands['M141'] = sentinel
+        sensor = FakeSensor()
+        flook32.FLOOK32RemoteHeater(FakeConfig(printer), sensor, 'chamber')
+        self.assertIs(printer.gcode.commands['M141'], sentinel)
+        self.assertIn('M191', printer.gcode.commands)
+
+    def test_heater_body_temperature_is_exposed_as_read_only_sensor(self):
+        printer = FakePrinter(); config = FakeConfig(printer); sensor = FakeSensor()
+        telemetry = flook32._register_heater_temperature_sensor(config, sensor)
+        self.assertIs(printer.objects['temperature_sensor chamber_heater'], telemetry)
+        self.assertEqual(
+            printer.heaters.available_sensors,
+            ['temperature_sensor chamber_heater'])
+        self.assertEqual(telemetry.get_temp(0), (25.5, 0.0))
+        self.assertEqual(telemetry.get_status(0), {'temperature': 25.5})
+        self.assertTrue(any(
+            x[:3] == ('TEMPERATURE_WAIT', 'SENSOR',
+                      'temperature_sensor chamber_heater')
+            for x in printer.gcode.mux))
+
+    def test_heater_body_temperature_sensor_can_be_disabled(self):
+        printer = FakePrinter(); config = FakeConfig(printer); sensor = FakeSensor()
+        sensor.native_heater_temperature_sensor = False
+        self.assertIsNone(flook32._register_heater_temperature_sensor(config, sensor))
+        self.assertEqual(printer.heaters.available_sensors, [])
 
     def test_fluidd_status_contract(self):
         _, sensor, heater = make_heater(); sensor.target_temp = 48.0; sensor.heater_state = True

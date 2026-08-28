@@ -651,13 +651,24 @@ class FLOOK32Sensor:
             'native_heater_max_temp', 65.0, minval=1.0, maxval=70.0)
         self.native_heater_wait_delta = config.getfloat(
             'native_heater_wait_delta', 2.0, minval=0.0, maxval=10.0)
+        self.native_heater_temperature_sensor = config.getboolean(
+            'native_heater_temperature_sensor', True)
+        self.native_heater_temperature_sensor_name = config.get(
+            'native_heater_temperature_sensor_name',
+            '{}_heater'.format(self.native_heater_name))
+        if (not self.native_heater_temperature_sensor_name or
+                any(ch.isspace() for ch in self.native_heater_temperature_sensor_name)):
+            raise config.error(
+                'native_heater_temperature_sensor_name must be a single token')
 
         connection_params = ['flook_ip', 'flook_port', 'auto_discover', 'sensor_type',
                            'sensor_mode', 'min_temp', 'max_temp', 'report_interval',
                            'enable_error_notifications', 'error_notification_max_age',
                            'error_check_interval', 'silent', 'show_trends', 'max_trend_lines',
                            'native_heater', 'native_heater_name',
-                           'native_heater_max_temp', 'native_heater_wait_delta']
+                           'native_heater_max_temp', 'native_heater_wait_delta',
+                           'native_heater_temperature_sensor',
+                           'native_heater_temperature_sensor_name']
 
         self._explicit_params = {}
 
@@ -790,6 +801,8 @@ class FLOOK32Sensor:
         # remains authoritative for measurements; the proxy only exposes target
         # control through the standard heaters API.
         self.remote_heater = _register_remote_heater(config, self)
+        self.heater_temperature_sensor = _register_heater_temperature_sensor(
+            config, self)
 
         # =====================================================================
         # ЗАПУСК ФОНОВЫХ ПОТОКОВ
@@ -2065,6 +2078,58 @@ class FLOOK32Sensor:
             self.sensor_thread.join(timeout=2.0)
 
 # ============================================================================
+# REMOTE HEATER TELEMETRY SENSOR FOR NATIVE KLIPPER / FLUIDD INTEGRATION
+# ============================================================================
+
+class FLOOK32HeaterTemperatureSensor:
+    """Expose FLOOK32 heater-body temperature as a read-only Klipper sensor."""
+
+    def __init__(self, sensor, sensor_name):
+        self.sensor = sensor
+        self.name = sensor_name
+        self.full_name = 'temperature_sensor ' + sensor_name
+
+    def get_temp(self, eventtime):
+        with self.sensor.temp_lock:
+            return self.sensor.heater_temp, 0.0
+
+    def stats(self, eventtime):
+        with self.sensor.temp_lock:
+            temp = self.sensor.heater_temp
+        return False, '%s: temp=%.1f' % (self.name, temp)
+
+    def get_status(self, eventtime):
+        with self.sensor.temp_lock:
+            temp = self.sensor.heater_temp
+        return {'temperature': round(temp, 2)}
+
+
+def _register_heater_temperature_sensor(config, sensor):
+    if not sensor.native_heater_temperature_sensor:
+        return None
+
+    printer = config.get_printer()
+    pheaters = printer.load_object(config, 'heaters')
+    sensor_name = sensor.native_heater_temperature_sensor_name
+    full_name = 'temperature_sensor ' + sensor_name
+    telemetry = FLOOK32HeaterTemperatureSensor(sensor, sensor_name)
+
+    printer.add_object(full_name, telemetry)
+    pheaters.available_sensors.append(full_name)
+
+    # Match normal Klipper temperature_sensor behaviour closely enough that the
+    # read-only runtime sensor can also be used with TEMPERATURE_WAIT.
+    gcode = printer.lookup_object('gcode')
+    gcode.register_mux_command(
+        'TEMPERATURE_WAIT', 'SENSOR', full_name,
+        pheaters.cmd_TEMPERATURE_WAIT,
+        desc=pheaters.cmd_TEMPERATURE_WAIT_help)
+
+    logging.info('FLOOK32 heater telemetry sensor registered: %s', full_name)
+    return telemetry
+
+
+# ============================================================================
 # REMOTE HEATER PROXY FOR NATIVE KLIPPER / FLUIDD INTEGRATION
 # ============================================================================
 
@@ -2089,6 +2154,32 @@ class FLOOK32RemoteHeater:
             'SET_HEATER_TEMPERATURE', 'HEATER', self.name,
             self.cmd_SET_HEATER_TEMPERATURE,
             desc='Set FLOOK32 chamber target temperature')
+        self._register_orca_commands(gcode)
+
+    def _register_orca_commands(self, gcode):
+        commands = (
+            ('M141', self.cmd_M141, 'Set FLOOK32 chamber temperature'),
+            ('M191', self.cmd_M191,
+             'Set FLOOK32 chamber temperature and wait for heat-up'),
+        )
+        registered = getattr(gcode, 'ready_gcode_handlers', {})
+        for name, handler, desc in commands:
+            if name in registered:
+                logging.info(
+                    'FLOOK32 did not replace existing %s command', name)
+                continue
+            gcode.register_command(name, handler, desc=desc)
+
+    def _set_orca_temperature(self, gcmd, wait):
+        temp = gcmd.get_float('S', 0.0)
+        pheaters = self.printer.lookup_object('heaters')
+        pheaters.set_temperature(self, temp, wait=bool(wait and temp > 0.0))
+
+    def cmd_M141(self, gcmd):
+        self._set_orca_temperature(gcmd, wait=False)
+
+    def cmd_M191(self, gcmd):
+        self._set_orca_temperature(gcmd, wait=True)
 
     def get_name(self):
         return self.full_name
