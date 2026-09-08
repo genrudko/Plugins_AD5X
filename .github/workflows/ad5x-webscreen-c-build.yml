@@ -19,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Reassemble 0.1.5 base and apply 0.1.7 patch
+      - name: Reassemble 0.1.5 base and apply 0.1.8 patch
         run: |
           set -euxo pipefail
           cat ci/ws-src.b64.part* | base64 -d > /tmp/webscreen-src.tar.gz
@@ -29,7 +29,7 @@ jobs:
           cd /tmp/webscreen-src/ad5x_webscreen_plugin
           test "$(cat VERSION)" = '0.1.5'
           patch -p1 < "$GITHUB_WORKSPACE/ci/ws017.patch"
-          test "$(cat VERSION)" = '0.1.7'
+          test "$(cat VERSION)" = '0.1.8'
           /bin/sh tests/test_packaging.sh
           /bin/sh tests/test_runtime_readonly.sh
           cc -std=c11 -Wall -Wextra -Werror -O2 -Isrc tests/test_framebuffer.c src/framebuffer.c -o /tmp/test_framebuffer
@@ -111,20 +111,21 @@ jobs:
           set -euxo pipefail
           cd /tmp/webscreen-src
           printf '%s\n' \
-            'AD5X WebScreen C PoC 0.1.7.' \
+            'AD5X WebScreen C PoC 0.1.8.' \
             'Direct mmap framebuffer path + libjpeg-turbo JCS_EXT_BGRA for landscape AD5X.' \
+            'Fallback capture path lazy allocation verified by regression test.' \
             'Target: ELF32 MIPSel, o32, nan2008, hard-float FP64, MIPS32r5.' \
             > ad5x_webscreen_plugin/BUILD_INFO.txt
-          tar -czf "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.7_MIPS.tar.gz" ad5x_webscreen_plugin
-          zip -qr "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.7_MIPS.zip" ad5x_webscreen_plugin
-          sha256sum "$GITHUB_WORKSPACE"/AD5X_WebScreen_C_PoC_0.1.7_MIPS.*
+          tar -czf "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.8_MIPS.tar.gz" ad5x_webscreen_plugin
+          zip -qr "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.8_MIPS.zip" ad5x_webscreen_plugin
+          sha256sum "$GITHUB_WORKSPACE"/AD5X_WebScreen_C_PoC_0.1.8_MIPS.*
 
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: ad5x-webscreen-c-mips-0.1.7
+          name: ad5x-webscreen-c-mips-0.1.8
           path: |
-            AD5X_WebScreen_C_PoC_0.1.7_MIPS.zip
-            AD5X_WebScreen_C_PoC_0.1.7_MIPS.tar.gz
+            AD5X_WebScreen_C_PoC_0.1.8_MIPS.zip
+            AD5X_WebScreen_C_PoC_0.1.8_MIPS.tar.gz
           if-no-files-found: error
           retention-days: 7
