@@ -1,9 +1,9 @@
 diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/VERSION b/VERSION
 --- a/VERSION	2026-09-08 16:59:23.000000000 +0000
-+++ b/VERSION	2026-09-08 17:47:19.018644894 +0000
++++ b/VERSION	2026-09-08 17:55:31.519179809 +0000
 @@ -1 +1 @@
 -0.1.5
-+0.1.7
++0.1.8
 diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/runtime.sh b/runtime.sh
 --- a/runtime.sh	2026-09-08 16:39:29.000000000 +0000
 +++ b/runtime.sh	2026-09-08 17:34:31.000000000 +0000
@@ -61,7 +61,7 @@ diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclud
      send_text(fd, 200, "application/json; charset=utf-8", body);
 diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/src/framebuffer.c b/src/framebuffer.c
 --- a/src/framebuffer.c	2026-09-08 16:58:32.000000000 +0000
-+++ b/src/framebuffer.c	2026-09-08 17:47:19.017831970 +0000
++++ b/src/framebuffer.c	2026-09-08 17:55:31.519074384 +0000
 @@ -74,32 +74,41 @@
          return -1;
      }
@@ -99,7 +99,8 @@ diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclud
 +}
 +
  int ad5x_framebuffer_capture(ad5x_framebuffer *fb) {
-     if (!fb || fb->fd < 0 || !fb->copy) return -1;
+-    if (!fb || fb->fd < 0 || !fb->copy) return -1;
++    if (!fb || fb->fd < 0) return -1;
      const size_t src_base = (size_t)fb->yoffset * (size_t)fb->stride +
          (size_t)fb->xoffset * 4u;
  
@@ -206,12 +207,15 @@ diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclud
  
 diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/tests/test_framebuffer.c b/tests/test_framebuffer.c
 --- a/tests/test_framebuffer.c	1970-01-01 00:00:00.000000000 +0000
-+++ b/tests/test_framebuffer.c	2026-09-08 17:46:16.954876014 +0000
-@@ -0,0 +1,29 @@
++++ b/tests/test_framebuffer.c	2026-09-08 17:55:19.912334309 +0000
+@@ -0,0 +1,53 @@
 +#include <assert.h>
 +#include <stdint.h>
 +#include <stdio.h>
 +#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <stdlib.h>
 +#include "framebuffer.h"
 +
 +int main(void) {
@@ -234,18 +238,39 @@ diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclud
 +    fb.mapped_ok = 0;
 +    assert(ad5x_framebuffer_visible_ptr(&fb) == NULL);
 +
++    const char *path = "/tmp/ad5x-fb-test.bin";
++    int fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0600);
++    assert(fd >= 0);
++    unlink(path);
++    uint8_t filedata[48];
++    for (size_t i = 0; i < sizeof(filedata); ++i) filedata[i] = (uint8_t)i;
++    assert(write(fd, filedata, sizeof(filedata)) == (ssize_t)sizeof(filedata));
++
++    memset(&fb, 0, sizeof(fb));
++    fb.fd = fd;
++    fb.width = 4;
++    fb.height = 2;
++    fb.bpp = 32;
++    fb.stride = 24;
++    fb.copy_size = sizeof(filedata);
++    assert(ad5x_framebuffer_capture(&fb) == 0);
++    assert(fb.copy != NULL);
++    assert(memcmp(fb.copy, filedata, sizeof(filedata)) == 0);
++    free(fb.copy);
++    close(fd);
++
 +    puts("test_framebuffer: ok");
 +    return 0;
 +}
 diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/tests/test_packaging.sh b/tests/test_packaging.sh
 --- a/tests/test_packaging.sh	2026-09-08 16:59:23.000000000 +0000
-+++ b/tests/test_packaging.sh	2026-09-08 17:48:15.714055385 +0000
++++ b/tests/test_packaging.sh	2026-09-08 17:55:31.519236332 +0000
 @@ -34,7 +34,11 @@
  grep -q 'start-readonly' "$ROOT/runtime.sh"
  grep -q 'force_read_only' "$ROOT/runtime.sh"
  grep -q 'WEBSCREEN_C_START_READONLY' "$ROOT/ad5x_webscreen_plugin.cfg"
 -grep -q '^0.1.5$' "$ROOT/VERSION"
-+grep -q '^0.1.7$' "$ROOT/VERSION"
++grep -q '^0.1.8$' "$ROOT/VERSION"
  grep -q 'FBIOGET_VSCREENINFO' "$ROOT/src/framebuffer.c"
  grep -q 'fb_stride' "$ROOT/src/ad5x_webscreen.c"
  grep -q 'AD5X_FALLBACK_W 800' "$ROOT/src/framebuffer.c"
