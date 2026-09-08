@@ -3,7 +3,7 @@ name: AD5X WebScreen C cross-build
 on:
   push:
     branches:
-      - research/ad5x-webscreen-c-build
+      - research/ad5x-webscreen-c-build-015
     paths:
       - '.github/workflows/ad5x-webscreen-c-build.yml'
       - 'ci/ws-src.b64.part*'
@@ -22,11 +22,13 @@ jobs:
         run: |
           set -euxo pipefail
           cat ci/ws-src.b64.part* | base64 -d > /tmp/webscreen-src.tar.gz
-          echo 'b8c65d6b4356dffe14b06a5693db9a441275cbc12abc2ffad873c21770dc24f0  /tmp/webscreen-src.tar.gz' | sha256sum -c -
+          echo '957861c1d3c00ca39d6ceaf9ca66074af14c79ce37c823e7de52c5344fed940a  /tmp/webscreen-src.tar.gz' | sha256sum -c -
           mkdir -p /tmp/webscreen-src
           tar -xzf /tmp/webscreen-src.tar.gz -C /tmp/webscreen-src
           test -f /tmp/webscreen-src/ad5x_webscreen_plugin/src/ad5x_webscreen.c
-          test "$(cat /tmp/webscreen-src/ad5x_webscreen_plugin/VERSION)" = '0.1.3'
+          test "$(cat /tmp/webscreen-src/ad5x_webscreen_plugin/VERSION)" = '0.1.5'
+          /bin/sh /tmp/webscreen-src/ad5x_webscreen_plugin/tests/test_packaging.sh
+          /bin/sh /tmp/webscreen-src/ad5x_webscreen_plugin/tests/test_runtime_readonly.sh
 
       - name: Download Ingenic XBurst2 glibc 2.29 toolchain
         run: |
@@ -65,7 +67,6 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/tmp/libjpeg-target
           cmake --build /tmp/libjpeg-build --parallel 2
           cmake --install /tmp/libjpeg-build
-          find /tmp/libjpeg-target -name 'libjpeg.a' -print
 
       - name: Cross-build AD5X daemon
         run: |
@@ -74,7 +75,7 @@ jobs:
           mkdir -p bin
           JPEG_A="$(find /tmp/libjpeg-target -type f -name libjpeg.a | head -n1)"
           test -n "$JPEG_A"
-          TARGET_FLAGS='-O3 -std=c11 -Wall -Wextra -pthread -march=mips32r5 -mabi=32 -mhard-float -mfp64 -mnan=2008 -EL -Isrc -I/tmp/libjpeg-target/include'
+          TARGET_FLAGS='-O3 -std=c11 -Wall -Wextra -Werror -pthread -march=mips32r5 -mabi=32 -mhard-float -mfp64 -mnan=2008 -EL -Isrc -I/tmp/libjpeg-target/include'
           mips-linux-gnu-gcc $TARGET_FLAGS \
             src/ad5x_webscreen.c src/webscreen_core.c src/framebuffer.c src/jpeg_encoder.c src/touch.c \
             "$JPEG_A" -pthread -o bin/ad5x_webscreen_plugin
@@ -104,21 +105,16 @@ jobs:
         run: |
           set -euxo pipefail
           cd /tmp/webscreen-src
-          printf '%s\n' \
-            'Cross-built with Ingenic XBurst2 GCC 7.2/glibc 2.29 toolchain.' \
-            'Target observed on AD5X: ELF32 MIPSel, o32, nan2008, hard-float FP64, MIPS32r5, /lib/ld-linux-mipsn8.so.1.' \
-            'libjpeg-turbo 3.0.4 is linked statically; glibc/pthread remain dynamic.' \
-            > ad5x_webscreen_plugin/BUILD_INFO.txt
-          tar -czf "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.3_MIPS.tar.gz" ad5x_webscreen_plugin
-          zip -qr "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.3_MIPS.zip" ad5x_webscreen_plugin
-          sha256sum "$GITHUB_WORKSPACE"/AD5X_WebScreen_C_PoC_0.1.3_MIPS.*
+          tar -czf "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.5_MIPS.tar.gz" ad5x_webscreen_plugin
+          zip -qr "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.5_MIPS.zip" ad5x_webscreen_plugin
+          sha256sum "$GITHUB_WORKSPACE"/AD5X_WebScreen_C_PoC_0.1.5_MIPS.*
 
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: ad5x-webscreen-c-mips-0.1.3
+          name: ad5x-webscreen-c-mips-0.1.5
           path: |
-            AD5X_WebScreen_C_PoC_0.1.3_MIPS.zip
-            AD5X_WebScreen_C_PoC_0.1.3_MIPS.tar.gz
+            AD5X_WebScreen_C_PoC_0.1.5_MIPS.zip
+            AD5X_WebScreen_C_PoC_0.1.5_MIPS.tar.gz
           if-no-files-found: error
           retention-days: 7
