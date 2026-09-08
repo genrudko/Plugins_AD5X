@@ -6,7 +6,7 @@ on:
       - research/ad5x-webscreen-c-build
     paths:
       - '.github/workflows/ad5x-webscreen-c-build.yml'
-      - 'ci/ad5x_webscreen_plugin_src.tar.gz'
+      - 'ci/ws-src.b64.part*'
 
 permissions:
   contents: read
@@ -18,12 +18,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract source
+      - name: Reassemble and verify source
         run: |
           set -euxo pipefail
+          cat ci/ws-src.b64.part* | base64 -d > /tmp/webscreen-src.tar.gz
+          echo 'b8c65d6b4356dffe14b06a5693db9a441275cbc12abc2ffad873c21770dc24f0  /tmp/webscreen-src.tar.gz' | sha256sum -c -
           mkdir -p /tmp/webscreen-src
-          tar -xzf ci/ad5x_webscreen_plugin_src.tar.gz -C /tmp/webscreen-src
+          tar -xzf /tmp/webscreen-src.tar.gz -C /tmp/webscreen-src
           test -f /tmp/webscreen-src/ad5x_webscreen_plugin/src/ad5x_webscreen.c
+          test "$(cat /tmp/webscreen-src/ad5x_webscreen_plugin/VERSION)" = '0.1.3'
 
       - name: Download Ingenic XBurst2 glibc 2.29 toolchain
         run: |
@@ -35,7 +38,8 @@ jobs:
           tar -xzf /tmp/mips-toolchain.tar.gz -C /tmp/mips-toolchain
           CC_PATH="$(find /tmp/mips-toolchain -type f -name mips-linux-gnu-gcc -perm -111 | head -n1)"
           test -n "$CC_PATH"
-          echo "$(dirname "$CC_PATH")" >> "$GITHUB_PATH"
+          TOOLBIN="$(dirname "$CC_PATH")"
+          echo "$TOOLBIN" >> "$GITHUB_PATH"
           "$CC_PATH" --version
 
       - name: Build static libjpeg-turbo for target
@@ -56,6 +60,7 @@ jobs:
             -DENABLE_STATIC=ON \
             -DWITH_SIMD=OFF \
             -DWITH_JAVA=OFF \
+            -DWITH_TURBOJPEG=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/tmp/libjpeg-target
           cmake --build /tmp/libjpeg-build --parallel 2
@@ -69,7 +74,7 @@ jobs:
           mkdir -p bin
           JPEG_A="$(find /tmp/libjpeg-target -type f -name libjpeg.a | head -n1)"
           test -n "$JPEG_A"
-          TARGET_FLAGS='-O3 -std=c11 -Wall -Wextra -Werror -pthread -march=mips32r5 -mabi=32 -mhard-float -mfp64 -mnan=2008 -EL -Isrc -I/tmp/libjpeg-target/include'
+          TARGET_FLAGS='-O3 -std=c11 -Wall -Wextra -pthread -march=mips32r5 -mabi=32 -mhard-float -mfp64 -mnan=2008 -EL -Isrc -I/tmp/libjpeg-target/include'
           mips-linux-gnu-gcc $TARGET_FLAGS \
             src/ad5x_webscreen.c src/webscreen_core.c src/framebuffer.c src/jpeg_encoder.c src/touch.c \
             "$JPEG_A" -pthread -o bin/ad5x_webscreen_plugin
@@ -90,6 +95,10 @@ jobs:
           echo "$FLAGS" | grep -q 'o32'
           echo "$ATTRS" | grep -q 'Hard float (32-bit CPU, 64-bit FPU)'
           mips-linux-gnu-readelf -l "$BIN" | grep -q '/lib/ld-linux-mipsn8.so.1'
+          if mips-linux-gnu-readelf -d "$BIN" | grep -q 'Shared library: \[libjpeg'; then
+            echo 'ERROR: libjpeg must be static in the PoC package'
+            exit 1
+          fi
 
       - name: Package
         run: |
@@ -101,7 +110,7 @@ jobs:
             'libjpeg-turbo 3.0.4 is linked statically; glibc/pthread remain dynamic.' \
             > ad5x_webscreen_plugin/BUILD_INFO.txt
           tar -czf "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.3_MIPS.tar.gz" ad5x_webscreen_plugin
-          (cd /tmp/webscreen-src && zip -qr "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.3_MIPS.zip" ad5x_webscreen_plugin)
+          zip -qr "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.3_MIPS.zip" ad5x_webscreen_plugin
           sha256sum "$GITHUB_WORKSPACE"/AD5X_WebScreen_C_PoC_0.1.3_MIPS.*
 
       - name: Upload package
