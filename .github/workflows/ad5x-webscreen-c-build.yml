@@ -3,9 +3,10 @@ name: AD5X WebScreen C cross-build
 on:
   push:
     branches:
-      - research/ad5x-webscreen-c-build-015
+      - research/ad5x-webscreen-c-build-017
     paths:
       - '.github/workflows/ad5x-webscreen-c-build.yml'
+      - 'ci/ws017.patch'
       - 'ci/ws-src.b64.part*'
 
 permissions:
@@ -18,17 +19,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Reassemble and verify source
+      - name: Reassemble 0.1.5 base and apply 0.1.7 patch
         run: |
           set -euxo pipefail
           cat ci/ws-src.b64.part* | base64 -d > /tmp/webscreen-src.tar.gz
           echo '957861c1d3c00ca39d6ceaf9ca66074af14c79ce37c823e7de52c5344fed940a  /tmp/webscreen-src.tar.gz' | sha256sum -c -
           mkdir -p /tmp/webscreen-src
           tar -xzf /tmp/webscreen-src.tar.gz -C /tmp/webscreen-src
-          test -f /tmp/webscreen-src/ad5x_webscreen_plugin/src/ad5x_webscreen.c
-          test "$(cat /tmp/webscreen-src/ad5x_webscreen_plugin/VERSION)" = '0.1.5'
-          /bin/sh /tmp/webscreen-src/ad5x_webscreen_plugin/tests/test_packaging.sh
-          /bin/sh /tmp/webscreen-src/ad5x_webscreen_plugin/tests/test_runtime_readonly.sh
+          cd /tmp/webscreen-src/ad5x_webscreen_plugin
+          test "$(cat VERSION)" = '0.1.5'
+          patch -p1 < "$GITHUB_WORKSPACE/ci/ws017.patch"
+          test "$(cat VERSION)" = '0.1.7'
+          /bin/sh tests/test_packaging.sh
+          /bin/sh tests/test_runtime_readonly.sh
+          cc -std=c11 -Wall -Wextra -Werror -O2 -Isrc tests/test_framebuffer.c src/framebuffer.c -o /tmp/test_framebuffer
+          /tmp/test_framebuffer
 
       - name: Download Ingenic XBurst2 glibc 2.29 toolchain
         run: |
@@ -67,6 +72,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/tmp/libjpeg-target
           cmake --build /tmp/libjpeg-build --parallel 2
           cmake --install /tmp/libjpeg-build
+          grep -q '^#define JCS_EXTENSIONS' /tmp/libjpeg-target/include/jpeglib.h
 
       - name: Cross-build AD5X daemon
         run: |
@@ -82,14 +88,10 @@ jobs:
           chmod 755 bin/ad5x_webscreen_plugin *.sh tests/*.sh tests/*.py
           mips-linux-gnu-strip bin/ad5x_webscreen_plugin
 
-      - name: Verify target ABI and dependencies
+      - name: Verify target ABI and fast path
         run: |
           set -euxo pipefail
           BIN=/tmp/webscreen-src/ad5x_webscreen_plugin/bin/ad5x_webscreen_plugin
-          mips-linux-gnu-readelf -h "$BIN"
-          mips-linux-gnu-readelf -A "$BIN"
-          mips-linux-gnu-readelf -l "$BIN" | grep -i 'Requesting program interpreter'
-          mips-linux-gnu-readelf -d "$BIN" | grep NEEDED || true
           FLAGS="$(mips-linux-gnu-readelf -h "$BIN" | grep 'Flags:')"
           ATTRS="$(mips-linux-gnu-readelf -A "$BIN")"
           echo "$FLAGS" | grep -q 'nan2008'
@@ -100,21 +102,29 @@ jobs:
             echo 'ERROR: libjpeg must be static in the PoC package'
             exit 1
           fi
+          grep -q 'JCS_EXT_BGRA' /tmp/webscreen-src/ad5x_webscreen_plugin/src/jpeg_encoder.c
+          grep -q 'ad5x_framebuffer_visible_ptr' /tmp/webscreen-src/ad5x_webscreen_plugin/src/ad5x_webscreen.c
+          strings "$BIN" | grep -q 'jpeg_direct_bgra'
 
       - name: Package
         run: |
           set -euxo pipefail
           cd /tmp/webscreen-src
-          tar -czf "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.5_MIPS.tar.gz" ad5x_webscreen_plugin
-          zip -qr "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.5_MIPS.zip" ad5x_webscreen_plugin
-          sha256sum "$GITHUB_WORKSPACE"/AD5X_WebScreen_C_PoC_0.1.5_MIPS.*
+          printf '%s\n' \
+            'AD5X WebScreen C PoC 0.1.7.' \
+            'Direct mmap framebuffer path + libjpeg-turbo JCS_EXT_BGRA for landscape AD5X.' \
+            'Target: ELF32 MIPSel, o32, nan2008, hard-float FP64, MIPS32r5.' \
+            > ad5x_webscreen_plugin/BUILD_INFO.txt
+          tar -czf "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.7_MIPS.tar.gz" ad5x_webscreen_plugin
+          zip -qr "$GITHUB_WORKSPACE/AD5X_WebScreen_C_PoC_0.1.7_MIPS.zip" ad5x_webscreen_plugin
+          sha256sum "$GITHUB_WORKSPACE"/AD5X_WebScreen_C_PoC_0.1.7_MIPS.*
 
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: ad5x-webscreen-c-mips-0.1.5
+          name: ad5x-webscreen-c-mips-0.1.7
           path: |
-            AD5X_WebScreen_C_PoC_0.1.5_MIPS.zip
-            AD5X_WebScreen_C_PoC_0.1.5_MIPS.tar.gz
+            AD5X_WebScreen_C_PoC_0.1.7_MIPS.zip
+            AD5X_WebScreen_C_PoC_0.1.7_MIPS.tar.gz
           if-no-files-found: error
           retention-days: 7
