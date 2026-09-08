@@ -1,0 +1,255 @@
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/VERSION b/VERSION
+--- a/VERSION	2026-09-08 16:59:23.000000000 +0000
++++ b/VERSION	2026-09-08 17:47:19.018644894 +0000
+@@ -1 +1 @@
+-0.1.5
++0.1.7
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/runtime.sh b/runtime.sh
+--- a/runtime.sh	2026-09-08 16:39:29.000000000 +0000
++++ b/runtime.sh	2026-09-08 17:34:31.000000000 +0000
+@@ -79,8 +79,8 @@
+     fi
+     kill "$pid" 2>/dev/null || true
+     i=0
+-    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 30 ]; do
+-        sleep 0.1
++    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 3 ]; do
++        sleep 1
+         i=$((i + 1))
+     done
+     if kill -0 "$pid" 2>/dev/null; then
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/src/ad5x_webscreen.c b/src/ad5x_webscreen.c
+--- a/src/ad5x_webscreen.c	2026-09-08 16:58:57.000000000 +0000
++++ b/src/ad5x_webscreen.c	2026-09-08 17:47:19.018527812 +0000
+@@ -141,8 +141,15 @@
+     size_t len = 0;
+     double start = mono_sec();
+     pthread_mutex_lock(&app->capture_mu);
+-    if (ad5x_framebuffer_capture(&app->fb) != 0 ||
+-        ad5x_jpeg_encode_bgra(&app->jpeg, app->fb.copy,
++    const uint8_t *src = ad5x_framebuffer_visible_ptr(&app->fb);
++    if (!src) {
++        if (ad5x_framebuffer_capture(&app->fb) != 0) {
++            pthread_mutex_unlock(&app->capture_mu);
++            return -1;
++        }
++        src = app->fb.copy;
++    }
++    if (ad5x_jpeg_encode_bgra(&app->jpeg, src,
+                               app->fb.width, app->fb.height, app->fb.stride,
+                               app->rotate_cw, &jpg, &len) != 0) {
+         pthread_mutex_unlock(&app->capture_mu);
+@@ -270,14 +277,17 @@
+         "{\"target_fps\":%d,\"actual_fps\":%.3f,\"stream_clients\":%d,"
+         "\"encoded_frames\":%llu,\"snapshot_frames\":%llu,\"encode_ms_avg\":%.3f,\"encode_ms_max\":%.3f,"
+         "\"fb_width\":%d,\"fb_height\":%d,\"fb_stride\":%d,\"fb_bpp\":%d,"
+-        "\"fb_ioctl\":%s,\"rotation\":\"%s\",\"output_width\":%d,\"output_height\":%d,"
++        "\"fb_ioctl\":%s,\"fb_mmap\":%s,\"jpeg_direct_bgra\":%s,"
++        "\"rotation\":\"%s\",\"output_width\":%d,\"output_height\":%d,"
+         "\"touch_available\":%s,\"touch_armed\":%s,\"touch_down\":%s,"
+         "\"touch_device\":\"%s\",\"touch_name\":\"%s\"}\n",
+         app->opt.fps, app->fps_ema, app->stream_clients,
+         (unsigned long long)app->encoded_frames, (unsigned long long)app->snapshot_frames,
+         app->encode_ms_ema, app->encode_ms_max,
+         app->fb.width, app->fb.height, app->fb.stride, app->fb.bpp,
+-        app->fb.ioctl_ok ? "true" : "false", app->rotate_cw ? "cw90" : "none", app->out_w, app->out_h,
++        app->fb.ioctl_ok ? "true" : "false", app->fb.mapped_ok ? "true" : "false",
++        (!app->rotate_cw && app->fb.mapped_ok && ad5x_jpeg_direct_bgra_supported()) ? "true" : "false",
++        app->rotate_cw ? "cw90" : "none", app->out_w, app->out_h,
+         available ? "true" : "false", armed ? "true" : "false", down ? "true" : "false", dev, name);
+     pthread_mutex_unlock(&app->frame_mu);
+     send_text(fd, 200, "application/json; charset=utf-8", body);
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/src/framebuffer.c b/src/framebuffer.c
+--- a/src/framebuffer.c	2026-09-08 16:58:32.000000000 +0000
++++ b/src/framebuffer.c	2026-09-08 17:47:19.017831970 +0000
+@@ -74,32 +74,41 @@
+         return -1;
+     }
+ 
++    void *m = mmap(NULL, fb->map_size, PROT_READ, MAP_SHARED, fb->fd, 0);
++    if (m != MAP_FAILED) {
++        fb->mapped = (uint8_t *)m;
++        fb->mapped_ok = 1;
++        return 0;
++    }
++
+     fb->copy = malloc(fb->copy_size);
+     if (!fb->copy) {
+         close(fb->fd);
+         fb->fd = -1;
+         return -1;
+     }
+-    void *m = mmap(NULL, fb->map_size, PROT_READ, MAP_SHARED, fb->fd, 0);
+-    if (m != MAP_FAILED) {
+-        fb->mapped = (uint8_t *)m;
+-        fb->mapped_ok = 1;
+-    }
+     return 0;
+ }
+ 
++const uint8_t *ad5x_framebuffer_visible_ptr(const ad5x_framebuffer *fb) {
++    if (!fb || !fb->mapped_ok || !fb->mapped || fb->bpp != 32 ||
++        fb->width <= 0 || fb->height <= 0 || fb->stride < fb->width * 4) return NULL;
++    const size_t start = (size_t)fb->yoffset * (size_t)fb->stride +
++        (size_t)fb->xoffset * 4u;
++    const size_t end = start + (size_t)(fb->height - 1) * (size_t)fb->stride +
++        (size_t)fb->width * 4u;
++    if (end > fb->map_size) return NULL;
++    return fb->mapped + start;
++}
++
+ int ad5x_framebuffer_capture(ad5x_framebuffer *fb) {
+     if (!fb || fb->fd < 0 || !fb->copy) return -1;
+     const size_t src_base = (size_t)fb->yoffset * (size_t)fb->stride +
+         (size_t)fb->xoffset * 4u;
+ 
+-    if (fb->mapped_ok) {
+-        for (int y = 0; y < fb->height; ++y) {
+-            const uint8_t *src = fb->mapped + src_base + (size_t)y * (size_t)fb->stride;
+-            uint8_t *dst = fb->copy + (size_t)y * (size_t)fb->stride;
+-            memcpy(dst, src, (size_t)fb->stride);
+-        }
+-        return 0;
++    if (!fb->copy) {
++        fb->copy = malloc(fb->copy_size);
++        if (!fb->copy) return -1;
+     }
+ 
+     for (int y = 0; y < fb->height; ++y) {
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/src/framebuffer.h b/src/framebuffer.h
+--- a/src/framebuffer.h	2026-09-08 16:58:32.000000000 +0000
++++ b/src/framebuffer.h	2026-09-08 17:47:19.017680888 +0000
+@@ -21,6 +21,7 @@
+ } ad5x_framebuffer;
+ 
+ int ad5x_framebuffer_open(ad5x_framebuffer *fb, const char *path);
++const uint8_t *ad5x_framebuffer_visible_ptr(const ad5x_framebuffer *fb);
+ int ad5x_framebuffer_capture(ad5x_framebuffer *fb);
+ void ad5x_framebuffer_close(ad5x_framebuffer *fb);
+ 
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/src/jpeg_encoder.c b/src/jpeg_encoder.c
+--- a/src/jpeg_encoder.c	2026-09-08 16:58:33.000000000 +0000
++++ b/src/jpeg_encoder.c	2026-09-08 17:47:19.018326326 +0000
+@@ -88,6 +88,14 @@
+     return 0;
+ }
+ 
++int ad5x_jpeg_direct_bgra_supported(void) {
++#ifdef JCS_EXTENSIONS
++    return 1;
++#else
++    return 0;
++#endif
++}
++
+ int ad5x_jpeg_encode_bgra(ad5x_jpeg_encoder *enc,
+                           const uint8_t *bgra,
+                           int src_w, int src_h, int src_stride,
+@@ -109,8 +117,16 @@
+ 
+     cinfo->image_width = enc->width;
+     cinfo->image_height = enc->height;
+-    cinfo->input_components = 3;
+-    cinfo->in_color_space = JCS_RGB;
++#ifdef JCS_EXTENSIONS
++    if (!rotate_cw) {
++        cinfo->input_components = 4;
++        cinfo->in_color_space = JCS_EXT_BGRA;
++    } else
++#endif
++    {
++        cinfo->input_components = 3;
++        cinfo->in_color_space = JCS_RGB;
++    }
+     jpeg_set_defaults(cinfo);
+     cinfo->dct_method = JDCT_IFAST;
+     cinfo->optimize_coding = FALSE;
+@@ -125,6 +141,14 @@
+     jpeg_start_compress(cinfo, TRUE);
+     while (cinfo->next_scanline < cinfo->image_height) {
+         const int y = (int)cinfo->next_scanline;
++#ifdef JCS_EXTENSIONS
++        if (!rotate_cw) {
++            JSAMPROW row = (JSAMPROW)(bgra + (size_t)y * (size_t)src_stride);
++            jpeg_write_scanlines(cinfo, &row, 1);
++            continue;
++        }
++#endif
++        /* Rotated/fallback path: convert the generated row to RGB explicitly. */
+         if (!rotate_cw) {
+             const uint8_t *src = bgra + (size_t)y * (size_t)src_stride;
+             for (int x = 0; x < enc->width; ++x, src += 4) {
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/src/jpeg_encoder.h b/src/jpeg_encoder.h
+--- a/src/jpeg_encoder.h	2026-09-08 16:58:32.000000000 +0000
++++ b/src/jpeg_encoder.h	2026-09-08 17:47:19.018002831 +0000
+@@ -23,6 +23,7 @@
+                           int rotate_cw,
+                           const uint8_t **jpeg_out,
+                           size_t *jpeg_len);
++int ad5x_jpeg_direct_bgra_supported(void);
+ void ad5x_jpeg_encoder_destroy(ad5x_jpeg_encoder *enc);
+ 
+ #endif
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/tests/run_tests.sh b/tests/run_tests.sh
+--- a/tests/run_tests.sh	2026-09-08 16:40:25.000000000 +0000
++++ b/tests/run_tests.sh	2026-09-08 17:47:19.018613478 +0000
+@@ -6,6 +6,10 @@
+   "$ROOT/tests/test_core.c" "$ROOT/src/webscreen_core.c" \
+   -o "$ROOT/build/test_core"
+ "$ROOT/build/test_core"
++cc -std=c11 -Wall -Wextra -Werror -O2 -I"$ROOT/src" \
++  "$ROOT/tests/test_framebuffer.c" "$ROOT/src/framebuffer.c" \
++  -o "$ROOT/build/test_framebuffer"
++"$ROOT/build/test_framebuffer"
+ make -C "$ROOT" clean all
+ python3 "$ROOT/tests/test_integration.py"
+ 
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/tests/test_framebuffer.c b/tests/test_framebuffer.c
+--- a/tests/test_framebuffer.c	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/test_framebuffer.c	2026-09-08 17:46:16.954876014 +0000
+@@ -0,0 +1,29 @@
++#include <assert.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#include "framebuffer.h"
++
++int main(void) {
++    uint8_t storage[128];
++    ad5x_framebuffer fb;
++    memset(&fb, 0, sizeof(fb));
++    fb.mapped = storage;
++    fb.mapped_ok = 1;
++    fb.map_size = sizeof(storage);
++    fb.width = 4;
++    fb.height = 2;
++    fb.bpp = 32;
++    fb.stride = 24;
++    fb.xoffset = 1;
++    fb.yoffset = 1;
++
++    const uint8_t *p = ad5x_framebuffer_visible_ptr(&fb);
++    assert(p == storage + 24 + 4);
++
++    fb.mapped_ok = 0;
++    assert(ad5x_framebuffer_visible_ptr(&fb) == NULL);
++
++    puts("test_framebuffer: ok");
++    return 0;
++}
+diff -ruN '--exclude=bin' '--exclude=build' '--exclude=BUILD_INFO.txt' '--exclude=README.md' '--exclude=README_ru.md' a/tests/test_packaging.sh b/tests/test_packaging.sh
+--- a/tests/test_packaging.sh	2026-09-08 16:59:23.000000000 +0000
++++ b/tests/test_packaging.sh	2026-09-08 17:48:15.714055385 +0000
+@@ -34,7 +34,11 @@
+ grep -q 'start-readonly' "$ROOT/runtime.sh"
+ grep -q 'force_read_only' "$ROOT/runtime.sh"
+ grep -q 'WEBSCREEN_C_START_READONLY' "$ROOT/ad5x_webscreen_plugin.cfg"
+-grep -q '^0.1.5$' "$ROOT/VERSION"
++grep -q '^0.1.7$' "$ROOT/VERSION"
+ grep -q 'FBIOGET_VSCREENINFO' "$ROOT/src/framebuffer.c"
+ grep -q 'fb_stride' "$ROOT/src/ad5x_webscreen.c"
+ grep -q 'AD5X_FALLBACK_W 800' "$ROOT/src/framebuffer.c"
++
++grep -q 'JCS_EXT_BGRA' "$ROOT/src/jpeg_encoder.c"
++grep -q 'ad5x_framebuffer_visible_ptr' "$ROOT/src/ad5x_webscreen.c"
++grep -q 'jpeg_direct_bgra' "$ROOT/src/ad5x_webscreen.c"
